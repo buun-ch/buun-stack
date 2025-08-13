@@ -1,0 +1,80 @@
+set fallback := true
+
+export LOCAL_K8S_HOST := env("LOCAL_K8S_HOST", "")
+export EXTERNAL_K8S_HOST := env("EXTERNAL_K8S_HOST", "")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "k8shl")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Install k3s cluster
+install:
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    username=$(gum input --prompt="SSH username: " --value="${USER}" --width=100)
+    kubeconfig=""
+    context=""
+    if gum confirm "Update KUBECONFIG?"; then
+        kubeconfig=$(
+            gum input --prompt="KUBECONFIG file: " --value="${HOME}/.kube/config" --width=100
+        )
+        context=$(
+            gum input --prompt="Context name: " --value="${LOCAL_K8S_HOST}" --width=100
+        )
+    fi
+    args=(
+        "install"
+        "--host" "${LOCAL_K8S_HOST}"
+        "--tls-san" "${EXTERNAL_K8S_HOST}"
+        "--user" "${username}"
+    )
+    if [ -n "${context}" ]; then
+        args+=("--context" "${context}")
+    fi
+
+    if [ -n "${kubeconfig}" ]; then
+        mkdir -p "$(dirname "${kubeconfig}")"
+        args+=("--local-path" "${kubeconfig}" "--merge")
+    fi
+    echo "Running: k3sup ${args[*]}"
+    k3sup "${args[@]}"
+    echo "k3s cluster installed on ${LOCAL_K8S_HOST}."
+
+# Uninstall k3s cluster
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    if gum confirm "Uninstall k3s from ${LOCAL_K8S_HOST}?"; then
+        ssh "${LOCAL_K8S_HOST}" "/usr/local/bin/k3s-uninstall.sh"
+    else
+        echo "Uninstallation cancelled." >&2
+        exit 1
+    fi
+
+# Setup k8s OIDC authentication (proxy-url example: socks5://localhost:6443)
+setup-oidc proxy-url='':
+    #!/bin/bash
+    set -euo pipefail
+    kubectl config set-credentials ${LOCAL_K8S_HOST}-oidc \
+        --exec-api-version=client.authentication.k8s.io/v1beta1 \
+        --exec-command=kubectl \
+        --exec-arg=oidc-login \
+        --exec-arg=get-token \
+        --exec-arg=--oidc-issuer-url=https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM} \
+        --exec-arg=--oidc-client-id=${K8S_OIDC_CLIENT_ID}
+    ssh ${LOCAL_K8S_HOST} \
+        'openssl s_client -connect 127.0.0.1:6443 -showcerts </dev/null 2>/dev/null |
+         openssl x509 -outform PEM' > ${HOME}/.kube/${LOCAL_K8S_HOST}.crt
+    kubectl config set-cluster ${LOCAL_K8S_HOST}-oidc \
+        --certificate-authority=${HOME}/.kube/${LOCAL_K8S_HOST}.crt \
+        --server=https://${EXTERNAL_K8S_HOST}
+    if [ -n "{{ proxy-url }}" ]; then
+        kubectl config set-cluster ${LOCAL_K8S_HOST}-oidc --proxy-url={{ proxy-url }} \
+            --server=https://${EXTERNAL_K8S_HOST}
+    fi
+    kubectl config set-context ${LOCAL_K8S_HOST}-oidc \
+        --cluster=${LOCAL_K8S_HOST}-oidc --user=${LOCAL_K8S_HOST}-oidc
+    kubectl config use-context ${LOCAL_K8S_HOST}-oidc

@@ -1,0 +1,64 @@
+set fallback
+
+export LOCAL_K8S_HOST := env("LOCAL_K8S_HOST", "")
+export EXTERNAL_K8S_HOST := env("EXTERNAL_K8S_HOST", "")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+check:
+    #!/bin/bash
+    set -euo pipefail
+    if [ -z "${LOCAL_K8S_HOST}" ]; then
+        echo "LOCAL_K8S_HOST is not set. Please execute 'just env::setup'" >&2
+        exit 1
+    fi
+
+setup:
+    #!/bin/bash
+    set -euo pipefail
+    if [ -f ../.env.local ]; then
+        echo ".env.local already exists." >&2
+        if gum confirm "Do you want to overwrite it?"; then
+            LOCAL_K8S_HOST=""
+            EXTERNAL_K8S_HOST=""
+            KEYCLOAK_HOST=""
+        elif [[ $? -eq 130 ]]; then
+            echo "Setup cancelled by user." >&2
+            exit 1
+        else
+            echo "Aborting setup." >&2
+            exit 1
+        fi
+    fi
+    while [ -z "${LOCAL_K8S_HOST}" ]; do
+        if ! LOCAL_K8S_HOST=$(
+            gum input --prompt="Internal k8s hostname (for SSH): " \
+            --width=100 --placeholder="k8s-host"
+        ); then
+            echo "Setup cancelled." >&2
+            exit 1
+        fi
+    done
+    while [ -z "${EXTERNAL_K8S_HOST}" ]; do
+        if ! EXTERNAL_K8S_HOST=$(
+            gum input --prompt="External k8s hostname (FQDN): " \
+            --width=100 --placeholder="k8s.example.com"
+        ); then
+            echo "Setup cancelled." >&2
+            exit 1
+        fi
+    done
+    while [ -z "${KEYCLOAK_HOST}" ]; do
+        if ! KEYCLOAK_HOST=$(
+            gum input --prompt="Keycloak host: " \
+            --width=100 --placeholder="auth.example.com"
+        ); then
+            echo "Setup cancelled." >&2
+            exit 1
+        fi
+    done
+    rm -f ../.env.local
+    gomplate -f env.local.gomplate -o ../.env.local
