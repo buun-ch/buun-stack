@@ -1,9 +1,11 @@
-set fallback
+set fallback := true
 
 export LOCAL_K8S_HOST := env("LOCAL_K8S_HOST", "")
 export EXTERNAL_K8S_HOST := env("EXTERNAL_K8S_HOST", "")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
+
+export ENV_FILE := ".env.local"
 
 [private]
 default:
@@ -72,3 +74,62 @@ setup:
     done
     rm -f ../.env.local
     gomplate -f env.local.gomplate -o ../.env.local
+
+    npm i
+
+# Set a specific key in .env.local
+[working-directory: ".."]
+set key value:
+    #!/bin/bash
+    set -euo pipefail
+    KEY="{{ key }}"
+    VALUE="{{ value }}"
+    if [ ! -f "${ENV_FILE}" ]; then
+        echo "Error: ${ENV_FILE} not found. Run 'just env::setup' first." >&2
+        exit 1
+    fi
+    if ! [[ "${KEY}" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+        echo "Error: Invalid key name. Use uppercase letters, numbers, and underscores only." >&2
+        exit 1
+    fi
+    if grep -q "^${KEY}=" "${ENV_FILE}"; then
+        # Update existing key
+        sed -i.bak "s|^${KEY}=.*|${KEY}=${VALUE}|" "${ENV_FILE}"
+        echo "✓ Updated ${KEY} in ${ENV_FILE}"
+    else
+        # Add new key
+        echo "" >> "${ENV_FILE}"
+        echo "${KEY}=${VALUE}" >> "${ENV_FILE}"
+        echo "✓ Added ${KEY} to ${ENV_FILE}"
+    fi
+    grep "^${KEY}=" "${ENV_FILE}"
+
+# Show all environment variables
+[working-directory: ".."]
+show:
+    #!/bin/bash
+    set -euo pipefail
+    if [ ! -f "${ENV_FILE}" ]; then
+        echo "Error: ${ENV_FILE} not found. Run 'just env::setup' first." >&2
+        exit 1
+    fi
+    echo "Current configuration in ${ENV_FILE}:"
+    echo "---"
+    grep -E "^[A-Z_]+=.*" "${ENV_FILE}" || echo "(no variables set)"
+
+# Get a specific key value
+[working-directory: ".."]
+get key:
+    #!/bin/bash
+    set -euo pipefail
+    KEY="{{ key }}"
+    if [ ! -f "${ENV_FILE}" ]; then
+        echo "Error: ${ENV_FILE} not found." >&2
+        exit 1
+    fi
+    VALUE=$(grep "^${KEY}=" "${ENV_FILE}" 2>/dev/null | cut -d'=' -f2- || echo "")
+    if [ -z "${VALUE}" ]; then
+        echo "Error: ${KEY} not found in ${ENV_FILE}" >&2
+        exit 1
+    fi
+    echo "${VALUE}"
