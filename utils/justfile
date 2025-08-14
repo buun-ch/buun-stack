@@ -1,0 +1,27 @@
+set dotenv-filename := ".env.local"
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Generate a random password
+random-password length='48':
+    @LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | fold -w {{length}} | head -n 1
+
+# Check if connection to host and port is possible
+check-connection host='' port='':
+    #!/bin/bash
+    set -euo pipefail
+    HOST="{{host}}"
+    while [ -z "${HOST}" ]; do
+        HOST=$(gum input --prompt="Host: " --width=80)
+    done
+    PORT="{{port}}"
+    while [ -z "${PORT}" ]; do
+        PORT=$(gum input --prompt="Port: " --width=80)
+    done
+    if ! nc -z -w 1 ${HOST} ${PORT} &>/dev/null; then
+        echo "Connection to ${HOST}:${PORT} failed"
+        echo "Execute \`kubevpn connect\` if it is in a Kubernetes cluster"
+        exit 1
+    fi
