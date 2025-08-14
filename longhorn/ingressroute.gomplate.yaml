@@ -1,0 +1,32 @@
+# ForwardAuth with static upstreams configuration
+# https://oauth2-proxy.github.io/oauth2-proxy/configuration/integration/#forwardauth-with-static-upstreams-configuration
+
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: oauth-auth
+spec:
+  forwardAuth:
+    address: "http://oauth2-proxy.{{ .Env.LONGHORN_NAMESPACE }}"  # w/ redirect
+    # address: "http://oauth2-proxy.{{ .Env.LONGHORN_NAMESPACE }}/oauth2/auth"  # w/o redirect
+    trustForwardHeader: true
+    authResponseHeaders:
+      - X-Auth-Request-Access-Token
+      - Authorization
+
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: longhorn
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: "Host(`{{ .Env.LONGHORN_HOST }}`)"
+      kind: Rule
+      services:
+        - name: longhorn-frontend
+          port: 80
+      middlewares:
+        - name: oauth-auth

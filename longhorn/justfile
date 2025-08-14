@@ -1,0 +1,128 @@
+set fallback := true
+
+export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
+export LONGHORN_VERSION := env("LONGHORN_VERSION", "1.9.1")
+export LONGHORN_OIDC_CLIENT_ID := env("LONGHORN_OIDC_CLIENT_ID", "longhorn")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add longhorn https://charts.longhorn.io
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove longhorn
+
+# Create namespace
+create-namespace:
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace ${LONGHORN_NAMESPACE} &>/dev/null; then
+        kubectl create namespace ${LONGHORN_NAMESPACE}
+    else
+        echo "Namespace ${LONGHORN_NAMESPACE} already exists."
+    fi
+
+# Delete namespace
+delete-namespace:
+    #!/bin/bash
+    set -euo pipefail
+    if kubectl get namespace ${LONGHORN_NAMESPACE} &>/dev/null; then
+        kubectl delete namespace ${LONGHORN_NAMESPACE} --ignore-not-found
+    else
+        echo "Namespace ${LONGHORN_NAMESPACE} does not exist."
+    fi
+
+# Install Longhorn
+install:
+    #!/bin/bash
+    set -euo pipefail
+    # https://longhorn.io/docs/1.9.1/deploy/install/install-with-helm/
+    just add-helm-repo
+    helm upgrade --cleanup-on-fail --install longhorn longhorn/longhorn \
+        --version ${LONGHORN_VERSION} -n ${LONGHORN_NAMESPACE} --create-namespace --wait \
+        -f longhorn-values.yaml
+    just set-replicas 1
+
+# Uninstall Longhorn
+uninstall:
+    #!/bin/bash
+    set -euxo pipefail
+    if ! kubectl get -n ${LONGHORN_NAMESPACE} settings.longhorn.io \
+        deleting-confirmation-flag &>/dev/null; then
+        kubectl apply -n ${LONGHORN_NAMESPACE} -f delete-setting.yaml
+    fi
+    helm uninstall longhorn -n ${LONGHORN_NAMESPACE} --ignore-not-found --wait
+    just delete-namespace
+
+# Install oauth2-proxy for Longhorn
+oauth2-proxy-install:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_CLIENT_SECRET=$(just random-password)
+    just keycloak::delete-client ${KEYCLOAK_REALM} ${LONGHORN_OIDC_CLIENT_ID}
+    just keycloak::create-client ${KEYCLOAK_REALM} ${LONGHORN_OIDC_CLIENT_ID} \
+        "https://${LONGHORN_HOST}/oauth2/callback"
+    just keycloak::add-audience-mapper ${LONGHORN_OIDC_CLIENT_ID}
+    just create-namespace
+    KEYCLOAK_CLIENT_ID=${LONGHORN_OIDC_CLIENT_ID} \
+        KEYCLOAK_REALM=${KEYCLOAK_REALM} \
+        OAUTH2_PROXY_HOST=${LONGHORN_HOST} \
+        COOKIE_SECRET=$(just random-password) \
+        gomplate -f ../oauth2-proxy/configmap.gomplate.yaml | \
+        kubectl apply -n ${LONGHORN_NAMESPACE} -f -
+    kubectl apply -n ${LONGHORN_NAMESPACE} -f ../oauth2-proxy/deployment.yaml
+    kubectl apply -n ${LONGHORN_NAMESPACE} -f ../oauth2-proxy/service.yaml
+    OAUTH2_PROXY_HOST=${LONGHORN_HOST} \
+        gomplate -f ../oauth2-proxy/ingressroute.gomplate.yaml | \
+        kubectl apply -n ${LONGHORN_NAMESPACE} -f -
+
+# Uninstall oauth2-proxy for Longhorn
+oauth2-proxy-uninstall:
+    just keycloak::delete-client ${KEYCLOAK_REALM} ${LONGHORN_OIDC_CLIENT_ID}
+    OAUTH2_PROXY_HOST=${LONGHORN_HOST} \
+        gomplate -f ../oauth2-proxy/ingressroute.gomplate.yaml | \
+        kubectl delete -n ${LONGHORN_NAMESPACE} --ignore-not-found -f -
+    kubectl delete -n ${LONGHORN_NAMESPACE} --ignore-not-found service oauth2-proxy
+    kubectl delete -n ${LONGHORN_NAMESPACE} --ignore-not-found deployment oauth2-proxy
+    kubectl delete -n ${LONGHORN_NAMESPACE} --ignore-not-found configmap oauth2-proxy-config
+
+# Set Longhorn number of replicas
+set-replicas num='1':
+    #!/bin/bash
+    set -euo pipefail
+    if ! command -v jq &>/dev/null; then
+        echo "jq is not installed. Install jq." >&2
+        exit 1
+    fi
+    yaml=$(kubectl get -n ${LONGHORN_NAMESPACE} configmap longhorn-storageclass \
+        -o jsonpath='{.data.storageclass\.yaml}')
+    modified_yaml=$(echo "${yaml}" | sed 's/numberOfReplicas: "3"/numberOfReplicas: "{{ num }}"/')
+    kubectl patch -n ${LONGHORN_NAMESPACE} configmap longhorn-storageclass \
+        --type merge -p "$(cat <<EOF
+    {
+      "data": {
+        "storageclass.yaml": $(echo "${modified_yaml}" | jq -Rsa)
+      }
+    }
+    EOF
+    )"
+
+# Create Longhorn IngressRoute
+create-ingress:
+    just oauth2-proxy-install
+    LONGHORN_NAMESPACE=${LONGHORN_NAMESPACE} \
+        gomplate -f ingressroute.gomplate.yaml | \
+        kubectl apply -n ${LONGHORN_NAMESPACE} -f -
+
+# Delete Longhorn IngressRoute
+delete-ingress:
+    LONGHORN_NAMESPACE=${LONGHORN_NAMESPACE} \
+        gomplate -f ingressroute.gomplate.yaml | \
+        kubectl delete -n ${LONGHORN_NAMESPACE} --ignore-not-found -f -
+    just oauth2-proxy-uninstall

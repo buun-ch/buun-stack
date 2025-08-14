@@ -1,0 +1,6 @@
+ingress:
+  enabled: false
+
+defaultSettings:
+  deletingConfirmationFlag: true
+  defaultReplicaCount: 1

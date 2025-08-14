@@ -6,5 +6,6 @@ default:
 
 mod env
 mod k8s
+mod longhorn
 
 import? "custom.just"
