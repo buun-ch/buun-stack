@@ -1,0 +1,17 @@
+csi:
+  enabled: true
+
+server:
+  ingress:
+    enabled: true
+    annotations:
+      kubernetes.io/ingress.class: traefik
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    ingressClassName: traefik
+    hosts:
+      - host: {{ .Env.VAULT_HOST }}
+        paths:
+          - /
+    tls:
+      - hosts:
+        - {{ .Env.VAULT_HOST }}

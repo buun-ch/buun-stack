@@ -1,0 +1,181 @@
+set fallback := true
+
+export VAULT_NAMESPACE := env("VAULT_NAMESPACE", "vault")
+export VAULT_CHART_VERSION := env("VAULT_CHART_VERSION", "0.29.1")
+export VAULT_HOST := env("VAULT_HOST", "")
+export VAULT_ADDR := "https://" + VAULT_HOST
+SECRET_PATH := "secret"
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add hashicorp https://helm.releases.hashicorp.com
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove hashicorp
+
+# Create Keycloak namespace
+create-namespace:
+    @kubectl get namespace ${VAULT_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${VAULT_NAMESPACE}
+
+# Delete Keycloak namespace
+delete-namespace:
+    @kubectl delete namespace ${VAULT_NAMESPACE} --ignore-not-found
+
+# Install Vault
+install: check-env
+    #!/bin/bash
+    set -euo pipefail
+    just create-namespace
+    just add-helm-repo
+    gomplate -f vault-values.gomplate.yaml -o vault-values.yaml
+    helm upgrade --cleanup-on-fail --install vault hashicorp/vault \
+        --version ${VAULT_CHART_VERSION} -n ${VAULT_NAMESPACE} --wait -f vault-values.yaml
+
+    # Wait for the primary vault pod to complete init containers and be ready to accept commands
+    kubectl wait pod --for=condition=PodReadyToStartContainers \
+        -n ${VAULT_NAMESPACE} vault-0 --timeout=5m
+
+    init_output=$(kubectl exec -n ${VAULT_NAMESPACE} vault-0 -- \
+        vault operator init -key-shares=1 -key-threshold=1 -format=json || true)
+
+    root_token=""
+    if echo "${init_output}" | grep -q "Vault is already initialized"; then
+        echo "Vault is already initialized"
+        while [ -z "${root_token}" ]; do
+            root_token=$(gum input --prompt="Vault root token: " --password --width=100)
+        done
+    else
+        unseal_key=$(echo "${init_output}" | jq -r '.unseal_keys_b64[0]')
+        root_token=$(echo "${init_output}" | jq -r '.root_token')
+        kubectl exec -n ${VAULT_NAMESPACE} vault-0 -- \
+            vault operator unseal "${unseal_key}"
+        echo "Vault initialized and unsealed successfully"
+        echo "Root Token: ${root_token}"
+        echo "Unseal Key: ${unseal_key}"
+        echo "Please save these credentials securely!"
+    fi
+
+    # Wait for all vault instances to pass readiness checks and be ready to serve requests
+    kubectl wait pod --for=condition=ready -n ${VAULT_NAMESPACE} \
+        -l app.kubernetes.io/name=vault --timeout=5m
+
+    just configure-kubernetes-auth "${root_token}"
+    just create-secrets-engine {{ SECRET_PATH }} "${root_token}"
+
+# Uninstall Vault
+uninstall delete-ns='false':
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall vault -n ${VAULT_NAMESPACE} --ignore-not-found --wait
+    just delete-namespace
+
+# Create admin token
+create-admin-token root_token='': check-env
+    #!/bin/bash
+    set -euo pipefail
+    export VAULT_TOKEN="{{ root_token }}"
+    while [ -z "${VAULT_TOKEN}" ]; do
+        VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
+    done
+    vault policy write admin - <<EOF
+    path "sys/auth" {
+        capabilities = ["read", "list", "sudo"]
+    }
+    path "sys/auth/*" {
+        capabilities = ["create", "read", "update", "delete", "list", "sudo"]
+    }
+    path "secret/*" {
+        capabilities = ["create", "read", "update", "delete", "list"]
+    }
+    path "auth/*" {
+        capabilities = ["create", "read", "update", "delete", "list"]
+    }
+    path "sys/policy/*" {
+        capabilities = ["create", "read", "update", "delete", "list"]
+    }
+    path "sys/policies/acl/*" {
+        capabilities = ["create", "read", "update", "delete", "list"]
+    }
+    EOF
+    vault token create -policy=admin
+
+# Create secrets engine
+create-secrets-engine path root_token='':
+    #!/bin/bash
+    set -euo pipefail
+    export VAULT_TOKEN="{{ root_token }}"
+    while [ -z "${VAULT_TOKEN}" ]; do
+        VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
+    done
+    # Use kubectl exec during initial setup to avoid DNS dependency
+    kubectl exec -n ${VAULT_NAMESPACE} vault-0 -- sh <<EOF
+        export VAULT_TOKEN='${VAULT_TOKEN}'
+        vault secrets enable -path='{{ path }}' kv-v2
+    EOF
+
+# Configure Kubernetes authentication for Vault
+configure-kubernetes-auth root_token='':
+    #!/bin/bash
+    set -euo pipefail
+    export VAULT_TOKEN="{{ root_token }}"
+    while [ -z "${VAULT_TOKEN}" ]; do
+        VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
+    done
+
+    gomplate -f ./serviceaccount.gomplate.yaml | kubectl apply -n "${VAULT_NAMESPACE}" -f -
+    gomplate -f ./rolebinding.gomplate.yaml | kubectl apply -n "${VAULT_NAMESPACE}" -f -
+    kubectl apply -n "${VAULT_NAMESPACE}" -f ./auth-token-secret.yaml
+
+    SA_SECRET="vault-auth-token"
+    SA_JWT=$(kubectl get secret -n ${VAULT_NAMESPACE} ${SA_SECRET} -o jsonpath='{.data.token}' | \
+        base64 --decode)
+    SA_CA=$(kubectl get secret -n ${VAULT_NAMESPACE} ${SA_SECRET} -o jsonpath='{.data.ca\.crt}' | \
+        base64 --decode)
+
+    # Use kubectl exec to run vault commands directly in the pod during initial setup
+    kubectl exec -n ${VAULT_NAMESPACE} vault-0 -- sh <<EOF
+        export VAULT_TOKEN='${VAULT_TOKEN}'
+        vault auth list -format=json | jq -e '.["kubernetes/"]' >/dev/null 2>&1 || \
+            vault auth enable kubernetes
+        vault write auth/kubernetes/config \
+            token_reviewer_jwt='${SA_JWT}' \
+            kubernetes_host='https://kubernetes.default.svc' \
+            kubernetes_ca_cert='${SA_CA}'
+    EOF
+
+# Get key value
+get path field: check-env
+    @vault kv get -mount=secret -field={{ field }} {{ path }}
+
+# Put key value
+put path *args: check-env
+    @vault kv put -mount=secret {{ path }} {{ args }}
+
+# Delete key value
+delete path: check-env
+    @vault kv delete -mount=secret {{ path }}
+
+# Check if key exists
+exist path: check-env
+    @vault kv get -mount=secret {{ path }} &>/dev/null
+
+# Check the environment
+[private]
+check-env:
+    #!/bin/bash
+    set -euo pipefail
+    if [ -z "${VAULT_HOST}" ]; then
+        while [ -z "${VAULT_HOST}" ]; do
+            VAULT_HOST=$(
+                gum input --prompt="Vault host: " --width=100 --placeholder="vault.example.com"
+            )
+        done
+        just env::set VAULT_HOST "${VAULT_HOST}"
+    fi
