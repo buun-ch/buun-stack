@@ -3,6 +3,7 @@ set fallback
 export LOCAL_K8S_HOST := env("LOCAL_K8S_HOST", "")
 export EXTERNAL_K8S_HOST := env("EXTERNAL_K8S_HOST", "")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
 
 [private]
 default:
@@ -55,6 +56,15 @@ setup:
         if ! KEYCLOAK_HOST=$(
             gum input --prompt="Keycloak host: " \
             --width=100 --placeholder="auth.example.com"
+        ); then
+            echo "Setup cancelled." >&2
+            exit 1
+        fi
+    done
+    while [ -z "${KEYCLOAK_REALM}" ]; do
+        if ! KEYCLOAK_REALM=$(
+            gum input --prompt="Keycloak realm: " \
+            --width=100 --placeholder="buunstack"
         ); then
             echo "Setup cancelled." >&2
             exit 1
