@@ -4,28 +4,23 @@ export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 export VAULT_CHART_VERSION := env("VAULT_CHART_VERSION", "0.29.1")
 export VAULT_HOST := env("VAULT_HOST", "")
 export VAULT_ADDR := "https://" + VAULT_HOST
+export VAULT_DEBUG := env("VAULT_DEBUG", "false")
 SECRET_PATH := "secret"
 
-# Common vault environment setup script
+# Vault environment setup scripts
 
 [private]
-_vault_env_setup := '''
-    if [ -z "${VAULT_ADDR:-}" ]; then
-        if [ -z "${VAULT_HOST:-}" ]; then
-            VAULT_HOST=$(gum input --prompt="Vault host: " --placeholder="vault.example.com" --width=100)
-        fi
-        export VAULT_ADDR="https://${VAULT_HOST}"
-    fi
+_vault_root_env_setup := '''
     if [ -z "${VAULT_TOKEN:-}" ]; then
         echo "" >&2
-        echo "💡 To avoid entering Vault token repeatedly:" >&2
-        echo "   • Set environment variable: export VAULT_TOKEN=your_token" >&2
-        echo "   • or write it in .env.local file: VAULT_TOKEN=your_token" >&2
-        echo "   • Use 1Password reference: VAULT_TOKEN=op://vault/admin/token" >&2
+        echo "💡 To avoid entering Vault root token repeatedly:" >&2
+        echo "   • Set environment variable: export VAULT_TOKEN=your_root_token" >&2
+        echo "   • or write it in .env.local file: VAULT_TOKEN=your_root_token" >&2
+        echo "   • Use 1Password reference: VAULT_TOKEN=op://vault/root/token" >&2
         echo "" >&2
-        VAULT_TOKEN=$(gum input --prompt="Vault token: " --password --width=100)
+        VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
     elif [[ "${VAULT_TOKEN}" == op://* ]]; then
-        if ! command -v op &> /dev/null; then
+        if ! command -v op &>/dev/null; then
             echo "Error: 1Password CLI (op) is not installed." >&2
             echo "" >&2
             echo "To use 1Password secret references (op://...), please install the 1Password CLI:" >&2
@@ -33,6 +28,22 @@ _vault_env_setup := '''
             exit 1
         fi
         VAULT_TOKEN=$(op read "${VAULT_TOKEN}")
+    fi
+    export VAULT_TOKEN
+'''
+
+[private]
+_vault_oidc_env_setup := '''
+    if [ -z "${VAULT_TOKEN:-}" ]; then
+        if [ "${VAULT_DEBUG}" = "true" ]; then
+            echo "" >&2
+            echo "💡 Authenticating with OIDC..." >&2
+            echo "   • Browser will open for authentication" >&2
+            echo "   • After login, token will be automatically set" >&2
+            echo "" >&2
+        fi
+        vault login -method=oidc &>/dev/null
+        VAULT_TOKEN=$(vault print token)
     fi
     export VAULT_TOKEN
 '''
@@ -177,17 +188,11 @@ setup-kubernetes-auth root_token='':
 setup-oidc-auth:
     #!/bin/bash
     set -euo pipefail
-    {{ _vault_env_setup }}
+    {{ _vault_root_env_setup }}
 
     echo "Creating Keycloak client for Vault..."
-
-    # Delete existing client first to ensure clean state
-    echo "Removing existing 'vault' client if it exists..."
     just keycloak::delete-client "${KEYCLOAK_REALM}" "vault" || true
-
-    # Use a fixed client secret
-    oidc_client_secret="vault-secret-$(date +%Y%m%d)"
-
+    oidc_client_secret=$(just utils::random-password)
     redirect_urls="https://${VAULT_HOST}/ui/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback,http://localhost:8200/ui/vault/auth/oidc/oidc/callback"
     just keycloak::create-client "${KEYCLOAK_REALM}" "vault" "${redirect_urls}" "${oidc_client_secret}"
     echo "Using client secret: ${oidc_client_secret}"
@@ -205,6 +210,15 @@ setup-oidc-auth:
         oidc_client_id="vault" \
         oidc_client_secret="${oidc_client_secret}" \
         default_role="default"
+    # Create default policy for secret access
+    vault policy write default - <<EOF
+    path "secret/data/*" {
+        capabilities = ["create", "read", "update", "delete", "list"]
+    }
+    path "secret/metadata/*" {
+        capabilities = ["list"]
+    }
+    EOF
     # Create default role for all authenticated users
     vault write auth/oidc/role/default \
         bound_audiences="vault" \
@@ -235,41 +249,35 @@ setup-oidc-auth:
 disable-oidc-auth:
     #!/bin/bash
     set -euo pipefail
-    {{ _vault_env_setup }}
+    {{ _vault_root_env_setup }}
     vault auth disable oidc
 
 # Get key value
 get path field:
     #!/bin/bash
     set -euo pipefail
-    # Only run interactive setup if both VAULT_ADDR and VAULT_TOKEN are missing
-    if [ -z "${VAULT_ADDR:-}" ] || [ -z "${VAULT_TOKEN:-}" ]; then
-        {{ _vault_env_setup }}
-    fi
+    {{ _vault_oidc_env_setup }}
     vault kv get -mount=secret -field={{ field }} {{ path }}
 
 # Put key value
 put path *args:
     #!/bin/bash
     set -euo pipefail
-    {{ _vault_env_setup }}
+    {{ _vault_oidc_env_setup }}
     vault kv put -mount=secret {{ path }} {{ args }}
 
 # Delete key value
 delete path:
     #!/bin/bash
     set -euo pipefail
-    {{ _vault_env_setup }}
+    {{ _vault_oidc_env_setup }}
     vault kv delete -mount=secret {{ path }}
 
 # Check if key exists (non-interactive if VAULT_ADDR and VAULT_TOKEN are set)
 exist path:
     #!/bin/bash
     set -euo pipefail
-    # Only run interactive setup if both VAULT_ADDR and VAULT_TOKEN are missing
-    if [ -z "${VAULT_ADDR:-}" ] || [ -z "${VAULT_TOKEN:-}" ]; then
-        {{ _vault_env_setup }}
-    fi
+    {{ _vault_oidc_env_setup }}
     vault kv get -mount=secret {{ path }} &>/dev/null
 
 # Check the environment
@@ -286,8 +294,14 @@ check-env:
         just env::set VAULT_HOST "${VAULT_HOST}"
     fi
 
-# Setup vault environment variables (for use by other justfiles)
-setup-env:
+# Setup vault environment with root token (for initial configuration)
+setup-root-token:
     #!/bin/bash
     set -euo pipefail
-    {{ _vault_env_setup }}
+    {{ _vault_root_env_setup }}
+
+# Setup vault environment with OIDC token (for regular usage)
+setup-token:
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_oidc_env_setup }}
