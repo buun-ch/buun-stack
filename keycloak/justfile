@@ -378,14 +378,14 @@ admin-username:
         echo "${KEYCLOAK_ADMIN_USER}"
         exit 0
     fi
-    if [ "${VAULT_ENABLED}" != "false" ]; then
-        just vault::setup-env
-        if just vault::exist keycloak/admin 2>/dev/null; then
-            just vault::get keycloak/admin username
-            echo
-            exit 0
-        fi
-    fi
+    # if [ "${VAULT_ENABLED}" != "false" ]; then
+    #     just vault::setup-token
+    #     if just vault::exist keycloak/admin 2>/dev/null; then
+    #         just vault::get keycloak/admin username
+    #         echo
+    #         exit 0
+    #     fi
+    # fi
     just default-admin-username
 
 # Print Keycloak admin password
@@ -396,14 +396,14 @@ admin-password:
         echo "${KEYCLOAK_ADMIN_PASSWORD}"
         exit 0
     fi
-    if [ "${VAULT_ENABLED}" != "false" ]; then
-        just vault::setup-env
-        if just vault::exist keycloak/admin 2>/dev/null; then
-            just vault::get keycloak/admin password
-            echo
-            exit 0
-        fi
-    fi
+    # if [ "${VAULT_ENABLED}" != "false" ]; then
+    #     just vault::setup-token
+    #     if just vault::exist keycloak/admin 2>/dev/null; then
+    #         just vault::get keycloak/admin password
+    #         echo
+    #         exit 0
+    #     fi
+    # fi
     just default-admin-password
 
 # Print default Keycloak admin username
