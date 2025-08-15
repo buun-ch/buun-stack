@@ -1,10 +1,35 @@
 set fallback := true
 
-export VAULT_NAMESPACE := env("VAULT_NAMESPACE", "vault")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 export VAULT_CHART_VERSION := env("VAULT_CHART_VERSION", "0.29.1")
 export VAULT_HOST := env("VAULT_HOST", "")
 export VAULT_ADDR := "https://" + VAULT_HOST
 SECRET_PATH := "secret"
+
+# Common vault environment setup script
+
+[private]
+_vault_env_setup := '''
+    if [ -z "${VAULT_ADDR:-}" ]; then
+        if [ -z "${VAULT_HOST:-}" ]; then
+            VAULT_HOST=$(gum input --prompt="Vault host: " --placeholder="vault.example.com" --width=100)
+        fi
+        export VAULT_ADDR="https://${VAULT_HOST}"
+    fi
+    if [ -z "${VAULT_TOKEN:-}" ]; then
+        VAULT_TOKEN=$(gum input --prompt="Vault token: " --password --width=100)
+    elif [[ "${VAULT_TOKEN}" == op://* ]]; then
+        if ! command -v op &> /dev/null; then
+            echo "Error: 1Password CLI (op) is not installed." >&2
+            echo "" >&2
+            echo "To use 1Password secret references (op://...), please install the 1Password CLI:" >&2
+            echo "  https://developer.1password.com/docs/cli/get-started/" >&2
+            exit 1
+        fi
+        VAULT_TOKEN=$(op read "${VAULT_TOKEN}")
+    fi
+    export VAULT_TOKEN
+'''
 
 [private]
 default:
@@ -21,12 +46,12 @@ remove-helm-repo:
 
 # Create Keycloak namespace
 create-namespace:
-    @kubectl get namespace ${VAULT_NAMESPACE} &>/dev/null || \
-        kubectl create namespace ${VAULT_NAMESPACE}
+    @kubectl get namespace ${K8S_VAULT_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${K8S_VAULT_NAMESPACE}
 
 # Delete Keycloak namespace
 delete-namespace:
-    @kubectl delete namespace ${VAULT_NAMESPACE} --ignore-not-found
+    @kubectl delete namespace ${K8S_VAULT_NAMESPACE} --ignore-not-found
 
 # Install Vault
 install: check-env
@@ -36,13 +61,13 @@ install: check-env
     just add-helm-repo
     gomplate -f vault-values.gomplate.yaml -o vault-values.yaml
     helm upgrade --cleanup-on-fail --install vault hashicorp/vault \
-        --version ${VAULT_CHART_VERSION} -n ${VAULT_NAMESPACE} --wait -f vault-values.yaml
+        --version ${VAULT_CHART_VERSION} -n ${K8S_VAULT_NAMESPACE} --wait -f vault-values.yaml
 
     # Wait for the primary vault pod to complete init containers and be ready to accept commands
     kubectl wait pod --for=condition=PodReadyToStartContainers \
-        -n ${VAULT_NAMESPACE} vault-0 --timeout=5m
+        -n ${K8S_VAULT_NAMESPACE} vault-0 --timeout=5m
 
-    init_output=$(kubectl exec -n ${VAULT_NAMESPACE} vault-0 -- \
+    init_output=$(kubectl exec -n ${K8S_VAULT_NAMESPACE} vault-0 -- \
         vault operator init -key-shares=1 -key-threshold=1 -format=json || true)
 
     root_token=""
@@ -54,7 +79,7 @@ install: check-env
     else
         unseal_key=$(echo "${init_output}" | jq -r '.unseal_keys_b64[0]')
         root_token=$(echo "${init_output}" | jq -r '.root_token')
-        kubectl exec -n ${VAULT_NAMESPACE} vault-0 -- \
+        kubectl exec -n ${K8S_VAULT_NAMESPACE} vault-0 -- \
             vault operator unseal "${unseal_key}"
         echo "Vault initialized and unsealed successfully"
         echo "Root Token: ${root_token}"
@@ -63,17 +88,17 @@ install: check-env
     fi
 
     # Wait for all vault instances to pass readiness checks and be ready to serve requests
-    kubectl wait pod --for=condition=ready -n ${VAULT_NAMESPACE} \
+    kubectl wait pod --for=condition=ready -n ${K8S_VAULT_NAMESPACE} \
         -l app.kubernetes.io/name=vault --timeout=5m
 
-    just configure-kubernetes-auth "${root_token}"
+    just setup-kubernetes-auth "${root_token}"
     just create-secrets-engine {{ SECRET_PATH }} "${root_token}"
 
 # Uninstall Vault
 uninstall delete-ns='false':
     #!/bin/bash
     set -euo pipefail
-    helm uninstall vault -n ${VAULT_NAMESPACE} --ignore-not-found --wait
+    helm uninstall vault -n ${K8S_VAULT_NAMESPACE} --ignore-not-found --wait
     just delete-namespace
 
 # Create admin token
@@ -114,14 +139,10 @@ create-secrets-engine path root_token='':
     while [ -z "${VAULT_TOKEN}" ]; do
         VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
     done
-    # Use kubectl exec during initial setup to avoid DNS dependency
-    kubectl exec -n ${VAULT_NAMESPACE} vault-0 -- sh <<EOF
-        export VAULT_TOKEN='${VAULT_TOKEN}'
-        vault secrets enable -path='{{ path }}' kv-v2
-    EOF
+    vault secrets enable -path="{{ path }}" kv-v2
 
-# Configure Kubernetes authentication for Vault
-configure-kubernetes-auth root_token='':
+# Setup Kubernetes authentication
+setup-kubernetes-auth root_token='':
     #!/bin/bash
     set -euo pipefail
     export VAULT_TOKEN="{{ root_token }}"
@@ -129,42 +150,114 @@ configure-kubernetes-auth root_token='':
         VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
     done
 
-    gomplate -f ./serviceaccount.gomplate.yaml | kubectl apply -n "${VAULT_NAMESPACE}" -f -
-    gomplate -f ./rolebinding.gomplate.yaml | kubectl apply -n "${VAULT_NAMESPACE}" -f -
-    kubectl apply -n "${VAULT_NAMESPACE}" -f ./auth-token-secret.yaml
+    gomplate -f ./serviceaccount.gomplate.yaml | kubectl apply -n "${K8S_VAULT_NAMESPACE}" -f -
+    gomplate -f ./rolebinding.gomplate.yaml | kubectl apply -n "${K8S_VAULT_NAMESPACE}" -f -
+    kubectl apply -n "${K8S_VAULT_NAMESPACE}" -f ./auth-token-secret.yaml
 
     SA_SECRET="vault-auth-token"
-    SA_JWT=$(kubectl get secret -n ${VAULT_NAMESPACE} ${SA_SECRET} -o jsonpath='{.data.token}' | \
+    SA_JWT=$(kubectl get secret -n ${K8S_VAULT_NAMESPACE} ${SA_SECRET} -o jsonpath='{.data.token}' | \
         base64 --decode)
-    SA_CA=$(kubectl get secret -n ${VAULT_NAMESPACE} ${SA_SECRET} -o jsonpath='{.data.ca\.crt}' | \
+    SA_CA=$(kubectl get secret -n ${K8S_VAULT_NAMESPACE} ${SA_SECRET} -o jsonpath='{.data.ca\.crt}' | \
         base64 --decode)
 
-    # Use kubectl exec to run vault commands directly in the pod during initial setup
-    kubectl exec -n ${VAULT_NAMESPACE} vault-0 -- sh <<EOF
-        export VAULT_TOKEN='${VAULT_TOKEN}'
-        vault auth list -format=json | jq -e '.["kubernetes/"]' >/dev/null 2>&1 || \
-            vault auth enable kubernetes
-        vault write auth/kubernetes/config \
-            token_reviewer_jwt='${SA_JWT}' \
-            kubernetes_host='https://kubernetes.default.svc' \
-            kubernetes_ca_cert='${SA_CA}'
-    EOF
+    vault auth list -format=json | jq -e '.["kubernetes/"]' >/dev/null 2>&1 || \
+        vault auth enable kubernetes
+    vault write auth/kubernetes/config \
+        token_reviewer_jwt="${SA_JWT}" \
+        kubernetes_host="https://kubernetes.default.svc" \
+        kubernetes_ca_cert="${SA_CA}"
+
+# Setup OIDC authentication with Keycloak
+setup-oidc-auth:
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_env_setup }}
+
+    echo "Creating Keycloak client for Vault..."
+    oidc_client_secret=$(just utils::random-password)
+    redirect_urls="https://${VAULT_HOST}/ui/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback,http://localhost:8200/ui/vault/auth/oidc/oidc/callback"
+    just keycloak::create-client "${KEYCLOAK_REALM}" "vault" "${redirect_urls}" "${oidc_client_secret}"
+    just keycloak::add-audience-mapper "vault"
+    echo "✓ Keycloak client 'vault' created"
+
+    echo "Configuring Vault OIDC authentication..."
+    # Enable OIDC auth method
+    vault auth list -format=json | jq -e '.["oidc/"]' >/dev/null 2>&1 || \
+        vault auth enable oidc
+    # Configure OIDC with Keycloak
+    vault write auth/oidc/config \
+        oidc_discovery_url="https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}" \
+        oidc_client_id="vault" \
+        oidc_client_secret="${OIDC_CLIENT_SECRET}" \
+        default_role="default"
+    # Create default role for all authenticated users
+    vault write auth/oidc/role/default \
+        bound_audiences="vault" \
+        allowed_redirect_uris="https://${VAULT_HOST}/ui/vault/auth/oidc/oidc/callback" \
+        allowed_redirect_uris="http://localhost:8250/oidc/callback" \
+        allowed_redirect_uris="http://localhost:8200/ui/vault/auth/oidc/oidc/callback" \
+        user_claim="preferred_username" \
+        groups_claim="groups" \
+        token_policies="default"
+    # Create admin role for vault-admins group
+    vault write auth/oidc/role/admin \
+        bound_audiences="vault" \
+        allowed_redirect_uris="https://${VAULT_HOST}/ui/vault/auth/oidc/oidc/callback" \
+        allowed_redirect_uris="http://localhost:8250/oidc/callback" \
+        allowed_redirect_uris="http://localhost:8200/ui/vault/auth/oidc/oidc/callback" \
+        bound_claims='{"groups": ["vault-admins"]}' \
+        user_claim="preferred_username" \
+        groups_claim="groups" \
+        token_policies="admin"
+    echo "✓ Vault OIDC authentication configured"
+
+    just vault::put vault-oidc/client client_id="vault" client_secret="${OIDC_CLIENT_SECRET}" || true
+    echo "✓ Client credentials stored in Vault at 'vault-oidc/client'"
+
+    echo ""
+    echo "=== OIDC Setup Complete ==="
+    echo "You can now login to Vault using:"
+    echo "  vault login -method=oidc"
+    echo ""
+    echo "To create vault-admins group in Keycloak:"
+    echo "  1. Login to Keycloak Admin Console"
+    echo "  2. Go to Groups → Create Group"
+    echo "  3. Name: vault-admins"
+    echo "  4. Assign users to this group for admin access"
 
 # Get key value
-get path field: check-env
-    @vault kv get -mount=secret -field={{ field }} {{ path }}
+get path field:
+    #!/bin/bash
+    set -euo pipefail
+    # Only run interactive setup if both VAULT_ADDR and VAULT_TOKEN are missing
+    if [ -z "${VAULT_ADDR:-}" ] || [ -z "${VAULT_TOKEN:-}" ]; then
+        {{ _vault_env_setup }}
+    fi
+    vault kv get -mount=secret -field={{ field }} {{ path }}
 
 # Put key value
-put path *args: check-env
-    @vault kv put -mount=secret {{ path }} {{ args }}
+put path *args:
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_env_setup }}
+    vault kv put -mount=secret {{ path }} {{ args }}
 
 # Delete key value
-delete path: check-env
-    @vault kv delete -mount=secret {{ path }}
+delete path:
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_env_setup }}
+    vault kv delete -mount=secret {{ path }}
 
-# Check if key exists
-exist path: check-env
-    @vault kv get -mount=secret {{ path }} &>/dev/null
+# Check if key exists (non-interactive if VAULT_ADDR and VAULT_TOKEN are set)
+exist path:
+    #!/bin/bash
+    set -euo pipefail
+    # Only run interactive setup if both VAULT_ADDR and VAULT_TOKEN are missing
+    if [ -z "${VAULT_ADDR:-}" ] || [ -z "${VAULT_TOKEN:-}" ]; then
+        {{ _vault_env_setup }}
+    fi
+    vault kv get -mount=secret {{ path }} &>/dev/null
 
 # Check the environment
 [private]
@@ -179,3 +272,9 @@ check-env:
         done
         just env::set VAULT_HOST "${VAULT_HOST}"
     fi
+
+# Setup vault environment variables (for use by other justfiles)
+setup-env:
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_env_setup }}
