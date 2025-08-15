@@ -101,8 +101,12 @@ create-realm create-client-for-k8s='true':
     export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
     dotenvx run -f ../.env.local -- tsx ./scripts/create-realm.ts
     if [ "{{ create-client-for-k8s }}" = "true" ]; then
-        just create-client ${KEYCLOAK_REALM} ${K8S_OIDC_CLIENT_ID} "http://localhost:8000"
+        just create-k8s-client
     fi
+
+# Create Keycloak client for Kubernetes OIDC authentication
+create-k8s-client:
+    @just create-client ${KEYCLOAK_REALM} ${K8S_OIDC_CLIENT_ID} "http://localhost:8000,http://localhost:18000"
 
 # Delete Keycloak realm
 delete-realm realm:
