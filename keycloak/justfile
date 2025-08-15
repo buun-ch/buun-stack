@@ -1,0 +1,408 @@
+set fallback := true
+
+export KEYCLOAK_NAMESPACE := env("KEYCLOAK_NAMESPACE", "keycloak")
+export KEYCLOAK_CHART_VERSION := env("KEYCLOAK_CHART_VERSION", "25.0.2")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export K8S_OIDC_CLIENT_ID := env('K8S_OIDC_CLIENT_ID', "k8s")
+export KEYCLOAK_ADMIN_USER := env("KEYCLOAK_ADMIN_USER", "")
+export KEYCLOAK_ADMIN_PASSWORD := env("KEYCLOAK_ADMIN_PASSWORD", "")
+export VAULT_ENABLED := env("VAULT_ENABLED", "true")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Create Keycloak namespace
+create-namespace:
+    @kubectl get namespace ${KEYCLOAK_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${KEYCLOAK_NAMESPACE}
+
+# Delete Keycloak namespace
+delete-namespace:
+    @kubectl delete namespace ${KEYCLOAK_NAMESPACE} --ignore-not-found
+
+# Create Keycloak secret
+create-credentials:
+    #!/bin/bash
+    set -euo pipefail
+    admin_user=$(gum input --prompt="Initial Keycloak admin username: " --width=100 --value="admin")
+    password=$(
+        gum input --prompt="Initial Keycloak admin password: " --password --width=100 \
+        --placeholder="Empty to generate a random password"
+    )
+    if [ -z "${password}" ]; then
+        password=$(just utils::random-password)
+    fi
+    just create-namespace
+    if kubectl get secret keycloak-credentials -n ${KEYCLOAK_NAMESPACE} &>/dev/null; then
+        kubectl delete --ignore-not-found secret keycloak-credentials -n ${KEYCLOAK_NAMESPACE}
+    fi
+    kubectl create secret generic keycloak-credentials -n ${KEYCLOAK_NAMESPACE} \
+        --from-literal=admin-user="${admin_user}" \
+        --from-literal=password="${password}"
+
+    if [ "${VAULT_ENABLED}" != "false" ]; then
+        just put-admin-credentials-to-vault "${admin_user}" "${password}"
+    fi
+
+# Delete Keycloak secret
+delete-credentials:
+    @kubectl delete secret keycloak-credentials -n ${KEYCLOAK_NAMESPACE} --ignore-not-found
+
+# Create Keycloak database secret
+create-database-secret:
+    #!/bin/bash
+    set -euo pipefail
+    if kubectl get secret database-config -n ${KEYCLOAK_NAMESPACE} &>/dev/null; then
+        kubectl delete secret database-config -n ${KEYCLOAK_NAMESPACE}
+    fi
+    kubectl create secret generic database-config -n ${KEYCLOAK_NAMESPACE} \
+        --from-literal=host=postgres-cluster-rw.postgres \
+        --from-literal=port=5432 \
+        --from-literal=user=$(just postgres::admin-username) \
+        --from-literal=password=$(just postgres::admin-password) \
+        --from-literal=database=keycloak
+
+# Delete Keycloak database secret
+delete-database-secret:
+    @kubectl delete secret database-config -n ${KEYCLOAK_NAMESPACE} --ignore-not-found
+
+# Install Keycloak
+install:
+    #!/bin/bash
+    set -euxo pipefail
+    just create-credentials
+    just postgres::create-db keycloak
+    just create-database-secret
+    KEYCLOAK_ADMIN_USER=$(just admin-username) \
+        gomplate -f keycloak-values.gomplate.yaml -o keycloak-values.yaml
+    helm upgrade --cleanup-on-fail --install \
+        keycloak oci://registry-1.docker.io/bitnamicharts/keycloak \
+        --version ${KEYCLOAK_CHART_VERSION} -n ${KEYCLOAK_NAMESPACE} --wait \
+        -f keycloak-values.yaml
+
+# Uninstall Keycloak
+uninstall delete-db='true':
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall keycloak -n ${KEYCLOAK_NAMESPACE} --ignore-not-found --wait
+    just delete-namespace
+    if [ "{{ delete-db }}" = "true" ]; then
+        just postgres::delete-db keycloak
+    fi
+
+# Create Keycloak realm
+create-realm create-client-for-k8s='true':
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    dotenvx run -f ../.env.local -- tsx ./scripts/create-realm.ts
+    if [ "{{ create-client-for-k8s }}" = "true" ]; then
+        just create-client ${KEYCLOAK_REALM} ${K8S_OIDC_CLIENT_ID} "http://localhost:8000"
+    fi
+
+# Delete Keycloak realm
+delete-realm realm:
+    #!/bin/bash
+    set -euo pipefail
+    if [ -z "{{ realm }}" ]; then
+        echo "Error: Realm name to delete must be provided as an argument." >&2
+        echo "Usage: just delete-realm <realm-to-delete>" >&2
+        exit 1
+    fi
+    if [ "{{ realm }}" = "master" ]; then
+        echo "Error: Deleting the 'master' realm is not allowed via this script." >&2
+        exit 1
+    fi
+    echo "WARNING: You are about to delete the Keycloak realm named '{{ realm }}'."
+    echo "This action is irreversible and will remove all users, clients, and configurations within this realm."
+    if ! gum confirm "Are you absolutely sure you want to delete realm '{{ realm }}'?"; then
+        echo "Realm deletion cancelled."
+        exit 0
+    fi
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM_TO_DELETE={{ realm }}
+    dotenvx run -f ../.env.local -- tsx ./scripts/delete-realm.ts
+
+# Create Keycloak client
+create-client realm client_id redirect_url client_secret='':
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM={{ realm }}
+    export KEYCLOAK_CLIENT_ID={{ client_id }}
+    export KEYCLOAK_CLIENT_SECRET={{ client_secret }}
+    export KEYCLOAK_REDIRECT_URL={{ redirect_url }}
+    dotenvx run -f ../.env.local -- tsx ./scripts/create-client.ts
+
+# Delete Keycloak client
+delete-client realm client_id:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM={{ realm }}
+    export KEYCLOAK_CLIENT_ID={{ client_id }}
+    dotenvx run -f ../.env.local -- tsx ./scripts/delete-client.ts
+
+# Add Keycloak client audience mapper
+add-audience-mapper client_id:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM=${KEYCLOAK_REALM}
+    export KEYCLOAK_CLIENT_ID={{ client_id }}
+    dotenvx run -f ../.env.local -- tsx ./scripts/add-audience-mapper.ts
+
+# Create Keycloak group
+create-group group_name parent_group='' description='':
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export GROUP_NAME="{{ group_name }}"
+    export PARENT_GROUP_NAME="{{ parent_group }}"
+    export GROUP_DESCRIPTION="{{ description }}"
+    dotenvx run -f ../.env.local -- tsx ./scripts/create-group.ts
+
+# Create Keycloak user
+create-user username='' password='' email='' first_name='' last_name='' vault_admin='false':
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export USERNAME="{{ username }}"
+    export PASSWORD="{{ password }}"
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    while [ -z "${PASSWORD}" ]; do
+        PASSWORD=$(gum input --prompt="Password: " --password --width=100)
+    done
+    export EMAIL="{{ email }}"
+    while [ -z "${EMAIL}" ]; do
+        EMAIL=$(gum input --prompt="Email: " --width=100)
+    done
+    export FIRST_NAME="{{ first_name }}"
+    while [ -z "${FIRST_NAME}" ]; do
+        FIRST_NAME=$(gum input --prompt="First name: " --width=100)
+    done
+    export LAST_NAME="{{ last_name }}"
+    while [ -z "${LAST_NAME}" ]; do
+        LAST_NAME=$(gum input --prompt="Last name: " --width=100)
+    done
+
+    # Ask if user should be vault admin
+    VAULT_ADMIN="{{ vault_admin }}"
+    if [ "${VAULT_ADMIN}" = "false" ]; then
+        if gum confirm "Should this user have Vault admin access?"; then
+            VAULT_ADMIN="true"
+        fi
+    fi
+
+    # Create user
+    dotenvx run -f ../.env.local -- tsx ./scripts/create-user.ts
+
+    # Set up Kubernetes RBAC
+    kubectl delete clusterrolebinding oidc-${USERNAME} --ignore-not-found
+    kubectl create clusterrolebinding oidc-${USERNAME} --clusterrole=cluster-admin \
+        --user="https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}#${USERNAME}"
+
+    # Add to vault-admins group if requested
+    if [ "${VAULT_ADMIN}" = "true" ]; then
+        echo "Setting up vault-admins group..."
+        # Create vault-admins group if it doesn't exist
+        just create-group "vault-admins" "" "Vault administrators group" || true
+
+        # Add user to vault-admins group
+        export GROUP_NAME="vault-admins"
+        dotenvx run -f ../.env.local -- tsx ./scripts/add-user-to-group.ts
+        echo "✓ User '${USERNAME}' added to vault-admins group"
+    fi
+
+# Add user to group
+add-user-to-group username group_name:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export USERNAME="{{ username }}"
+    export GROUP_NAME="{{ group_name }}"
+    dotenvx run -f ../.env.local -- tsx ./scripts/add-user-to-group.ts
+
+# Remove user from group
+remove-user-from-group username group_name:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export USERNAME="{{ username }}"
+    export GROUP_NAME="{{ group_name }}"
+    dotenvx run -f ../.env.local -- tsx ./scripts/delete-user-from-group.ts
+
+# Delete Keycloak group
+delete-group group_name:
+    #!/bin/bash
+    set -euo pipefail
+    if [ -z "{{ group_name }}" ]; then
+        echo "Error: Group name to delete must be provided as an argument." >&2
+        echo "Usage: just delete-group <group-name>" >&2
+        exit 1
+    fi
+    if [ "{{ group_name }}" = "vault-admins" ]; then
+        echo "WARNING: You are about to delete the 'vault-admins' group."
+        echo "This will remove Vault admin access for all users in this group."
+        if ! gum confirm "Are you sure you want to delete the '{{ group_name }}' group?"; then
+            echo "Group deletion cancelled."
+            exit 0
+        fi
+    else
+        echo "You are about to delete the Keycloak group '{{ group_name }}'."
+        if ! gum confirm "Are you sure you want to delete the '{{ group_name }}' group?"; then
+            echo "Group deletion cancelled."
+            exit 0
+        fi
+    fi
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export GROUP_NAME="{{ group_name }}"
+    dotenvx run -f ../.env.local -- tsx ./scripts/delete-group.ts
+
+# Delete a user
+delete-user username='':
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export USERNAME="{{ username }}"
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    dotenvx run -f ../.env.local -- tsx ./scripts/delete-user.ts
+
+# Create an admin user
+# create-admin-user username='' password='':
+#     #!/bin/bash
+#     set -euo pipefail
+#     echo "Creating a new admin user in Keycloak"
+#     export KEYCLOAK_ADMIN_USER=$(just admin-user)
+#     export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+#     export USERNAME="{{ username }}"
+#     export PASSWORD="{{ password }}"
+#     while [ -z "${USERNAME}" ]; do
+#         USERNAME=$(gum input --prompt="Admin username: " --width=100)
+#     done
+#     if [ -z "${PASSWORD}" ]; then
+#         PASSWORD=$(
+#             gum input --prompt="Admin assword: " --password --width=100 \
+#             --placeholder="Empty to generate a random password"
+#         )
+#     fi
+#     if [ -z "${PASSWORD}" ]; then
+#         PASSWORD=$(just utils::random-password)
+#     fi
+#     export EMAIL=""
+#     export FIRST_NAME=""
+#     export LAST_NAME=""
+#     export CREATE_AS_ADMIN=true
+#     dotenvx run -f ../.env.local -- tsx ./scripts/create-user.ts
+#     if [ "${VAULT_ENABLED}" != "false" ]; then
+#         just put-admin-credentials-to-vault "${USERNAME}" "${PASSWORD}"
+#     fi
+
+# Put admin credentials to Vault
+put-admin-credentials-to-vault username password:
+    @just vault::put keycloak/admin username={{ username }} password={{ password }}
+    @echo "Admin credentials stored in Vault under 'keycloak/admin'."
+
+# Delete admin credentials from Vault
+delete-admin-credentials-from-vault:
+    @just vault::delete keycloak/admin
+    @echo "Admin credentials deleted from Vault."
+
+# Create system user {w/o email, first name and last name}
+create-system-user username='' password='':
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-user)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export USERNAME="{{ username }}"
+    export PASSWORD="{{ password }}"
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Keycloak username: " --width=100)
+    done
+    while [ -z "${PASSWORD}" ]; do
+        PASSWORD=$(gum input --prompt="Keycloak password: " --password --width=100)
+    done
+    export EMAIL=""
+    export FIRST_NAME=""
+    export LAST_NAME=""
+    dotenvx run -f ../.env.local -- tsx ./scripts/create-user.ts
+    kubectl delete clusterrolebinding oidc-${USERNAME} --ignore-not-found
+    kubectl create clusterrolebinding oidc-${USERNAME} --clusterrole=cluster-admin \
+        --user="https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}#${USERNAME}"
+
+# Check if user exists
+user-exists username='':
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-user)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export USERNAME="{{ username }}"
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    dotenvx run -f ../.env.local -- tsx ./scripts/user-exists.ts
+
+# Print Keycloak admin username
+admin-username:
+    #!/bin/bash
+    set -euxo pipefail
+    if [ -n "${KEYCLOAK_ADMIN_USER}" ]; then
+        echo "${KEYCLOAK_ADMIN_USER}"
+        exit 0
+    fi
+    if [ "${VAULT_ENABLED}" != "false" ]; then
+        just vault::setup-env
+        if just vault::exist keycloak/admin; then
+            just vault::get keycloak/admin username
+            echo
+            exit 0
+        fi
+    fi
+    just default-admin-username
+
+# Print Keycloak admin password
+admin-password:
+    #!/bin/bash
+    set -euo pipefail
+    if [ -n "${KEYCLOAK_ADMIN_PASSWORD}" ]; then
+        echo "${KEYCLOAK_ADMIN_PASSWORD}"
+        exit 0
+    fi
+    if [ "${VAULT_ENABLED}" != "false" ]; then
+        just vault::setup-env
+        if just vault::exist keycloak/admin; then
+            just vault::get keycloak/admin password
+            echo
+            exit 0
+        fi
+    fi
+    just default-admin-password
+
+# Print default Keycloak admin username
+default-admin-username:
+    @kubectl get secret keycloak-credentials -n ${KEYCLOAK_NAMESPACE} \
+        -o jsonpath="{.data.admin-user}" | base64 --decode
+    @echo
+
+# Print default Keycloak admin password
+default-admin-password:
+    @kubectl get secret keycloak-credentials -n ${KEYCLOAK_NAMESPACE} \
+        -o jsonpath="{.data.password}" | base64 --decode
+    @echo

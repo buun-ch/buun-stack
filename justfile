@@ -7,8 +7,10 @@ default:
     @just --list --unsorted --list-submodules
 
 mod env
+mod keycloak
 mod k8s
 mod longhorn
+mod postgres
 mod utils
 mod vault
 

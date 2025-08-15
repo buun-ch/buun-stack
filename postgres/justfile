@@ -1,0 +1,248 @@
+set fallback := true
+
+export CNPG_NAMESPACE := env("CNPG_NAMESPACE", "postgres")
+export CNPG_CHART_VERSION := env("CNPG_CHART_VERSION", "0.26.0")
+export CNPG_CLUSTER_CHART_VERSION := env("CNPG_CLUSTER_CHART_VERSION", "0.3.1")
+export VAULT_ENABLED := env("VAULT_ENABLED", "true")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    @helm repo add cnpg https://cloudnative-pg.github.io/charts
+    @helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    @helm repo remove cnpg
+
+# Install CloudNativePG and create a cluster
+install:
+    @just install-cnpg
+    @just create-cluster
+
+# Uninstall CloudNativePG and delete the cluster
+uninstall:
+    @just delete-cluster
+    @just uninstall-cnpg
+
+# Install CloudNativePG
+install-cnpg:
+    @just add-helm-repo
+    @helm upgrade --cleanup-on-fail --install cnpg cnpg/cloudnative-pg \
+        --version ${CNPG_CHART_VERSION} \
+        -n ${CNPG_NAMESPACE} --create-namespace --wait
+
+# Uninstall CloudNativePG
+uninstall-cnpg:
+    @helm uninstall cnpg -n ${CNPG_NAMESPACE} --wait
+    @kubectl delete namespace ${CNPG_NAMESPACE} --ignore-not-found
+
+# Create Postgres cluster
+create-cluster:
+    #!/bin/bash
+    set -euo pipefail
+    helm upgrade --install postgres-cluster cnpg/cluster \
+        --version ${CNPG_CLUSTER_CHART_VERSION} \
+        -n ${CNPG_NAMESPACE} --create-namespace --wait \
+        -f postgres-cluster-values.yaml
+
+    if [ "${VAULT_ENABLED}" != "false" ]; then
+        just put-admin-credentials-to-vault
+    fi
+
+# Delete Postgres cluster
+delete-cluster:
+    @helm uninstall postgres-cluster -n ${CNPG_NAMESPACE} --ignore-not-found --wait
+
+# Print Postgres username
+admin-username:
+    @echo "postgres"
+
+# Print Postgres password
+admin-password:
+    @kubectl get -n ${CNPG_NAMESPACE} secret postgres-cluster-superuser \
+        -o jsonpath="{.data.password}" | base64 --decode
+    @echo
+
+# Put admin credentials to Vault
+put-admin-credentials-to-vault:
+    @echo vault::put postgres/admin username=$(just admin-username) password=$(just admin-password)
+    @just vault::put postgres/admin username=$(just admin-username) password=$(just admin-password)
+    @echo "Admin credentials stored in Vault under 'postgres/admin'."
+
+# Create Postgres database
+create-db db_name='':
+    #!/bin/bash
+    set -euo pipefail
+    DB_NAME=${DB_NAME:-{{ db_name }}}
+    while [ -z "${DB_NAME}" ]; do
+        DB_NAME=$(gum input --prompt="Database name: " --width=80)
+    done
+    if just db-exists ${DB_NAME} >&/dev/null; then
+        echo "Database ${DB_NAME} already exists" >&2
+        exit
+    fi
+    echo "Creating database ${DB_NAME}..."
+    just psql -c "\"CREATE DATABASE ${DB_NAME};\""
+    echo "Database ${DB_NAME} created."
+
+# Delete Postgres database
+delete-db db_name='':
+    #!/bin/bash
+    set -euo pipefail
+    DB_NAME=${DB_NAME:-{{ db_name }}}
+    if ! just db-exists ${DB_NAME} >&/dev/null; then
+        echo "Database ${DB_NAME} does not exist." >&2
+        exit
+    fi
+    # Terminate all connections to the database
+    just psql -U postgres -P pager=off -c "\"SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+        WHERE datname = '${DB_NAME}' AND pid <> pg_backend_pid();\""
+    just psql -U postgres -c "\"DROP DATABASE ${DB_NAME};\""
+    echo "Database ${DB_NAME} deleted."
+
+# Check if database exists
+db-exists db_name='':
+    #!/bin/bash
+    set -euo pipefail
+    DB_NAME=${DB_NAME:-{{ db_name }}}
+    while [ -z "${DB_NAME}" ]; do
+        DB_NAME=$(gum input --prompt="Database name: " --width=80)
+    done
+    if echo '\l' | just postgres::psql | grep -E "^ *${DB_NAME} *\|" &>/dev/null; then
+        echo "Database ${DB_NAME} exists."
+    else
+        echo "Database ${DB_NAME} does not exist." >&2
+        exit 1
+    fi
+
+# Create Postgres user
+create-user username='' password='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME=${USERNAME:-"{{ username }}"}
+    PASSWORD=${PASSWORD:-"{{ password }}"}
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=80)
+    done
+    if just user-exists ${USERNAME}; then
+        echo "User ${USERNAME} already exists" >&2
+        exit
+    fi
+    if [ -z "${PASSWORD}" ]; then
+        PASSWORD=$(gum input --prompt="Password: " --password --width=80 \
+            --placeholder="Empty to generate a random password")
+    fi
+    if [ -z "${PASSWORD}" ]; then
+        PASSWORD=$(just random-password)
+    fi
+    just psql -c "\"CREATE USER ${USERNAME} WITH LOGIN PASSWORD '${PASSWORD}';\""
+    echo "User ${USERNAME} created."
+
+# Delete Postgres user
+delete-user username='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME=${USERNAME:-"{{ username }}"}
+    if ! just user-exists ${USERNAME}; then
+        echo "User ${USERNAME} does not exist." >&2
+        exit
+    fi
+    just psql -c "\"ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM ${USERNAME};\""
+    just psql -c "\"ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON SEQUENCES FROM ${USERNAME};\""
+    just psql -c "\"ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM ${USERNAME};\""
+    just psql -c "\"ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TYPES FROM ${USERNAME};\""
+    just psql -c "\"ALTER SCHEMA public OWNER TO postgres;\""
+    just psql -c "\"DROP USER ${USERNAME};\""
+    echo "User ${USERNAME} deleted."
+
+# Check if user exists
+user-exists username='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME=${USERNAME:-"{{ username }}"}
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=80)
+    done
+    if echo '\du' | just postgres::psql | grep -E "^ *${USERNAME} *\|" &>/dev/null; then
+        echo "User ${USERNAME} exists."
+    else
+        echo "User ${USERNAME} does not exist." >&2
+        exit 1
+    fi
+
+# Grant all privileges on database to user
+grant db_name='' username='':
+    #!/bin/bash
+    set -euo pipefail
+    DB_NAME=${DB_NAME:-"{{ db_name }}"}
+    USERNAME=${USERNAME:-"{{ username }}"}
+    while [ -z "${DB_NAME}" ]; do
+        DB_NAME=$(gum input --prompt="Database name: " --width=80)
+    done
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=80)
+    done
+    if ! just psql ${DB_NAME} -U postgres -P pager=off -c "\"SELECT 1;\""; then
+        echo "Database ${DB_NAME} does not exist." >&2
+        exit 1
+    fi
+    just psql -c "\"GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${USERNAME};\""
+    echo "Privileges granted."
+
+# Revoke all privileges on database from user
+revoke db_name='' username='':
+    #!/bin/bash
+    set -euo pipefail
+    DB_NAME=${DB_NAME:-"{{ db_name }}"}
+    USERNAME=${USERNAME:-"{{ username }}"}
+    while [ -z "${DB_NAME}" ]; do
+        DB_NAME=$(gum input --prompt="Database name: " --width=80)
+    done
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=80)
+    done
+    if ! just psql -U postgres ${DB_NAME} -P pager=off -c "\"SELECT 1;\""; then
+        echo "Database ${DB_NAME} does not exist." >&2
+        exit 1
+    fi
+    just psql -c "\"REVOKE ALL PRIVILEGES ON DATABASE ${DB_NAME} FROM ${USERNAME};\""
+    echo "Privileges revoked."
+
+# Create Postgres database and user
+create-user-and-db db_name='' username='' password='':
+    just create-db "{{ db_name }}"
+    just create-user "{{ username }}" "{{ password }}"
+    just grant "{{ db_name }}" "{{ username }}"
+
+# Delete Postgres database and user
+delete-user-and-db db_name='' username='':
+    just revoke "{{ db_name }}" "{{ username }}"
+    just delete-user "{{ username }}"
+    just delete-db "{{ db_name }}"
+
+# Run psql
+[no-exit-message]
+psql *args='':
+    @kubectl exec -it -n postgres postgres-cluster-1 -c postgres -- psql {{ args }}
+
+# Dump Postgres database by pg_dump
+dump db_name file:
+    kubectl exec -it -n ${CNPG_NAMESPACE} postgres-cluster-1 -c postgres -- bash -c \
+        "pg_dump -d postgresql://postgres:$(just password)@localhost/{{ db_name }} -Fc > \
+        /var/lib/postgresql/data/db.dump"
+    kubectl cp -n ${CNPG_NAMESPACE} -c postgres \
+        postgres-cluster-1:/var/lib/postgresql/data/db.dump {{ file }}
+    kubectl exec -it -n ${CNPG_NAMESPACE} postgres-cluster-1 -c postgres -- rm /var/lib/postgresql/data/db.dump
+
+# Restore Postgres database by pg_restore
+restore db_name file:
+    just create-db {{ db_name }}
+    kubectl cp {{ file }} -n ${CNPG_NAMESPACE} -c postgres \
+        postgres-cluster-1:/var/lib/postgresql/data/db.dump
+    kubectl exec -it -n ${CNPG_NAMESPACE} postgres-cluster-1 -c postgres -- bash -c \
+        "pg_restore -d postgresql://postgres:$(just password)@localhost/{{ db_name }} \
+        /var/lib/postgresql/data/db.dump"

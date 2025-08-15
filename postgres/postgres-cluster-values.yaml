@@ -1,0 +1,6 @@
+cluster:
+  instances: 1
+
+  initdb:
+    postInitTemplateSQL:
+      - CREATE EXTENSION IF NOT EXISTS vector;
