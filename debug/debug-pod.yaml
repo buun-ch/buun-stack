@@ -3,16 +3,37 @@ kind: Pod
 metadata:
   name: debug-pod
   namespace: default
+  labels:
+    app: debug
 spec:
   containers:
-  - name: debug
-    image: busybox:latest
-    command: ["sleep", "3600"]
-    resources:
-      requests:
-        cpu: 10m
-        memory: 32Mi
-      limits:
-        cpu: 100m
-        memory: 64Mi
+    - name: web
+      image: busybox:latest
+      command:
+        - sh
+        - -c
+        - |
+          echo "<h1>Debug Pod Web Server</h1><p>Hostname: $(hostname)</p><p>Time: $(date)</p>" > /tmp/index.html
+          httpd -f -p 8080 -h /tmp
+      ports:
+        - containerPort: 8080
+          name: http
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+    # Shell container for exec testing
+    - name: debug
+      image: busybox:latest
+      command: ["sleep", "3600"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
   restartPolicy: Never

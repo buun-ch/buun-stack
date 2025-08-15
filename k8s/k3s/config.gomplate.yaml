@@ -1,0 +1,6 @@
+kube-apiserver-arg:
+  - "oidc-issuer-url=https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}"
+  - "oidc-client-id=k8s"
+  - "oidc-username-claim=preferred_username"
+  - "oidc-groups-claim=groups"
+  - "oidc-groups-prefix=oidc:"

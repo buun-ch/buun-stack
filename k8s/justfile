@@ -3,7 +3,8 @@ set fallback := true
 export LOCAL_K8S_HOST := env("LOCAL_K8S_HOST", "")
 export EXTERNAL_K8S_HOST := env("EXTERNAL_K8S_HOST", "")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
-export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "k8shl")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export K8S_OIDC_CLIENT_ID := env('K8S_OIDC_CLIENT_ID', "k8s")
 
 [private]
 default:
@@ -49,15 +50,33 @@ uninstall:
     set -euo pipefail
     if gum confirm "Uninstall k3s from ${LOCAL_K8S_HOST}?"; then
         ssh "${LOCAL_K8S_HOST}" "/usr/local/bin/k3s-uninstall.sh"
+        echo "Cleaning up kubeconfig entries..."
+        cluster_name=$(kubectl config view -o json | jq -r ".contexts[] | select(.name == \"${LOCAL_K8S_HOST}\") | .context.cluster // empty")
+        user_name=$(kubectl config view -o json | jq -r ".contexts[] | select(.name == \"${LOCAL_K8S_HOST}\") | .context.user // empty")
+        if kubectl config get-contexts "${LOCAL_K8S_HOST}" &>/dev/null; then
+            kubectl config delete-context "${LOCAL_K8S_HOST}"
+            echo "Deleted context: ${LOCAL_K8S_HOST}"
+        fi
+        if [ -n "${cluster_name}" ] && kubectl config get-clusters | grep -q "^${cluster_name}$"; then
+            kubectl config delete-cluster "${cluster_name}"
+            echo "Deleted cluster: ${cluster_name}"
+        fi
+        if [ -n "${user_name}" ] && kubectl config get-users | grep -q "^${user_name}$"; then
+            kubectl config delete-user "${user_name}"
+            echo "Deleted user: ${user_name}"
+        fi
+        echo "k3s cluster uninstalled from ${LOCAL_K8S_HOST}."
     else
         echo "Uninstallation cancelled." >&2
         exit 1
     fi
 
-# Setup k8s OIDC authentication (proxy-url example: socks5://localhost:6443)
-setup-oidc proxy-url='':
-    #!/bin/bash
-    set -euo pipefail
+# Enable k8s OIDC authentication
+enable-oidc:
+    just env::check
+    gomplate -f ./k3s/config.gomplate.yaml | \
+        ssh ${LOCAL_K8S_HOST} "sudo tee /etc/rancher/k3s/config.yaml > /dev/null"
+    ssh ${LOCAL_K8S_HOST} "sudo systemctl restart k3s"
     kubectl config set-credentials ${LOCAL_K8S_HOST}-oidc \
         --exec-api-version=client.authentication.k8s.io/v1beta1 \
         --exec-command=kubectl \
@@ -65,16 +84,8 @@ setup-oidc proxy-url='':
         --exec-arg=get-token \
         --exec-arg=--oidc-issuer-url=https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM} \
         --exec-arg=--oidc-client-id=${K8S_OIDC_CLIENT_ID}
-    ssh ${LOCAL_K8S_HOST} \
-        'openssl s_client -connect 127.0.0.1:6443 -showcerts </dev/null 2>/dev/null |
-         openssl x509 -outform PEM' > ${HOME}/.kube/${LOCAL_K8S_HOST}.crt
     kubectl config set-cluster ${LOCAL_K8S_HOST}-oidc \
-        --certificate-authority=${HOME}/.kube/${LOCAL_K8S_HOST}.crt \
         --server=https://${EXTERNAL_K8S_HOST}
-    if [ -n "{{ proxy-url }}" ]; then
-        kubectl config set-cluster ${LOCAL_K8S_HOST}-oidc --proxy-url={{ proxy-url }} \
-            --server=https://${EXTERNAL_K8S_HOST}
-    fi
     kubectl config set-context ${LOCAL_K8S_HOST}-oidc \
         --cluster=${LOCAL_K8S_HOST}-oidc --user=${LOCAL_K8S_HOST}-oidc
     kubectl config use-context ${LOCAL_K8S_HOST}-oidc
