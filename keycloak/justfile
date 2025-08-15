@@ -71,7 +71,8 @@ delete-database-secret:
 # Install Keycloak
 install:
     #!/bin/bash
-    set -euxo pipefail
+    set -euo pipefail
+    # Setup vault environment once at the beginning if vault is enabled
     just create-credentials
     just postgres::create-db keycloak
     just create-database-secret
@@ -158,6 +159,16 @@ add-audience-mapper client_id:
     export KEYCLOAK_REALM=${KEYCLOAK_REALM}
     export KEYCLOAK_CLIENT_ID={{ client_id }}
     dotenvx run -f ../.env.local -- tsx ./scripts/add-audience-mapper.ts
+
+# Add Keycloak client groups mapper
+add-groups-mapper client_id:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM=${KEYCLOAK_REALM}
+    export KEYCLOAK_CLIENT_ID={{ client_id }}
+    dotenvx run -f ../.env.local -- tsx ./scripts/add-groups-mapper.ts
 
 # Create Keycloak group
 create-group group_name parent_group='' description='':
@@ -362,14 +373,14 @@ user-exists username='':
 # Print Keycloak admin username
 admin-username:
     #!/bin/bash
-    set -euxo pipefail
+    set -euo pipefail
     if [ -n "${KEYCLOAK_ADMIN_USER}" ]; then
         echo "${KEYCLOAK_ADMIN_USER}"
         exit 0
     fi
     if [ "${VAULT_ENABLED}" != "false" ]; then
         just vault::setup-env
-        if just vault::exist keycloak/admin; then
+        if just vault::exist keycloak/admin 2>/dev/null; then
             just vault::get keycloak/admin username
             echo
             exit 0
@@ -387,7 +398,7 @@ admin-password:
     fi
     if [ "${VAULT_ENABLED}" != "false" ]; then
         just vault::setup-env
-        if just vault::exist keycloak/admin; then
+        if just vault::exist keycloak/admin 2>/dev/null; then
             just vault::get keycloak/admin password
             echo
             exit 0
