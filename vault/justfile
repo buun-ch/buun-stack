@@ -17,6 +17,12 @@ _vault_env_setup := '''
         export VAULT_ADDR="https://${VAULT_HOST}"
     fi
     if [ -z "${VAULT_TOKEN:-}" ]; then
+        echo "" >&2
+        echo "💡 To avoid entering Vault token repeatedly:" >&2
+        echo "   • Set environment variable: export VAULT_TOKEN=your_token" >&2
+        echo "   • or write it in .env.local file: VAULT_TOKEN=your_token" >&2
+        echo "   • Use 1Password reference: VAULT_TOKEN=op://vault/admin/token" >&2
+        echo "" >&2
         VAULT_TOKEN=$(gum input --prompt="Vault token: " --password --width=100)
     elif [[ "${VAULT_TOKEN}" == op://* ]]; then
         if ! command -v op &> /dev/null; then
