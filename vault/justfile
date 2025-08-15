@@ -180,10 +180,19 @@ setup-oidc-auth:
     {{ _vault_env_setup }}
 
     echo "Creating Keycloak client for Vault..."
-    oidc_client_secret=$(just utils::random-password)
+
+    # Delete existing client first to ensure clean state
+    echo "Removing existing 'vault' client if it exists..."
+    just keycloak::delete-client "${KEYCLOAK_REALM}" "vault" || true
+
+    # Use a fixed client secret
+    oidc_client_secret="vault-secret-$(date +%Y%m%d)"
+
     redirect_urls="https://${VAULT_HOST}/ui/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback,http://localhost:8200/ui/vault/auth/oidc/oidc/callback"
     just keycloak::create-client "${KEYCLOAK_REALM}" "vault" "${redirect_urls}" "${oidc_client_secret}"
+    echo "Using client secret: ${oidc_client_secret}"
     just keycloak::add-audience-mapper "vault"
+    just keycloak::add-groups-mapper "vault"
     echo "✓ Keycloak client 'vault' created"
 
     echo "Configuring Vault OIDC authentication..."
@@ -194,7 +203,7 @@ setup-oidc-auth:
     vault write auth/oidc/config \
         oidc_discovery_url="https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}" \
         oidc_client_id="vault" \
-        oidc_client_secret="${OIDC_CLIENT_SECRET}" \
+        oidc_client_secret="${oidc_client_secret}" \
         default_role="default"
     # Create default role for all authenticated users
     vault write auth/oidc/role/default \
@@ -211,25 +220,23 @@ setup-oidc-auth:
         allowed_redirect_uris="https://${VAULT_HOST}/ui/vault/auth/oidc/oidc/callback" \
         allowed_redirect_uris="http://localhost:8250/oidc/callback" \
         allowed_redirect_uris="http://localhost:8200/ui/vault/auth/oidc/oidc/callback" \
-        bound_claims='{"groups": ["vault-admins"]}' \
+        bound_claims/groups="vault-admins" \
         user_claim="preferred_username" \
         groups_claim="groups" \
         token_policies="admin"
     echo "✓ Vault OIDC authentication configured"
 
-    just vault::put vault-oidc/client client_id="vault" client_secret="${OIDC_CLIENT_SECRET}" || true
-    echo "✓ Client credentials stored in Vault at 'vault-oidc/client'"
-
     echo ""
     echo "=== OIDC Setup Complete ==="
     echo "You can now login to Vault using:"
-    echo "  vault login -method=oidc"
-    echo ""
-    echo "To create vault-admins group in Keycloak:"
-    echo "  1. Login to Keycloak Admin Console"
-    echo "  2. Go to Groups → Create Group"
-    echo "  3. Name: vault-admins"
-    echo "  4. Assign users to this group for admin access"
+    echo "  VAULT_ADDR=${VAULT_ADDR} vault login -method=oidc"
+
+# Disable OIDC authentication
+disable-oidc-auth:
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_env_setup }}
+    vault auth disable oidc
 
 # Get key value
 get path field:
