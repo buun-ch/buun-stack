@@ -4,7 +4,6 @@ export LOCAL_K8S_HOST := env("LOCAL_K8S_HOST", "")
 export EXTERNAL_K8S_HOST := env("EXTERNAL_K8S_HOST", "")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
-
 export ENV_FILE := ".env.local"
 
 [private]
@@ -78,7 +77,7 @@ setup:
     npm i
 
 # Set a specific key in .env.local
-[working-directory: ".."]
+[working-directory("..")]
 set key value:
     #!/bin/bash
     set -euo pipefail
@@ -105,7 +104,7 @@ set key value:
     grep "^${KEY}=" "${ENV_FILE}"
 
 # Show all environment variables
-[working-directory: ".."]
+[working-directory("..")]
 show:
     #!/bin/bash
     set -euo pipefail
@@ -118,7 +117,7 @@ show:
     grep -E "^[A-Z_]+=.*" "${ENV_FILE}" || echo "(no variables set)"
 
 # Get a specific key value
-[working-directory: ".."]
+[working-directory("..")]
 get key:
     #!/bin/bash
     set -euo pipefail
