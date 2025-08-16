@@ -332,12 +332,12 @@ delete-user username='':
 
 # Put admin credentials to Vault
 put-admin-credentials-to-vault username password:
-    @just vault::put keycloak/admin username={{ username }} password={{ password }}
+    @just vault::put-root keycloak/admin username={{ username }} password={{ password }}
     @echo "Admin credentials stored in Vault under 'keycloak/admin'."
 
 # Delete admin credentials from Vault
 delete-admin-credentials-from-vault:
-    @just vault::delete keycloak/admin
+    @just vault::delete-root keycloak/admin
     @echo "Admin credentials deleted from Vault."
 
 # Create system user {w/o email, first name and last name}
@@ -385,7 +385,7 @@ admin-username:
     # if [ "${VAULT_ENABLED}" != "false" ]; then
     #     just vault::setup-token
     #     if just vault::exist keycloak/admin 2>/dev/null; then
-    #         just vault::get keycloak/admin username
+    #         just vault::get-root keycloak/admin username
     #         echo
     #         exit 0
     #     fi
@@ -403,7 +403,7 @@ admin-password:
     # if [ "${VAULT_ENABLED}" != "false" ]; then
     #     just vault::setup-token
     #     if just vault::exist keycloak/admin 2>/dev/null; then
-    #         just vault::get keycloak/admin password
+    #         just vault::get-root keycloak/admin password
     #         echo
     #         exit 0
     #     fi
