@@ -1,6 +1,6 @@
-# buun-stack - Kubernetes Home Lab
+# buun-stack
 
-A Kubernetes development stack for self-hosted environments, designed to run on a Linux machine in your home of office, and you can access it from anywhere via the internet.
+A Kubernetes development stack for self-hosted environments, designed to run on a Linux machine in your home or office that you can access from anywhere via the internet.
 
 ## Features
 
@@ -16,8 +16,8 @@ A Kubernetes development stack for self-hosted environments, designed to run on 
 
 - Linux PC (low power consumption recommended)
 - DNS and tunnel managed by Cloudflare
-- Local development machine (Linux or macOS is preferred)
-    - install [mise](https://mise.jdx.dev/)
+- Local development machine (Linux or macOS preferred)
+    - Install [mise](https://mise.jdx.dev/)
 
 ## Quick Start
 
@@ -87,7 +87,7 @@ Enterprise-grade distributed storage system providing:
 - Highly available block storage
 - Backup and disaster recovery
 - No single point of failure
-- Using NFS for persistent volumes
+- Support for NFS persistent volumes
 
 ### HashiCorp Vault
 
