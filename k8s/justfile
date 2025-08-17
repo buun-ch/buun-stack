@@ -71,8 +71,8 @@ uninstall:
         exit 1
     fi
 
-# Enable k8s OIDC authentication
-enable-oidc:
+# Setup k8s OIDC authentication
+setup-oidc-auth:
     just env::check
     gomplate -f ./k3s/config.gomplate.yaml | \
         ssh ${LOCAL_K8S_HOST} "sudo tee /etc/rancher/k3s/config.yaml > /dev/null"
