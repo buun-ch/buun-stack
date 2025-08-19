@@ -138,4 +138,4 @@ dist
 /.env.local*
 /custom.just
 /custom/
-transcript*
+/private/
