@@ -69,8 +69,7 @@ admin-password:
 
 # Put admin credentials to Vault
 put-admin-credentials-to-vault:
-    @echo vault::put postgres/admin username=$(just admin-username) password=$(just admin-password)
-    @just vault::put postgres/admin username=$(just admin-username) password=$(just admin-password)
+    @just vault::put-root postgres/admin username=$(just admin-username) password=$(just admin-password)
     @echo "Admin credentials stored in Vault under 'postgres/admin'."
 
 # Create Postgres database
