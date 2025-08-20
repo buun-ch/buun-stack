@@ -137,6 +137,7 @@ create-user username='' password='':
     fi
     if [ -z "${PASSWORD}" ]; then
         PASSWORD=$(just random-password)
+        echo "Generated random password: ${PASSWORD}"
     fi
     just psql -c "\"CREATE USER ${USERNAME} WITH LOGIN PASSWORD '${PASSWORD}';\""
     echo "User ${USERNAME} created."
@@ -190,6 +191,8 @@ grant db_name='' username='':
         exit 1
     fi
     just psql -c "\"GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${USERNAME};\""
+    # Grant CREATE permission on public schema (needed for PostgreSQL 15+)
+    just psql -d ${DB_NAME} -c "\"GRANT CREATE ON SCHEMA public TO ${USERNAME};\""
     echo "Privileges granted."
 
 # Revoke all privileges on database from user
