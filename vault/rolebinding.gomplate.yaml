@@ -9,4 +9,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: vault-auth
-    namespace: {{ .Env.VAULT_NAMESPACE }}
+    namespace: {{ .Env.K8S_VAULT_NAMESPACE }}
