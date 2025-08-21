@@ -1,15 +1,16 @@
 set fallback := true
 
+export ENV_FILE := ".env.local"
 export LOCAL_K8S_HOST := env("LOCAL_K8S_HOST", "")
 export EXTERNAL_K8S_HOST := env("EXTERNAL_K8S_HOST", "")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
-export ENV_FILE := ".env.local"
+export CONTAINER_REGISTRY_SERVER := env("CONTAINER_REGISTRY_SERVER", "")
+export CONTAINER_REGISTRY_USERNAME := env("CONTAINER_REGISTRY_USERNAME", "")
+export CONTAINER_REGISTRY_PASSWORD := env("CONTAINER_REGISTRY_PASSWORD", "")
+export CONTAINER_REGISTRY_EMAIL := env("CONTAINER_REGISTRY_EMAIL", "")
 
-[private]
-default:
-    @just --list --unsorted --list-submodules
-
+# Check if environment variables are set
 check:
     #!/bin/bash
     set -euo pipefail
@@ -18,6 +19,7 @@ check:
         exit 1
     fi
 
+# Set up environment variables
 setup:
     #!/bin/bash
     set -euo pipefail
@@ -78,15 +80,20 @@ setup:
 
 # Set a specific key in .env.local
 [working-directory("..")]
-set key value:
+set key_value:
     #!/bin/bash
     set -euo pipefail
-    KEY="{{ key }}"
-    VALUE="{{ value }}"
     if [ ! -f "${ENV_FILE}" ]; then
         echo "Error: ${ENV_FILE} not found. Run 'just env::setup' first." >&2
         exit 1
     fi
+    KV="{{ key_value }}"
+    if [[ ! "${KV}" =~ = ]]; then
+        echo "Error: Invalid format. Use 'just env::set KEY=VALUE'" >&2
+        exit 1
+    fi
+    KEY="${KV%%=*}"
+    VALUE="${KV#*=}"
     if ! [[ "${KEY}" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
         echo "Error: Invalid key name. Use uppercase letters, numbers, and underscores only." >&2
         exit 1
@@ -102,6 +109,47 @@ set key value:
         echo "✓ Added ${KEY} to ${ENV_FILE}"
     fi
     grep "^${KEY}=" "${ENV_FILE}"
+
+# Set multiple keys in .env.local
+[working-directory("..")]
+set-multi *args:
+    #!/bin/bash
+    set -euo pipefail
+    if [ ! -f "${ENV_FILE}" ]; then
+        echo "Error: ${ENV_FILE} not found. Run 'just env::setup' first." >&2
+        exit 1
+    fi
+    ARGS="{{ args }}"
+    if [ -z "${ARGS}" ]; then
+        echo "Error: No arguments provided. Use 'just env::set-multi KEY1=VALUE1 KEY2=VALUE2 ...'" >&2
+        exit 1
+    fi
+    NEEDS_BLANK_LINE=false
+    for KV in {{ args }}; do
+        if [[ ! "${KV}" =~ = ]]; then
+            echo "Error: Invalid format for '${KV}'. Use KEY=VALUE format." >&2
+            exit 1
+        fi
+        KEY="${KV%%=*}"
+        VALUE="${KV#*=}"
+        if ! [[ "${KEY}" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+            echo "Error: Invalid key name '${KEY}'. Use uppercase letters, numbers, and underscores only." >&2
+            exit 1
+        fi
+        if grep -q "^${KEY}=" "${ENV_FILE}"; then
+            sed -i.bak "s|^${KEY}=.*|${KEY}=${VALUE}|" "${ENV_FILE}"
+            echo "✓ Updated ${KEY}"
+        else
+            if [ "${NEEDS_BLANK_LINE}" = "false" ]; then
+                echo "" >> "${ENV_FILE}"
+                NEEDS_BLANK_LINE=true
+            fi
+            echo "${KEY}=${VALUE}" >> "${ENV_FILE}"
+            echo "✓ Added ${KEY}"
+        fi
+    done
+    echo "---"
+    echo "All environment variables have been set successfully."
 
 # Show all environment variables
 [working-directory("..")]

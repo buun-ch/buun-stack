@@ -321,7 +321,7 @@ check-env:
                 gum input --prompt="Vault host: " --width=100 --placeholder="vault.example.com"
             )
         done
-        just env::set VAULT_HOST "${VAULT_HOST}"
+        just env::set VAULT_HOST="${VAULT_HOST}"
     fi
 
 # Setup vault environment with root token (for initial configuration)
