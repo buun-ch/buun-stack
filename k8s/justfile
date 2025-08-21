@@ -89,3 +89,65 @@ setup-oidc-auth:
     kubectl config set-context ${LOCAL_K8S_HOST}-oidc \
         --cluster=${LOCAL_K8S_HOST}-oidc --user=${LOCAL_K8S_HOST}-oidc
     kubectl config use-context ${LOCAL_K8S_HOST}-oidc
+
+# Create the container registry credentials
+create-regcred namespace='default':
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${CONTAINER_REGISTRY_SERVER:-}" ]; do
+        if ! CONTAINER_REGISTRY_SERVER=$(
+            gum input --prompt="Container registry server: " --width=100 \
+            --placeholder="e.g., index.docker.io/v1 ghcr.io"
+        ); then
+            echo "Setup cancelled." >&2
+            exit 1
+        fi
+    done
+    while [ -z "${CONTAINER_REGISTRY_USERNAME:-}" ]; do
+        if ! CONTAINER_REGISTRY_USERNAME=$(
+            gum input --prompt="Container registry username: " --width=100
+        ); then
+            echo "Setup cancelled." >&2
+            exit 1
+        fi
+    done
+    while [ -z "${CONTAINER_REGISTRY_PASSWORD:-}" ]; do
+        if ! CONTAINER_REGISTRY_PASSWORD=$(
+            gum input --prompt="Container registry password or token: " --password --width=100
+        ); then
+            echo "Setup cancelled." >&2
+            exit 1
+        fi
+    done
+    while [ -z "${CONTAINER_REGISTRY_EMAIL:-}" ]; do
+        if ! CONTAINER_REGISTRY_EMAIL=$(
+            gum input --prompt="Container registry email: " --width=100
+        ); then
+            echo "Setup cancelled." >&2
+            exit 1
+        fi
+    done
+
+    kubectl create -n {{ namespace }} secret docker-registry regcred \
+        --docker-server="${CONTAINER_REGISTRY_SERVER}" \
+        --docker-username="${CONTAINER_REGISTRY_USERNAME}" \
+        --docker-password="${CONTAINER_REGISTRY_PASSWORD}" \
+        --docker-email="${CONTAINER_REGISTRY_EMAIL}"
+
+# Delete the container registry credentials
+delete-regcred namespace='default':
+    kubectl delete -n {{ namespace }} secret regcred --ignore-not-found
+
+# Copy the container registry credentials from the default namespace
+copy-regcred namespace:
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get -n default secret regcred &>/dev/null; then
+        just regcred-create default
+    fi
+    if kubectl get -n {{ namespace }} secret regcred &>/dev/null; then
+        kubectl delete -n {{ namespace }} secret regcred
+    fi
+    kubectl get -n default secret regcred -o json | \
+        sed "s/\"namespace\": \"default\"/\"namespace\": \"{{ namespace }}\"/g" | \
+        kubectl apply -n {{ namespace }} -f -
