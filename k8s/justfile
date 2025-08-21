@@ -5,6 +5,7 @@ export EXTERNAL_K8S_HOST := env("EXTERNAL_K8S_HOST", "")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export K8S_OIDC_CLIENT_ID := env('K8S_OIDC_CLIENT_ID', "k8s")
+export K3S_ENABLE_REGISTRY := env("K3S_ENABLE_REGISTRY", "true")
 
 [private]
 default:
@@ -42,6 +43,32 @@ install:
     fi
     echo "Running: k3sup ${args[*]}"
     k3sup "${args[@]}"
+
+    if [ "${K3S_ENABLE_REGISTRY}" = "true" ]; then
+        echo "Setting up local Docker registry..."
+
+        # Deploy Docker registry to cluster
+        kubectl apply -f ./registry/registry.yaml
+
+        # Wait for registry deployment
+        echo "Waiting for registry to be ready..."
+        kubectl wait --for=condition=available --timeout=60s deployment/registry -n registry
+
+        # Configure registries.yaml for k3s
+        just configure-registry
+
+        echo "✓ Local Docker registry deployed and configured"
+        echo ""
+        echo "Registry accessible at:"
+        echo "  localhost:30500"
+        echo ""
+        echo "Usage:"
+        echo "  export DOCKER_HOST=ssh://${LOCAL_K8S_HOST}"
+        echo "  docker build -t localhost:30500/myapp:latest ."
+        echo "  docker push localhost:30500/myapp:latest"
+        echo "  kubectl run myapp --image=localhost:30500/myapp:latest"
+    fi
+
     echo "k3s cluster installed on ${LOCAL_K8S_HOST}."
 
 # Uninstall k3s cluster
@@ -151,3 +178,96 @@ copy-regcred namespace:
     kubectl get -n default secret regcred -o json | \
         sed "s/\"namespace\": \"default\"/\"namespace\": \"{{ namespace }}\"/g" | \
         kubectl apply -n {{ namespace }} -f -
+
+# Check local Docker registry status
+check-registry:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Checking local Docker registry status..."
+    echo ""
+
+    # Check if registry deployment exists
+    echo "1. Registry deployment status:"
+    if kubectl get deployment registry -n registry &>/dev/null; then
+        echo "✓ Registry deployment exists"
+        kubectl get deployment registry -n registry
+        echo ""
+        echo "Registry pods:"
+        kubectl get pods -n registry -l app=registry
+    else
+        echo "✗ Registry deployment not found"
+    fi
+    echo ""
+
+    # Check registry services
+    echo "2. Registry services:"
+    if kubectl get service registry -n registry &>/dev/null; then
+        echo "✓ Registry service exists"
+        kubectl get service registry registry-nodeport -n registry
+    else
+        echo "✗ Registry services not found"
+    fi
+    echo ""
+
+    # Check k3s registries configuration
+    echo "3. K3s registries configuration:"
+    if ssh "${LOCAL_K8S_HOST}" "sudo test -f /etc/rancher/k3s/registries.yaml"; then
+        echo "✓ Registries configuration exists"
+        ssh "${LOCAL_K8S_HOST}" "sudo cat /etc/rancher/k3s/registries.yaml"
+    else
+        echo "✗ Registries configuration not found"
+    fi
+    echo ""
+
+    # Test registry accessibility
+    echo "4. Registry accessibility test:"
+    echo "Testing from k3s host (localhost:30500):"
+    if ssh "${LOCAL_K8S_HOST}" "curl -f -s http://localhost:30500/v2/" &>/dev/null; then
+        echo "✓ Registry is accessible from k3s host"
+        # Show registry catalog
+        echo "Registry catalog:"
+        ssh "${LOCAL_K8S_HOST}" "curl -s http://localhost:30500/v2/_catalog" 2>/dev/null || \
+        echo "Unable to retrieve catalog"
+    else
+        echo "✗ Registry is not accessible from k3s host"
+    fi
+    echo ""
+    echo "Note: To push images, use:"
+    echo "  export DOCKER_HOST=ssh://${LOCAL_K8S_HOST}"
+    echo "  docker push localhost:30500/myimage:tag"
+
+# Deploy Docker registry manually
+deploy-registry:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deploying local Docker registry..."
+
+    kubectl apply -f ./registry/registry.yaml
+
+    echo "Waiting for registry to be ready..."
+    kubectl wait --for=condition=available --timeout=60s deployment/registry -n registry
+    echo "✓ Registry deployed and ready"
+
+# Remove Docker registry
+remove-registry:
+    #!/bin/bash
+    set -euo pipefail
+    if gum confirm "Remove local Docker registry?"; then
+        kubectl delete namespace registry --ignore-not-found
+        echo "✓ Registry removed"
+    else
+        echo "Registry removal cancelled."
+    fi
+
+# Configure k3s to use local registry
+configure-registry:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Configuring k3s registries.yaml..."
+
+    ssh "${LOCAL_K8S_HOST}" "sudo mkdir -p /etc/rancher/k3s"
+    gomplate -f ./registry/registries.gomplate.yaml | ssh "${LOCAL_K8S_HOST}" "sudo tee /etc/rancher/k3s/registries.yaml > /dev/null"
+
+    echo "Restarting k3s to apply registry configuration..."
+    ssh "${LOCAL_K8S_HOST}" "sudo systemctl restart k3s"
+    echo "✓ Registry configuration applied"
