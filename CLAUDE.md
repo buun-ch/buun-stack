@@ -69,7 +69,7 @@ kubectl --context <host>-oidc get nodes       # Test OIDC auth
 The `.env.local` file (created by `just env::setup`) contains critical configuration:
 
 - `LOCAL_K8S_HOST`: Internal SSH hostname
-- `EXTERNAL_K8S_HOST`: External FQDN for k8s API  
+- `EXTERNAL_K8S_HOST`: External FQDN for k8s API
 - `KEYCLOAK_HOST`: Keycloak FQDN
 - `VAULT_HOST`: Vault FQDN
 - `KEYCLOAK_REALM`: Realm name (default: buunstack)
@@ -135,3 +135,12 @@ When adding new services:
 3. Store credentials in Vault using established patterns
 4. Create Keycloak client if authentication required
 5. Import module in main justfile
+
+## Code Style
+
+- Indent lines with 4 spaces
+- Do not use trailing whitespace
+- It must pass the command: `just --fmt --check --unstable`
+- Follow existing Justfile patterns
+- Only write code comments when necessary, as the code should be self-explanatory
+- Write output messages and code comments in English
