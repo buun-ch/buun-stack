@@ -80,7 +80,7 @@ create-db db_name='':
     while [ -z "${DB_NAME}" ]; do
         DB_NAME=$(gum input --prompt="Database name: " --width=80)
     done
-    if just db-exists ${DB_NAME} >&/dev/null; then
+    if just db-exists ${DB_NAME} &>/dev/null; then
         echo "Database ${DB_NAME} already exists" >&2
         exit
     fi
@@ -93,7 +93,7 @@ delete-db db_name='':
     #!/bin/bash
     set -euo pipefail
     DB_NAME=${DB_NAME:-{{ db_name }}}
-    if ! just db-exists ${DB_NAME} >&/dev/null; then
+    if ! just db-exists ${DB_NAME} &>/dev/null; then
         echo "Database ${DB_NAME} does not exist." >&2
         exit
     fi
@@ -127,7 +127,7 @@ create-user username='' password='':
     while [ -z "${USERNAME}" ]; do
         USERNAME=$(gum input --prompt="Username: " --width=80)
     done
-    if just user-exists ${USERNAME}; then
+    if just user-exists ${USERNAME} &>/dev/null; then
         echo "User ${USERNAME} already exists" >&2
         exit
     fi
@@ -147,7 +147,7 @@ delete-user username='':
     #!/bin/bash
     set -euo pipefail
     USERNAME=${USERNAME:-"{{ username }}"}
-    if ! just user-exists ${USERNAME}; then
+    if ! just user-exists ${USERNAME} &>/dev/null; then
         echo "User ${USERNAME} does not exist." >&2
         exit
     fi
