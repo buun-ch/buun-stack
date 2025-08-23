@@ -98,9 +98,13 @@ delete-db db_name='':
         exit
     fi
     # Terminate all connections to the database
-    just psql -U postgres -P pager=off -c "\"SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+    just psql -c "\"SELECT pg_terminate_backend(pid) FROM pg_stat_activity
         WHERE datname = '${DB_NAME}' AND pid <> pg_backend_pid();\""
-    just psql -U postgres -c "\"DROP DATABASE ${DB_NAME};\""
+    # Force disconnect if needed
+    just psql -c "\"UPDATE pg_database SET datallowconn = false WHERE datname = '${DB_NAME}';\""
+    just psql -c "\"SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+        WHERE datname = '${DB_NAME}';\""
+    just psql -c "\"DROP DATABASE ${DB_NAME};\""
     echo "Database ${DB_NAME} deleted."
 
 # Check if database exists
@@ -222,9 +226,27 @@ create-user-and-db db_name='' username='' password='':
 
 # Delete Postgres database and user
 delete-user-and-db db_name='' username='':
-    just revoke "{{ db_name }}" "{{ username }}"
-    just delete-user "{{ username }}"
-    just delete-db "{{ db_name }}"
+    #!/bin/bash
+    set -euo pipefail
+    DB_NAME=${DB_NAME:-"{{ db_name }}"}
+    USERNAME=${USERNAME:-"{{ username }}"}
+    if just db-exists ${DB_NAME} &>/dev/null; then
+        if just user-exists ${USERNAME} &>/dev/null; then
+            just revoke "${DB_NAME}" "${USERNAME}"
+        else
+            echo "User ${USERNAME} does not exist, skipping revoke."
+        fi
+        just delete-db "${DB_NAME}"
+    else
+        echo "Database ${DB_NAME} does not exist, skipping database deletion."
+    fi
+    if just user-exists ${USERNAME} &>/dev/null; then
+        just delete-user "${USERNAME}"
+    else
+        echo "User ${USERNAME} does not exist, skipping user deletion."
+    fi
+
+    echo "Cleanup completed."
 
 # Run psql
 [no-exit-message]
