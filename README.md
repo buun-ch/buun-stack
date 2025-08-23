@@ -14,60 +14,30 @@ A Kubernetes development stack for self-hosted environments, designed to run on 
 - **Remote Access**: Cloudflare Tunnel for secure internet connectivity
 - **Automation**: Just task runner with templated configurations
 
-## Prerequisites
-
-- Linux PC (low power consumption recommended)
-- DNS and tunnel managed by Cloudflare
-- Local development machine (Linux or macOS preferred)
-    - Install [mise](https://mise.jdx.dev/)
-
 ## Quick Start
 
-1. **Clone the repository**
+For detailed step-by-step instructions, see the [Installation Guide](./INSTALLATION.md).
+
+1. **Clone and configure**
 
    ```bash
    git clone https://github.com/buun-ch/buun-stack
    cd buun-stack
-   ```
-
-2. **Install required tools**
-
-   ```bash
    mise install
-   mise ls -l  # Verify installation
+   just env::setup
    ```
 
-3. **Configure environment**
-
-   ```bash
-   just env::setup  # Creates .env.local with your configuration
-   ```
-
-4. **Install Kubernetes cluster**
+2. **Deploy cluster and services**
 
    ```bash
    just k8s::install
-   kubectl get nodes  # Verify cluster is running
+   just longhorn::install
+   just vault::install
+   just postgres::install
+   just keycloak::install
    ```
 
-5. **Set up Cloudflare Tunnel**
-   - Create tunnel in Cloudflare dashboard
-   - Configure public hostnames:
-     - `ssh.yourdomain.com` → SSH localhost:22
-     - `vault.yourdomain.com` → HTTPS localhost:443 (no TLS verify)
-     - `auth.yourdomain.com` → HTTPS localhost:443 (no TLS verify)
-     - `k8s.yourdomain.com` → HTTPS localhost:6443 (no TLS verify)
-
-6. **Install core components**
-
-   ```bash
-   just longhorn::install   # Storage layer
-   just vault::install      # Secrets management
-   just postgres::install   # Database
-   just keycloak::install   # Identity provider
-   ```
-
-7. **Configure authentication**
+3. **Configure authentication**
 
    ```bash
    just keycloak::create-realm
@@ -114,15 +84,54 @@ Production-ready relational database for:
 - Keycloak data storage
 - Application databases
 
-## Task Management
+## Common Operations
 
-All operations are managed through `just` recipes. Key commands include:
+### User Management
+
+Create additional users:
 
 ```bash
-just                     # Show all available commands
-just env::setup          # Configure environment
-just k8s::install        # Install Kubernetes
-just keycloak::create-user <username>  # Create a new user
+just keycloak::create-user
+```
+
+Add user to group:
+
+```bash
+just keycloak::add-user-to-group <username> <group>
+```
+
+### Database Management
+
+Create database:
+
+```bash
+just postgres::create-db <dbname>
+```
+
+Create database user:
+
+```bash
+just postgres::create-user <username>
+```
+
+Grant privileges:
+
+```bash
+just postgres::grant <dbname> <username>
+```
+
+### Secret Management
+
+Store secrets in Vault:
+
+```bash
+just vault::put <path> <key>=<value>
+```
+
+Retrieve secrets:
+
+```bash
+just vault::get <path> <field>
 ```
 
 ## Remote Access
