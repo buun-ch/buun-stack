@@ -1,0 +1,155 @@
+hub:
+  config:
+    JupyterHub:
+      authenticator_class: generic-oauth
+      admin_access: false
+
+    Authenticator:
+      enable_auth_state: true
+      allow_all: true # allow all Keycloak users
+
+    GenericOAuthenticator:
+      client_id: {{ .Env.JUPYTERHUB_OIDC_CLIENT_ID }}
+      oauth_callback_url: "https://{{ .Env.JUPYTERHUB_HOST }}/hub/oauth_callback"
+      authorize_url: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/auth"
+      token_url: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/token"
+      userdata_url: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/userinfo"
+      login_service: keycloak
+      # username_claim: email
+      username_claim: preferred_username
+
+    OAuthenticator:
+      scope:
+        - openid
+        - profile
+        - email
+
+  # db:
+  #   pvc:
+  #     storageClassName: longhorn
+
+  podSecurityContext:
+    fsGroup: {{ .Env.JUPYTER_FSGID }}
+
+singleuser:
+  storage:
+    {{ if env.Getenv "PVC_NAME" -}}
+    type: static
+    static:
+      pvcName: {{ .Env.PVC_NAME }}
+    {{ else -}}
+    type: dynamic
+    dynamic:
+      storageClass: longhorn
+      storageAccessModes:
+        - ReadWriteOnce
+    {{ end -}}
+    capacity: 10Gi
+  networkPolicy:
+    egress:
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: chroma
+        ports:
+          - port: 8000
+            protocol: TCP
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: qdrant
+        ports:
+          - port: 6333
+            protocol: TCP
+          - port: 6334
+            protocol: TCP
+          - port: 6335
+            protocol: TCP
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: litellm
+        ports:
+          - port: 4000
+            protocol: TCP
+      - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        ports:
+          - port: 443
+            protocol: TCP
+        domains:
+          - '*.shds.dev'
+
+  image:
+    pullPolicy: IfNotPresent
+
+  profileList:
+    # https://quay.io/repository/jupyter/pyspark-notebook
+    {{- if eq .Env.JUPYTER_PROFILE_MINIMAL_ENABLED "true" }}
+    - display_name: "Minimal Jupyter Notebook Stack"
+      description: "Minimal Jupyter Notebook Stack"
+      kubespawner_override:
+        image: quay.io/jupyter/minimal-notebook
+    {{- end }}
+    {{ if eq .Env.JUPYTER_PROFILE_BASE_ENABLED "true" }}
+    - display_name: "Base Jupyter Notebook Stack"
+      description: "Base Jupyter Notebook Stack"
+      kubespawner_override:
+        image: quay.io/jupyter/base-notebook
+    {{- end }}
+    {{- if eq .Env.JUPYTER_PROFILE_DATASCIENCE_ENABLED "true" }}
+    - display_name: "Jupyter Notebook Data Science Stack"
+      description: "Jupyter Notebook Data Science Stack"
+      kubespawner_override:
+        image: quay.io/jupyter/datascience-notebook
+    {{- end }}
+    {{- if eq .Env.JUPYTER_PROFILE_PYSPARK_ENABLED "true" }}
+    - display_name: "Jupyter Notebook Python, Spark Stack"
+      description: "Jupyter Notebook Python, Spark Stack"
+      kubespawner_override:
+        image: quay.io/jupyter/pyspark-notebook
+    {{- end }}
+    {{- if eq .Env.JUPYTER_PROFILE_PYTORCH_ENABLED "true" }}
+    - display_name: "Jupyter Notebook PyTorch Deep Learning Stack"
+      description: "Jupyter Notebook PyTorch Deep Learning Stack"
+      kubespawner_override:
+        image: quay.io/jupyter/pytorch-notebook
+    {{- end }}
+    {{- if eq .Env.JUPYTER_PROFILE_TENSORFLOW_ENABLED "true" }}
+    - display_name: "Jupyter Notebook TensorFlow Deep Learning Stack"
+      description: "Jupyter Notebook TensorFlow Deep Learning Stack"
+      kubespawner_override:
+        image: quay.io/jupyter/tensorflow-notebook
+    {{- end }}
+    {{- if eq .Env.JUPYTER_PROFILE_BUUN_STACK_ENABLED "true" }}
+    - display_name: "Buun-stack"
+      description: "Jupyter Notebook with buun-stack"
+      kubespawner_override:
+        image: "{{ .Env.IMAGE_REGISTRY }}/{{ .Env.KERNEL_IMAGE_BUUN_STACK_REPOSITORY }}:{{ .Env.JUPYTER_PYTHON_KERNEL_TAG }}"
+    {{- end }}
+    {{- if eq .Env.JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED "true" }}
+    - display_name: "Buun-stack with CUDA"
+      description: "Jupyter Notebook with buun-stack and CUDA support"
+      kubespawner_override:
+        image: "{{ .Env.IMAGE_REGISTRY }}/{{ .Env.KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY }}:{{ .Env.JUPYTER_PYTHON_KERNEL_TAG }}"
+        # resources:
+        #   requests:
+        #     nvidia.com/gpu: "1"
+    {{- end }}
+
+imagePullSecrets:
+  - name: regcred
+
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  ingressClassName: traefik
+  hosts:
+    - {{ .Env.JUPYTERHUB_HOST }}
+  pathType: Prefix
+  tls:
+    - hosts:
+        - {{ .Env.JUPYTERHUB_HOST }}

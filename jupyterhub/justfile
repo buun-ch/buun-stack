@@ -1,0 +1,150 @@
+set fallback := true
+
+export JUPYTERHUB_NAMESPACE := env("JUPYTERHUB_NAMESPACE", "jupyter")
+export JUPYTERHUB_CHART_VERSION := env("JUPYTERHUB_CHART_VERSION", "4.2.0")
+export JUPYTERHUB_OIDC_CLIENT_ID := env("JUPYTERHUB_OIDC_CLIENT_ID", "jupyterhub")
+export JUPYTERHUB_ENABLE_NFS_PV := env("JUPYTERHUB_ENABLE_NFS_PV", "")
+export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-1")
+export KERNEL_IMAGE_BUUN_STACK_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_REPOSITORY", "buun-stack-notebook")
+export KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY", "buun-stack-cuda-notebook")
+export JUPYTER_PROFILE_MINIMAL_ENABLED := env("JUPYTER_PROFILE_MINIMAL_ENABLED", "false")
+export JUPYTER_PROFILE_BASE_ENABLED := env("JUPYTER_PROFILE_BASE_ENABLED", "false")
+export JUPYTER_PROFILE_DATASCIENCE_ENABLED := env("JUPYTER_PROFILE_DATASCIENCE_ENABLED", "true")
+export JUPYTER_PROFILE_PYSPARK_ENABLED := env("JUPYTER_PROFILE_PYSPARK_ENABLED", "false")
+export JUPYTER_PROFILE_PYTORCH_ENABLED := env("JUPYTER_PROFILE_PYTORCH_ENABLED", "false")
+export JUPYTER_PROFILE_TENSORFLOW_ENABLED := env("JUPYTER_PROFILE_TENSORFLOW_ENABLED", "false")
+export JUPYTER_PROFILE_BUUN_STACK_ENABLED := env("JUPYTER_PROFILE_BUUN_STACK_ENABLED", "false")
+export JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED := env("JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED", "false")
+export IMAGE_REGISTRY := env("IMAGE_REGISTRY", "localhost:30500")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add jupyterhub https://jupyterhub.github.io/helm-chart
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove jupyterhub
+
+# Create JupyterHub namespace
+create-namespace:
+    kubectl get namespace ${JUPYTERHUB_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${JUPYTERHUB_NAMESPACE}
+
+# Delete JupyterHub namespace
+delete-namespace:
+    kubectl delete namespace ${JUPYTERHUB_NAMESPACE} --ignore-not-found
+
+# Install JupyterHub
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export JUPYTERHUB_HOST=${JUPYTERHUB_HOST:-}
+    while [ -z "${JUPYTERHUB_HOST}" ]; do
+        JUPYTERHUB_HOST=$(
+            gum input --prompt="JupyterHub host (FQDN): " --width=100 \
+            --placeholder="e.g., jupyter.example.com"
+        )
+    done
+    just create-namespace
+    # just k8s::copy-regcred ${JUPYTERHUB_NAMESPACE}
+    just keycloak::create-client ${KEYCLOAK_REALM} ${JUPYTERHUB_OIDC_CLIENT_ID} \
+        "https://${JUPYTERHUB_HOST}/hub/oauth_callback"
+    # just vault::create-jupyter-role
+    just add-helm-repo
+    export JUPYTERHUB_OIDC_CLIENT_ID=${JUPYTERHUB_OIDC_CLIENT_ID}
+    export KEYCLOAK_REALM=${KEYCLOAK_REALM}
+    export JUPYTER_PYTHON_KERNEL_TAG=${JUPYTER_PYTHON_KERNEL_TAG}
+    export JUPYTER_FSGID=${JUPYTER_FSGID:-100}
+    export PVC_NAME=""
+    if [ -z "${JUPYTERHUB_ENABLE_NFS_PV}" ]; then
+        if gum confirm "Are you going to use NFS PV?"; then
+            JUPYTERHUB_ENABLE_NFS_PV=true
+        else
+            JUPYTERHUB_ENABLE_NFS_PV=false
+        fi
+    fi
+    if [ "${JUPYTERHUB_ENABLE_NFS_PV}" = "true" ]; then
+        if ! helm status longhorn -n ${LONGHORN_NAMESPACE} &>/dev/null; then
+            echo "Longhorn is not installed. Please install Longhorn first." >&2
+            exit 1
+        fi
+        export JUPYTER_NFS_IP=${JUPYTER_NFS_IP:-}
+        while [ -z "${JUPYTER_NFS_IP}" ]; do
+            JUPYTER_NFS_IP=$(
+                gum input --prompt="NFS server IP address: " --width=100 \
+                --placeholder="e.g., 192.168.10.1"
+            )
+        done
+        export JUPYTER_NFS_PATH=${JUPYTER_NFS_PATH:-}
+        while [ -z "${JUPYTER_NFS_PATH}" ]; do
+            JUPYTER_NFS_PATH=$(
+                gum input --prompt="NFS server export path: " --width=100 \
+                --placeholder="e.g., /volume1/drive1/jupyter"
+            )
+        done
+        PVC_NAME=jupyter-nfs-pvc
+        if ! kubectl get pv jupyter-nfs-pv &>/dev/null; then
+            gomplate -f nfs-pv.gomplate.yaml | kubectl apply -f -
+        fi
+        kubectl apply -n ${JUPYTERHUB_NAMESPACE} -f nfs-pvc.yaml
+    fi
+    # https://z2jh.jupyter.org/en/stable/
+    gomplate -f jupyterhub-values.gomplate.yaml -o jupyterhub-values.yaml
+    helm upgrade --cleanup-on-fail --install jupyterhub jupyterhub/jupyterhub \
+        --version ${JUPYTERHUB_CHART_VERSION} -n ${JUPYTERHUB_NAMESPACE} \
+        --timeout=20m -f jupyterhub-values.yaml
+    # wait deployments manually because `helm upgrade --wait` does not work for JupyterHub
+    just k8s::wait-deployments-ready ${JUPYTERHUB_NAMESPACE} hub proxy
+
+# Uninstall JupyterHub
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall jupyterhub -n ${JUPYTERHUB_NAMESPACE} --wait --ignore-not-found
+    kubectl delete pods -n ${JUPYTERHUB_NAMESPACE} -l app.kubernetes.io/component=singleuser-server
+    kubectl delete -n ${JUPYTERHUB_NAMESPACE} pvc jupyter-nfs-pvc --ignore-not-found
+    if kubectl get pv jupyter-nfs-pv &>/dev/null; then
+        kubectl patch pv jupyter-nfs-pv -p '{"spec":{"claimRef":null}}'
+    fi
+
+# Delete JupyterHub PV
+delete-pv:
+    #!/bin/bash
+    set -euo pipefail
+    if kubectl get pv jupyter-nfs-pv &>/dev/null; then
+        kubectl patch pv jupyter-nfs-pv -p '{"spec":{"claimRef":null}}'
+        kubectl delete pv jupyter-nfs-pv
+    fi
+
+# Build Jupyter notebook kernel images
+build-kernel-images:
+    #!/bin/bash
+    set -euo pipefail
+    (
+        cd ./images/datastack-notebook
+        docker build -t \
+        ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG} \
+        --build-arg spark_version="3.5.4" \
+        --build-arg spark_download_url="https://archive.apache.org/dist/spark/" \
+        .
+    )
+    (
+        cd ./images/datastack-cuda-notebook
+        docker build -t \
+        ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG} \
+        --build-arg spark_version="3.5.4" \
+        --build-arg spark_download_url="https://archive.apache.org/dist/spark/" \
+        .
+    )
+
+# Push Jupyter notebook kernel images
+push-kernel-images: build-kernel-images
+    docker push ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG}
+    docker push ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG}

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jupyter-nfs-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: longhorn
+  volumeMode: Filesystem
+  nfs:
+    server: {{ .Env.JUPYTER_NFS_IP }}
+    path: {{ .Env.JUPYTER_NFS_PATH }}

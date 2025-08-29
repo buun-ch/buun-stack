@@ -8,6 +8,7 @@ default:
 
 mod env
 mod keycloak
+mod jupyterhub
 mod k8s
 mod longhorn
 mod postgres
