@@ -7,6 +7,7 @@ default:
     @just --list --unsorted --list-submodules
 
 mod env
+mod external-secrets
 mod keycloak
 mod jupyterhub
 mod k8s

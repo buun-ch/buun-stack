@@ -1,0 +1,59 @@
+set fallback := true
+
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export EXTERNAL_SECRETS_CHART_VERSION := env("EXTERNAL_SECRETS_CHART_VERSION", "0.19.2")
+export EXTERNAL_SECRETS_REFRESH_INTERVAL := env("EXTERNAL_SECRETS_REFRESH_INTERVAL", "1800")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export VAULT_HOST := env("VAULT_HOST", "")
+export VAULT_ADDR := "https://" + VAULT_HOST
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add external-secrets https://charts.external-secrets.io
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove external-secrets
+
+# Install External Secrets
+install:
+    just add-helm-repo
+    helm upgrade --cleanup-on-fail \
+        --install external-secrets external-secrets/external-secrets \
+        --version ${EXTERNAL_SECRETS_CHART_VERSION} -n ${EXTERNAL_SECRETS_NAMESPACE} \
+        --create-namespace --wait
+    just create-external-secrets-role
+    just create-vault-secret-store
+
+# Uninstall External Secrets
+uninstall:
+    just delete-vault-secret-store
+    helm uninstall external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} --wait
+    kubectl delete namespace ${EXTERNAL_SECRETS_NAMESPACE} --ignore-not-found
+
+# Create Vault Secret Store for External Secrets
+create-vault-secret-store:
+    gomplate -f ./vault-secret-store.gomplate.yaml | kubectl apply -f -
+
+# Delete Vault Secret Store for External Secrets
+delete-vault-secret-store:
+    gomplate -f ./vault-secret-store.gomplate.yaml | kubectl delete --ignore-not-found -f -
+
+# Create Vault role for External Secrets
+create-external-secrets-role root_token='':
+    #!/bin/bash
+    set -euo pipefail
+    export VAULT_TOKEN="{{ root_token }}"
+    while [ -z "${VAULT_TOKEN}" ]; do
+        VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
+    done
+    vault write auth/kubernetes/role/external-secrets \
+        bound_service_account_names=external-secrets \
+        bound_service_account_namespaces=${EXTERNAL_SECRETS_NAMESPACE} \
+        policies=admin \
+        ttl=1h
