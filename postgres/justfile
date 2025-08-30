@@ -3,7 +3,8 @@ set fallback := true
 export CNPG_NAMESPACE := env("CNPG_NAMESPACE", "postgres")
 export CNPG_CHART_VERSION := env("CNPG_CHART_VERSION", "0.26.0")
 export CNPG_CLUSTER_CHART_VERSION := env("CNPG_CLUSTER_CHART_VERSION", "0.3.1")
-export VAULT_ENABLED := env("VAULT_ENABLED", "true")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 
 [private]
 default:
@@ -44,18 +45,43 @@ uninstall-cnpg:
 create-cluster:
     #!/bin/bash
     set -euo pipefail
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Creating admin credentials via ExternalSecret..."
+        password=$(just utils::random-password)
+        just vault::put-root postgres/admin username=postgres password="${password}"
+
+        kubectl delete externalsecret postgres-cluster-superuser -n ${CNPG_NAMESPACE} --ignore-not-found
+        gomplate -f postgres-superuser-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/postgres-cluster-superuser \
+            -n ${CNPG_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating superuser secret directly..."
+        password=$(just utils::random-password)
+        kubectl delete secret postgres-cluster-superuser -n ${CNPG_NAMESPACE} --ignore-not-found
+        kubectl create secret generic postgres-cluster-superuser -n ${CNPG_NAMESPACE} \
+            --from-literal=username=postgres \
+            --from-literal=password="${password}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put-root postgres/admin username=postgres password="${password}"
+        fi
+    fi
+
     helm upgrade --install postgres-cluster cnpg/cluster \
         --version ${CNPG_CLUSTER_CHART_VERSION} \
-        -n ${CNPG_NAMESPACE} --create-namespace --wait \
-        -f postgres-cluster-values.yaml
-
-    if [ "${VAULT_ENABLED}" != "false" ]; then
-        just put-admin-credentials-to-vault
-    fi
+        -n ${CNPG_NAMESPACE} --wait -f postgres-cluster-values.yaml
+    
+    echo "Waiting for PostgreSQL cluster to be ready..."
+    kubectl wait --for=condition=Ready clusters.postgresql.cnpg.io/postgres-cluster \
+        -n ${CNPG_NAMESPACE} --timeout=300s
 
 # Delete Postgres cluster
 delete-cluster:
     @helm uninstall postgres-cluster -n ${CNPG_NAMESPACE} --ignore-not-found --wait
+    @kubectl delete externalsecret postgres-cluster-superuser -n ${CNPG_NAMESPACE} --ignore-not-found
+    @kubectl delete secret postgres-cluster-superuser -n ${CNPG_NAMESPACE} --ignore-not-found
 
 # Print Postgres username
 admin-username:
@@ -67,18 +93,13 @@ admin-password:
         -o jsonpath="{.data.password}" | base64 --decode
     @echo
 
-# Put admin credentials to Vault
-put-admin-credentials-to-vault:
-    @just vault::put-root postgres/admin username=$(just admin-username) password=$(just admin-password)
-    @echo "Admin credentials stored in Vault under 'postgres/admin'."
-
 # Create Postgres database
 create-db db_name='':
     #!/bin/bash
     set -euo pipefail
     DB_NAME=${DB_NAME:-{{ db_name }}}
     while [ -z "${DB_NAME}" ]; do
-        DB_NAME=$(gum input --prompt="Database name: " --width=80)
+        DB_NAME=$(gum input --prompt="Database name: " --width=100)
     done
     if just db-exists ${DB_NAME} &>/dev/null; then
         echo "Database ${DB_NAME} already exists" >&2
@@ -108,12 +129,13 @@ delete-db db_name='':
     echo "Database ${DB_NAME} deleted."
 
 # Check if database exists
+[no-exit-message]
 db-exists db_name='':
     #!/bin/bash
     set -euo pipefail
     DB_NAME=${DB_NAME:-{{ db_name }}}
     while [ -z "${DB_NAME}" ]; do
-        DB_NAME=$(gum input --prompt="Database name: " --width=80)
+        DB_NAME=$(gum input --prompt="Database name: " --width=100)
     done
     if echo '\l' | just postgres::psql | grep -E "^ *${DB_NAME} *\|" &>/dev/null; then
         echo "Database ${DB_NAME} exists."
@@ -129,14 +151,14 @@ create-user username='' password='':
     USERNAME=${USERNAME:-"{{ username }}"}
     PASSWORD=${PASSWORD:-"{{ password }}"}
     while [ -z "${USERNAME}" ]; do
-        USERNAME=$(gum input --prompt="Username: " --width=80)
+        USERNAME=$(gum input --prompt="Username: " --width=100)
     done
     if just user-exists ${USERNAME} &>/dev/null; then
         echo "User ${USERNAME} already exists" >&2
         exit
     fi
     if [ -z "${PASSWORD}" ]; then
-        PASSWORD=$(gum input --prompt="Password: " --password --width=80 \
+        PASSWORD=$(gum input --prompt="Password: " --password --width=100 \
             --placeholder="Empty to generate a random password")
     fi
     if [ -z "${PASSWORD}" ]; then
@@ -164,12 +186,13 @@ delete-user username='':
     echo "User ${USERNAME} deleted."
 
 # Check if user exists
+[no-exit-message]
 user-exists username='':
     #!/bin/bash
     set -euo pipefail
     USERNAME=${USERNAME:-"{{ username }}"}
     while [ -z "${USERNAME}" ]; do
-        USERNAME=$(gum input --prompt="Username: " --width=80)
+        USERNAME=$(gum input --prompt="Username: " --width=100)
     done
     if echo '\du' | just postgres::psql | grep -E "^ *${USERNAME} *\|" &>/dev/null; then
         echo "User ${USERNAME} exists."
@@ -185,10 +208,10 @@ grant db_name='' username='':
     DB_NAME=${DB_NAME:-"{{ db_name }}"}
     USERNAME=${USERNAME:-"{{ username }}"}
     while [ -z "${DB_NAME}" ]; do
-        DB_NAME=$(gum input --prompt="Database name: " --width=80)
+        DB_NAME=$(gum input --prompt="Database name: " --width=100)
     done
     while [ -z "${USERNAME}" ]; do
-        USERNAME=$(gum input --prompt="Username: " --width=80)
+        USERNAME=$(gum input --prompt="Username: " --width=100)
     done
     if ! just psql ${DB_NAME} -U postgres -P pager=off -c "\"SELECT 1;\""; then
         echo "Database ${DB_NAME} does not exist." >&2
@@ -206,10 +229,10 @@ revoke db_name='' username='':
     DB_NAME=${DB_NAME:-"{{ db_name }}"}
     USERNAME=${USERNAME:-"{{ username }}"}
     while [ -z "${DB_NAME}" ]; do
-        DB_NAME=$(gum input --prompt="Database name: " --width=80)
+        DB_NAME=$(gum input --prompt="Database name: " --width=100)
     done
     while [ -z "${USERNAME}" ]; do
-        USERNAME=$(gum input --prompt="Username: " --width=80)
+        USERNAME=$(gum input --prompt="Username: " --width=100)
     done
     if ! just psql -U postgres ${DB_NAME} -P pager=off -c "\"SELECT 1;\""; then
         echo "Database ${DB_NAME} does not exist." >&2

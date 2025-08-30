@@ -4,3 +4,6 @@ cluster:
   initdb:
     postInitTemplateSQL:
       - CREATE EXTENSION IF NOT EXISTS vector;
+
+  enableSuperuserAccess: true
+  superuserSecret: postgres-cluster-superuser
