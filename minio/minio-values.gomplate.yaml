@@ -1,0 +1,40 @@
+mode: standalone
+
+clusterDomain: {{ .Env.MINIO_HOST }}
+
+oidc:
+  enabled: true
+  configUrl: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/.well-known/openid-configuration"
+  clientId: "{{ .Env.MINIO_OIDC_CLIENT_ID }}"
+  clientSecret: ""
+  claimName: "minioPolicy"
+  scopes: "openid,profile,email"
+  redirectUri: "https://{{ .Env.MINIO_CONSOLE_HOST }}/oauth_callback"
+  displayName: "Login with Keycloak"
+
+persistence:
+  size: 50Gi
+
+ingress:
+  enabled: true
+  ingressClassName: traefik
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - {{ .Env.MINIO_HOST }}
+  tls:
+    - hosts:
+      - {{ .Env.MINIO_HOST }}
+
+consoleIngress:
+  enabled: true
+  ingressClassName: traefik
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - {{ .Env.MINIO_CONSOLE_HOST }}
+  tls:
+    - hosts:
+      - {{ .Env.MINIO_CONSOLE_HOST }}

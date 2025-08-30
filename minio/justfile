@@ -1,0 +1,116 @@
+set fallback := true
+
+export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
+export MINIO_CHART_VERSION := env("MINIO_CHART_VERSION", "5.4.0")
+export MINIO_OIDC_CLIENT_ID := env("MINIO_OIDC_CLIENT_ID", "minio")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    # We use charts.min.io instead of operator.min.io because the operator does not support
+    # standalone mode.
+    # helm repo add minio https://operator.min.io/
+    helm repo add minio https://charts.min.io/
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove minio
+
+# Create JupyterHub namespace
+create-namespace:
+    kubectl get namespace ${MINIO_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${MINIO_NAMESPACE}
+
+# Delete JupyterHub namespace
+delete-namespace:
+    kubectl delete namespace ${MINIO_NAMESPACE} --ignore-not-found
+
+# Add Keycloak policy and mapper
+add-keycloak-minio-policy:
+    KEYCLOAK_ADMIN_USER=$(just keycloak::admin-username) \
+        KEYCLOAK_ADMIN_PASSWORD=$(just keycloak::admin-password) \
+        KEYCLOAK_REALM=${KEYCLOAK_REALM} \
+        MINIO_OIDC_CLIENT_ID=${MINIO_OIDC_CLIENT_ID} \
+        dotenvx run -f ../.env.local -- tsx ./scripts/add-minio-policy.ts
+
+# Install MinIO
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export MINIO_HOST=${MINIO_HOST:-}
+    if [ "${MINIO_HOST}" = "" ]; then
+        MINIO_HOST=$(
+            gum input --prompt="MinIO host (FQDN): " --width=100 \
+            --placeholder="e.g., minio.example.com"
+        )
+    fi
+    export MINIO_CONSOLE_HOST=${MINIO_CONSOLE_HOST:-}
+    if [ "${MINIO_CONSOLE_HOST}" = "" ]; then
+        MINIO_CONSOLE_HOST=$(
+            gum input --prompt="MinIO Console host (FQDN): " --width=100 \
+            --placeholder="e.g., minio-console.example.com"
+        )
+    fi
+    just keycloak::create-client ${KEYCLOAK_REALM} ${MINIO_OIDC_CLIENT_ID} \
+        "https://${MINIO_HOST}/oauth_callback,https://${MINIO_CONSOLE_HOST}/oauth_callback"
+    just add-keycloak-minio-policy
+    just create-namespace
+    just add-helm-repo
+    gomplate -f minio-values.gomplate.yaml -o minio-values.yaml
+    helm upgrade --install minio minio/minio \
+        --version ${MINIO_CHART_VERSION} -n ${MINIO_NAMESPACE} --create-namespace --wait \
+        -f minio-values.yaml
+
+# Uninstall MinIO
+uninstall:
+    helm uninstall minio -n ${MINIO_NAMESPACE} --wait --ignore-not-found
+    kubectl delete namespace ${MINIO_NAMESPACE} --ignore-not-found
+
+# List MinIO internal policies and users (for debugging)
+debug-info:
+    @kubectl -n ${MINIO_NAMESPACE} exec -it deploy/minio -- \
+        bash -c "mc alias set local http://localhost:9000 $(just root-user) $(just root-password) && \
+        echo '--- Policies ---' && \
+        mc admin policy list local && \
+        echo '--- Users ---' && \
+        mc admin user list local"
+
+# Print MinIO root user
+root-user:
+    @kubectl -n ${MINIO_NAMESPACE} get secret minio -o jsonpath='{.data.rootUser}' | base64 -d
+    @echo
+
+# Print MinIO root password
+root-password:
+    @kubectl -n ${MINIO_NAMESPACE} get secret minio -o jsonpath='{.data.rootPassword}' | base64 -d
+    @echo
+
+# Create a bucket
+create-bucket bucket:
+    #!/bin/bash
+    set -euo pipefail
+    ROOT_USER=$(just root-user)
+    ROOT_PASSWORD=$(just root-password)
+    kubectl -n ${MINIO_NAMESPACE} exec -it deploy/minio -- \
+        bash -c "mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD} && \
+        mc mb --ignore-existing local/{{ bucket }}"
+
+# Check if a bucket exists (returns exit code 0 if exists, 1 if not)
+[no-exit-message]
+bucket-exists bucket:
+    #!/bin/bash
+    set -euo pipefail
+    ROOT_USER=$(just root-user)
+    ROOT_PASSWORD=$(just root-password)
+    if kubectl -n ${MINIO_NAMESPACE} exec -it deploy/minio -- \
+        bash -c "mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD} >/dev/null 2>&1 && \
+        mc ls local/{{ bucket }} >/dev/null 2>&1"; then
+        exit 0  # Bucket exists
+    else
+        exit 1  # Bucket does not exist
+    fi
