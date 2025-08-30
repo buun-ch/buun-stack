@@ -236,9 +236,11 @@ sudo apt-get install nfs-common
 just longhorn::install
 ```
 
-### HashiCorp Vault - Secrets Management
+### HashiCorp Vault - Secrets Management (Optional but Recommended)
 
-Vault provides centralized secrets management for the entire cluster.
+Vault provides centralized secrets management for the entire cluster. While optional, its installation is recommended as it enhances security and simplifies credential management.
+
+When you install Vault, the External Secrets Operator is also deployed. This operator synchronizes secrets from Vault to Kubernetes Secrets, allowing your applications to seamlessly access credentials and sensitive data stored in Vault through standard Kubernetes Secret resources.
 
 ```bash
 just vault::install

@@ -9,8 +9,10 @@ A Kubernetes development stack for self-hosted environments, designed to run on 
 - **Kubernetes Distribution**: k3s lightweight Kubernetes
 - **Storage**: Longhorn distributed block storage
 - **Identity & Access**: Keycloak for OIDC authentication
-- **Secrets Management**: HashiCorp Vault
+- **Secrets Management**: HashiCorp Vault with External Secrets Operator
 - **Database**: PostgreSQL cluster
+- **Object Storage**: MinIO S3-compatible storage
+- **Data Science**: JupyterHub for collaborative notebooks
 - **Remote Access**: Cloudflare Tunnel for secure internet connectivity
 - **Automation**: Just task runner with templated configurations
 
@@ -68,6 +70,7 @@ Centralized secrets management offering:
 - Secure secret storage
 - Dynamic secrets generation
 - Encryption as a service
+- Integration with External Secrets Operator for automatic Kubernetes Secret synchronization
 
 ### Keycloak
 
@@ -83,6 +86,32 @@ Production-ready relational database for:
 
 - Keycloak data storage
 - Application databases
+
+### External Secrets Operator
+
+Kubernetes operator for syncing secrets from external systems:
+
+- Automatically syncs secrets from Vault to Kubernetes Secrets
+- Supports multiple secret backends
+- Provides secure secret rotation and lifecycle management
+
+### MinIO
+
+S3-compatible object storage system providing:
+
+- High-performance distributed object storage
+- AWS S3 API compatibility
+- Erasure coding for data protection
+- Multi-tenancy support
+
+### JupyterHub
+
+Multi-user platform for interactive computing:
+
+- Collaborative Jupyter notebook environment
+- Integrated with Keycloak for OIDC authentication
+- Persistent storage for user workspaces
+- Support for multiple kernels and environments
 
 ## Common Operations
 
