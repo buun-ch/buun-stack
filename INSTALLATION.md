@@ -220,6 +220,16 @@ sudo systemctl enable iscsid
 sudo systemctl start iscsid
 ```
 
+If you use NFS volumes, install nfs-utils/nfs-common:
+
+```bash
+# Arch Linux
+sudo pacman -S nfs-utils
+
+# Ubuntu/Debian
+sudo apt-get install nfs-common
+```
+
 #### Install Longhorn
 
 ```bash
