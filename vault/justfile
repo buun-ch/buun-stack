@@ -33,7 +33,6 @@ _vault_root_env_setup := '''
     fi
     export VAULT_TOKEN
 '''
-
 [private]
 _vault_oidc_env_setup := '''
     if [ -z "${VAULT_TOKEN:-}" ]; then
@@ -112,6 +111,13 @@ install: check-env
 
     just setup-kubernetes-auth "${root_token}"
     just create-secrets-engine {{ SECRET_PATH }} "${root_token}"
+    just create-admin-policy "${root_token}"
+
+    echo "Installing External Secrets Operator is recommended to manage secrets in Kubernetes."
+    echo "It can fetch secrets from Vault and sync them to Kubernetes Secret resources."
+    if gum confirm "Install External Secrets Operator?"; then
+        just external-secrets::install
+    fi
 
 # Uninstall Vault
 uninstall delete-ns='false':
@@ -124,10 +130,17 @@ uninstall delete-ns='false':
 create-admin-token root_token='': check-env
     #!/bin/bash
     set -euo pipefail
-    export VAULT_TOKEN="{{ root_token }}"
-    while [ -z "${VAULT_TOKEN}" ]; do
-        VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
-    done
+    {{ _vault_root_env_setup }}
+    # Create admin policy first
+    just create-admin-policy "${VAULT_TOKEN}"
+    # Create token with admin policy
+    vault token create -policy=admin
+
+# Create admin policy for Vault
+create-admin-policy root_token='':
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_root_env_setup }}
     vault policy write admin - <<EOF
     path "sys/auth" {
         capabilities = ["read", "list", "sudo"]
@@ -148,7 +161,7 @@ create-admin-token root_token='': check-env
         capabilities = ["create", "read", "update", "delete", "list"]
     }
     EOF
-    vault token create -policy=admin
+    echo "Admin policy created successfully"
 
 # Create secrets engine
 create-secrets-engine path root_token='':
@@ -297,6 +310,7 @@ delete-root path:
     vault kv delete -mount=secret {{ path }}
 
 # Check if key exists
+[no-exit-message]
 exist path:
     #!/bin/bash
     set -euo pipefail
@@ -304,6 +318,7 @@ exist path:
     vault kv get -mount=secret {{ path }} &>/dev/null
 
 # Check if key exists with root token
+[no-exit-message]
 exist-root path:
     #!/bin/bash
     set -euo pipefail
