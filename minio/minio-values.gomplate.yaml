@@ -2,6 +2,8 @@ mode: standalone
 
 clusterDomain: {{ .Env.MINIO_HOST }}
 
+existingSecret: "minio"
+
 oidc:
   enabled: true
   configUrl: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/.well-known/openid-configuration"

@@ -4,6 +4,8 @@ export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export MINIO_CHART_VERSION := env("MINIO_CHART_VERSION", "5.4.0")
 export MINIO_OIDC_CLIENT_ID := env("MINIO_OIDC_CLIENT_ID", "minio")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 
 [private]
 default:
@@ -26,9 +28,39 @@ create-namespace:
     kubectl get namespace ${MINIO_NAMESPACE} &>/dev/null || \
         kubectl create namespace ${MINIO_NAMESPACE}
 
-# Delete JupyterHub namespace
+# Delete MinIO namespace
 delete-namespace:
     kubectl delete namespace ${MINIO_NAMESPACE} --ignore-not-found
+
+# Create root credentials via External Secret or direct Secret
+create-root-credentials:
+    #!/bin/bash
+    set -euo pipefail
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Creating root credentials via ExternalSecret..."
+        username="minioadmin"
+        password=$(just utils::random-password)
+        just vault::put-root minio/admin username="${username}" password="${password}"
+
+        kubectl delete externalsecret minio -n ${MINIO_NAMESPACE} --ignore-not-found
+        gomplate -f minio-root-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/minio \
+            -n ${MINIO_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating root secret directly..."
+        username="minioadmin"
+        password=$(just utils::random-password)
+        kubectl delete secret minio -n ${MINIO_NAMESPACE} --ignore-not-found
+        kubectl create secret generic minio -n ${MINIO_NAMESPACE} \
+            --from-literal=rootUser="${username}" \
+            --from-literal=rootPassword="${password}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put-root minio/admin username="${username}" password="${password}"
+        fi
+    fi
 
 # Add Keycloak policy and mapper
 add-keycloak-minio-policy:
@@ -60,6 +92,7 @@ install:
         "https://${MINIO_HOST}/oauth_callback,https://${MINIO_CONSOLE_HOST}/oauth_callback"
     just add-keycloak-minio-policy
     just create-namespace
+    just create-root-credentials
     just add-helm-repo
     gomplate -f minio-values.gomplate.yaml -o minio-values.yaml
     helm upgrade --install minio minio/minio \
@@ -74,14 +107,14 @@ uninstall:
 # List MinIO internal policies and users (for debugging)
 debug-info:
     @kubectl -n ${MINIO_NAMESPACE} exec -it deploy/minio -- \
-        bash -c "mc alias set local http://localhost:9000 $(just root-user) $(just root-password) && \
+        bash -c "mc alias set local http://localhost:9000 $(just root-username) $(just root-password) && \
         echo '--- Policies ---' && \
         mc admin policy list local && \
         echo '--- Users ---' && \
         mc admin user list local"
 
 # Print MinIO root user
-root-user:
+root-username:
     @kubectl -n ${MINIO_NAMESPACE} get secret minio -o jsonpath='{.data.rootUser}' | base64 -d
     @echo
 
@@ -91,21 +124,28 @@ root-password:
     @echo
 
 # Create a bucket
-create-bucket bucket:
+create-bucket bucket='':
     #!/bin/bash
     set -euo pipefail
-    ROOT_USER=$(just root-user)
+    ROOT_USER=$(just root-username)
     ROOT_PASSWORD=$(just root-password)
+    bucket={{ bucket }}
+    while [ -z "${bucket}" ]; do
+        bucket=$(
+            gum input --prompt="Bucket name: " --width=100 \
+            --placeholder="e.g., my-bucket"
+        )
+    done
     kubectl -n ${MINIO_NAMESPACE} exec -it deploy/minio -- \
         bash -c "mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD} && \
-        mc mb --ignore-existing local/{{ bucket }}"
+        mc mb --ignore-existing local/${bucket}"
 
 # Check if a bucket exists (returns exit code 0 if exists, 1 if not)
 [no-exit-message]
 bucket-exists bucket:
     #!/bin/bash
     set -euo pipefail
-    ROOT_USER=$(just root-user)
+    ROOT_USER=$(just root-username)
     ROOT_PASSWORD=$(just root-password)
     if kubectl -n ${MINIO_NAMESPACE} exec -it deploy/minio -- \
         bash -c "mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD} >/dev/null 2>&1 && \
