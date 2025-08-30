@@ -72,7 +72,7 @@ create-cluster:
     helm upgrade --install postgres-cluster cnpg/cluster \
         --version ${CNPG_CLUSTER_CHART_VERSION} \
         -n ${CNPG_NAMESPACE} --wait -f postgres-cluster-values.yaml
-    
+
     echo "Waiting for PostgreSQL cluster to be ready..."
     kubectl wait --for=condition=Ready clusters.postgresql.cnpg.io/postgres-cluster \
         -n ${CNPG_NAMESPACE} --timeout=300s
