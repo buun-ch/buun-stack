@@ -260,6 +260,42 @@ setup-oidc-auth:
     echo "You can now login to Vault using:"
     echo "  VAULT_ADDR=${VAULT_ADDR} vault login -method=oidc"
 
+# Setup JWT authentication for Keycloak tokens
+setup-jwt-auth audience role policy='default':
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_root_env_setup }}
+
+    echo "Setting up JWT authentication for audience: {{ audience }}"
+
+    # Enable JWT auth if not already enabled
+    vault auth list -format=json | jq -e '.["jwt/"]' >/dev/null 2>&1 || \
+        vault auth enable -path=jwt jwt
+
+    # Configure JWT to validate Keycloak tokens
+    vault write auth/jwt/config \
+        jwks_url="https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/certs" \
+        bound_issuer="https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}"
+
+    # Delete existing role if it exists
+    vault delete auth/jwt/role/{{ role }} || true
+
+    # Create role for the specified audience
+    vault write auth/jwt/role/{{ role }} \
+        role_type="jwt" \
+        bound_audiences="{{ audience }},account" \
+        user_claim="preferred_username" \
+        token_policies="{{ policy }}" \
+        ttl="1h" \
+        max_ttl="24h"
+
+    echo "✓ JWT authentication configured"
+    echo "  Audience: {{ audience }}"
+    echo "  Role: {{ role }}"
+    echo "  Policy: {{ policy }}"
+    echo ""
+    echo "Usage: client.auth.jwt.jwt_login(role='{{ role }}', jwt=token, path='jwt')"
+
 # Disable OIDC authentication
 disable-oidc-auth:
     #!/bin/bash
@@ -350,3 +386,34 @@ setup-token:
     #!/bin/bash
     set -euo pipefail
     {{ _vault_oidc_env_setup }}
+
+# Print vault URL address
+vault-addr:
+    #!/bin/bash
+    set -euo pipefail
+    if [ -z "${VAULT_HOST}" ]; then
+        echo "Error: VAULT_HOST is not set." >&2
+        exit 1
+    fi
+    echo "https://${VAULT_HOST}"
+
+# Write data to Vault at the given path
+write *args:
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_oidc_env_setup }}
+    vault write {{ args }}
+
+# Write data to Vault at the given path with root token
+root-write *args:
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_root_env_setup }}
+    vault write {{ args }}
+
+# Upload a policy to Vault
+write-policy name file:
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_root_env_setup }}
+    vault policy write {{ name }} {{ file }}
