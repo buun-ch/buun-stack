@@ -112,11 +112,15 @@ uninstall delete-db='true':
     fi
 
 # Create Keycloak realm
-create-realm create-client-for-k8s='true':
+create-realm create-client-for-k8s='true' access_token_lifespan='3600' refresh_token_lifespan='14400' sso_session_idle_timeout='7200':
     #!/bin/bash
     set -euo pipefail
     export KEYCLOAK_ADMIN_USER=$(just admin-username)
     export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export ACCESS_TOKEN_LIFESPAN={{ access_token_lifespan }}
+    export REFRESH_TOKEN_LIFESPAN={{ refresh_token_lifespan }}
+    export SSO_SESSION_MAX_LIFESPAN={{ refresh_token_lifespan }}
+    export SSO_SESSION_IDLE_TIMEOUT={{ sso_session_idle_timeout }}
     dotenvx run -f ../.env.local -- tsx ./scripts/create-realm.ts
     if [ "{{ create-client-for-k8s }}" = "true" ]; then
         just create-k8s-client
@@ -412,3 +416,19 @@ default-admin-password:
     @kubectl get secret keycloak-credentials -n ${KEYCLOAK_NAMESPACE} \
         -o jsonpath="{.data.password}" | base64 --decode
     @echo
+
+# Show current realm token settings
+show-realm-token-settings realm:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_REALM={{ realm }}
+    dotenvx run -f ../.env.local -- tsx ./scripts/show-realm-token-settings.ts
+
+# Update realm token settings (access token lifespan, refresh token lifespan, etc.)
+update-realm-token-settings realm access_token_lifespan='3600' refresh_token_lifespan='1800':
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_REALM={{ realm }}
+    export ACCESS_TOKEN_LIFESPAN={{ access_token_lifespan }}
+    export REFRESH_TOKEN_LIFESPAN={{ refresh_token_lifespan }}
+    dotenvx run -f ../.env.local -- tsx ./scripts/update-realm-token-settings.ts
