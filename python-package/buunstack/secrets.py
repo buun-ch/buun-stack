@@ -30,6 +30,9 @@ class SecretStore:
     automatic OIDC token refresh via Keycloak integration and provides both
     manual and background token management options.
 
+    This class implements the singleton pattern to ensure only one instance
+    exists per user session, preventing duplicate background refresh threads.
+
     Attributes
     ----------
     auto_token_refresh : bool
@@ -58,6 +61,14 @@ class SecretStore:
     'sk-123'
     """
 
+    _instance = None
+    _initialized = False
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(
         self,
         auto_token_refresh: bool = True,
@@ -67,18 +78,22 @@ class SecretStore:
         """
         Initialize SecretStore with authentication and configuration.
 
+        Note: Due to singleton pattern, parameters are only used on the first
+        instantiation. Subsequent calls return the existing instance with
+        its original configuration.
+
         Parameters
         ----------
         auto_token_refresh : bool, optional
             Enable automatic token refresh using Keycloak OIDC, by default True.
             Requires KEYCLOAK_HOST, KEYCLOAK_REALM, and JUPYTERHUB_OIDC_REFRESH_TOKEN
-            environment variables.
+            environment variables. Only used on first instantiation.
         refresh_buffer_seconds : int, optional
             Seconds before token expiry to trigger refresh, by default 300.
-            Only used when auto_token_refresh is True.
+            Only used when auto_token_refresh is True. Only used on first instantiation.
         background_refresh_interval : int, optional
             Seconds between background refresh checks, by default 1800.
-            Only used when background refresh is started.
+            Only used when background refresh is started. Only used on first instantiation.
 
         Raises
         ------
@@ -105,37 +120,33 @@ class SecretStore:
         ...     background_refresh_interval=3600
         ... )
         """
+        if self._initialized:
+            return
+
         self.auto_token_refresh = auto_token_refresh
         self.refresh_buffer_seconds = refresh_buffer_seconds
         self.background_refresh_interval = background_refresh_interval
 
-        # User and environment info
         self.username = os.getenv("JUPYTERHUB_USER")
         self.vault_addr = os.getenv("VAULT_ADDR")
 
-        # Keycloak configuration (only needed if auto_token_refresh is enabled)
         if self.auto_token_refresh:
             self.keycloak_host = os.getenv("KEYCLOAK_HOST")
             self.keycloak_realm = os.getenv("KEYCLOAK_REALM")
             self.keycloak_client_id = os.getenv("KEYCLOAK_CLIENT_ID", "jupyterhub")
             self.refresh_token = os.getenv("JUPYTERHUB_OIDC_REFRESH_TOKEN")
 
-        # Token management
         self.access_token = os.getenv("JUPYTERHUB_OIDC_ACCESS_TOKEN")
         self.token_expiry = (
             self._get_token_expiry(self.access_token) if self.access_token else None
         )
 
-        # Initialize Vault client
         self.client = hvac.Client(url=self.vault_addr, verify=False)
 
-        # Background refresher
         self._background_refresher = None
 
-        # Authenticate initially
         self._authenticate_vault()
 
-        # Set base path for user storage
         self.base_path = f"jupyter/users/{self.username}"
 
         logger.info(f"SecretStore initialized for user: {self.username}")
@@ -145,6 +156,8 @@ class SecretStore:
 
         if self.auto_token_refresh and self.token_expiry:
             logger.info(f"Token expires at: {self.token_expiry}")
+
+        self._initialized = True
 
     def _get_token_expiry(self, token: str) -> datetime | None:
         """Extract expiry time from JWT token"""

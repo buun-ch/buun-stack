@@ -3,9 +3,9 @@ set fallback := true
 export JUPYTERHUB_NAMESPACE := env("JUPYTERHUB_NAMESPACE", "jupyter")
 export JUPYTERHUB_CHART_VERSION := env("JUPYTERHUB_CHART_VERSION", "4.2.0")
 export JUPYTERHUB_OIDC_CLIENT_ID := env("JUPYTERHUB_OIDC_CLIENT_ID", "jupyterhub")
-export JUPYTERHUB_ENABLE_NFS_PV := env("JUPYTERHUB_ENABLE_NFS_PV", "")
-export JUPYTERHUB_VAULT_INTEGRATION_ENABLED := env("JUPYTERHUB_VAULT_INTEGRATION_ENABLED", "false")
-export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-5")
+export JUPYTERHUB_NFS_PV_ENABLED := env("JUPYTERHUB_NFS_PV_ENABLED", "")
+export JUPYTERHUB_VAULT_INTEGRATION_ENABLED := env("JUPYTERHUB_VAULT_INTEGRATION_ENABLED", "")
+export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-6")
 export KERNEL_IMAGE_BUUN_STACK_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_REPOSITORY", "buun-stack-notebook")
 export KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY", "buun-stack-cuda-notebook")
 export JUPYTER_PROFILE_MINIMAL_ENABLED := env("JUPYTER_PROFILE_MINIMAL_ENABLED", "false")
@@ -64,14 +64,14 @@ install:
     export JUPYTER_PYTHON_KERNEL_TAG=${JUPYTER_PYTHON_KERNEL_TAG}
     export JUPYTER_FSGID=${JUPYTER_FSGID:-100}
     export PVC_NAME=""
-    if [ -z "${JUPYTERHUB_ENABLE_NFS_PV}" ]; then
+    if [ -z "${JUPYTERHUB_NFS_PV_ENABLED}" ]; then
         if gum confirm "Are you going to use NFS PV?"; then
-            JUPYTERHUB_ENABLE_NFS_PV=true
+            JUPYTERHUB_NFS_PV_ENABLED=true
         else
-            JUPYTERHUB_ENABLE_NFS_PV=false
+            JUPYTERHUB_NFS_PV_ENABLED=false
         fi
     fi
-    if [ "${JUPYTERHUB_ENABLE_NFS_PV}" = "true" ]; then
+    if [ "${JUPYTERHUB_NFS_PV_ENABLED}" = "true" ]; then
         if ! helm status longhorn -n ${LONGHORN_NAMESPACE} &>/dev/null; then
             echo "Longhorn is not installed. Please install Longhorn first." >&2
             exit 1
@@ -104,7 +104,13 @@ install:
     # wait deployments manually because `helm upgrade --wait` does not work for JupyterHub
     just k8s::wait-deployments-ready ${JUPYTERHUB_NAMESPACE} hub proxy
 
-    # Setup Vault integration if enabled
+    if [ -z "${JUPYTERHUB_VAULT_INTEGRATION_ENABLED}" ]; then
+        if gum confirm "Are you going to enable Vault integration?"; then
+            JUPYTERHUB_VAULT_INTEGRATION_ENABLED=true
+        else
+            JUPYTERHUB_VAULT_INTEGRATION_ENABLED=false
+        fi
+    fi
     if [ "${JUPYTERHUB_VAULT_INTEGRATION_ENABLED}" = "true" ]; then
         just setup-vault-jwt-auth
     fi
