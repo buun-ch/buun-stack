@@ -42,6 +42,11 @@ hub:
               if 'expires_at' in auth_state:
                   spawner.environment['JUPYTERHUB_OIDC_TOKEN_EXPIRES_AT'] = str(auth_state['expires_at'])
 
+              # Add Keycloak configuration for token refresh
+              spawner.environment['KEYCLOAK_HOST'] = '{{ .Env.KEYCLOAK_HOST }}'
+              spawner.environment['KEYCLOAK_REALM'] = '{{ .Env.KEYCLOAK_REALM }}'
+              spawner.environment['KEYCLOAK_CLIENT_ID'] = 'jupyterhub'
+
       c.Spawner.pre_spawn_hook = pre_spawn_hook
 {{- end }}
 

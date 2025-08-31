@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "buunstack"
+dynamic = ["version"]
+description = "Python package for buun-stack Jupyter environemnt"
+authors = [{ name = "Buun ch.", email = "buun@buun.channel" }]
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Security :: Cryptography",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+keywords = ["jupyter", "vault", "secrets", "keycloak", "oidc", "kubernetes"]
+dependencies = ["hvac>=1.0.0", "requests>=2.25.0", "PyJWT>=2.0.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0", "black>=22.0.0", "flake8>=4.0.0", "mypy>=0.950"]
+docs = ["sphinx>=4.0.0", "sphinx-rtd-theme>=1.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/buun-ch/buun-stack"
+Repository = "https://github.com/buun-ch/buun-stack"
+"Bug Reports" = "https://github.com/buun-ch/buun-stack/issues"
+
+[project.scripts]
+buunstack-secrets = "buunstack.cli:main"
+
+[tool.setuptools_scm]
+write_to = "buunstack/_version.py"
+
+[tool.black]
+line-length = 100
+target-version = ['py38']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = ["tests"]

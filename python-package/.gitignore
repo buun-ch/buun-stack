@@ -1,0 +1,12 @@
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# setuptools-scm generated version file
+buunstack/_version.py
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

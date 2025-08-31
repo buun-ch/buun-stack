@@ -6,7 +6,7 @@ export JUPYTERHUB_CHART_VERSION := env("JUPYTERHUB_CHART_VERSION", "4.2.0")
 export JUPYTERHUB_OIDC_CLIENT_ID := env("JUPYTERHUB_OIDC_CLIENT_ID", "jupyterhub")
 export JUPYTERHUB_ENABLE_NFS_PV := env("JUPYTERHUB_ENABLE_NFS_PV", "")
 export JUPYTERHUB_VAULT_INTEGRATION_ENABLED := env("JUPYTERHUB_VAULT_INTEGRATION_ENABLED", "false")
-export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-2")
+export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-3")
 export KERNEL_IMAGE_BUUN_STACK_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_REPOSITORY", "buun-stack-notebook")
 export KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY", "buun-stack-cuda-notebook")
 export JUPYTER_PROFILE_MINIMAL_ENABLED := env("JUPYTER_PROFILE_MINIMAL_ENABLED", "false")
@@ -134,6 +134,14 @@ delete-pv:
 build-kernel-images:
     #!/bin/bash
     set -euo pipefail
+    # Build python package wheel
+    cd ../python-package
+    rm -rf dist/ build/ *.egg-info/
+    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_BUUNSTACK=0.1.0 python -m build --wheel
+    cd ../jupyterhub
+    # Copy built wheel to image directories
+    cp ../python-package/dist/*.whl ./images/datastack-notebook/
+    cp ../python-package/dist/*.whl ./images/datastack-cuda-notebook/
     (
         cd ./images/datastack-notebook
         docker build -t \
@@ -150,6 +158,9 @@ build-kernel-images:
         --build-arg spark_download_url="https://archive.apache.org/dist/spark/" \
         .
     )
+    # Clean up copied wheel files
+    rm -f ./images/datastack-notebook/*.whl
+    rm -f ./images/datastack-cuda-notebook/*.whl
 
 # Push Jupyter notebook kernel images
 push-kernel-images: build-kernel-images
