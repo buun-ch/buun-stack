@@ -22,7 +22,8 @@ logger.addHandler(logging.NullHandler())  # Default to no output
 
 
 class SecretStore:
-    """Simple and powerful secrets management for JupyterHub with Vault backend.
+    """
+    Simple secrets management for JupyterHub with Vault backend.
 
     SecretStore provides a secure interface for managing secrets in JupyterHub
     environments using HashiCorp Vault as the backend storage. It supports
@@ -48,7 +49,6 @@ class SecretStore:
     --------
     >>> secrets = SecretStore()
     >>> secrets.put('api-keys', openai='sk-123', github='ghp-456')
-    'jupyter/users/username/api-keys'
     >>> data = secrets.get('api-keys')
     >>> print(data['openai'])
     'sk-123'
@@ -251,7 +251,7 @@ class SecretStore:
                     "Failed to refresh tokens. Manual re-authentication required."
                 )
 
-    def put(self, key: str, **kwargs: Any) -> str:
+    def put(self, key: str, **kwargs: Any) -> None:
         """
         Store data in your personal secret storage.
 
@@ -265,11 +265,6 @@ class SecretStore:
         **kwargs : str
             Key-value pairs to store as the secret data. All values must be strings.
             For complex types, encode them as JSON strings first.
-
-        Returns
-        -------
-        str
-            Full Vault path where the secret was stored.
 
         Raises
         ------
@@ -287,9 +282,7 @@ class SecretStore:
         --------
         >>> import json
         >>> secrets = SecretStore()
-        >>> path = secrets.put('api-keys', openai='sk-123', github='ghp-456')
-        >>> print(path)
-        'jupyter/users/username/api-keys'
+        >>> secrets.put('api-keys', openai='sk-123', github='ghp-456')
 
         >>> # Store complex data as JSON strings
         >>> config_data = {'debug': True, 'max_workers': 4}
@@ -317,7 +310,6 @@ class SecretStore:
                 path=path, secret=kwargs, mount_point="secret"
             )
             logger.info(f"Put secret: {key}")
-            return path
         except Exception as e:
             logger.error(f"Failed to put secret: {e}")
             # Retry once with re-authentication
@@ -325,21 +317,20 @@ class SecretStore:
             self.client.secrets.kv.v2.create_or_update_secret(
                 path=path, secret=kwargs, mount_point="secret"
             )
-            return path
 
     @overload
-    def get(self, key: str, field: None = None) -> dict[str, Any] | None: ...
+    def get(self, key: str, field: None = None) -> dict[str, Any]: ...
 
     @overload
-    def get(self, key: str, field: str) -> str | None: ...
+    def get(self, key: str, field: str) -> str: ...
 
-    def get(self, key: str, field: str | None = None) -> dict[str, Any] | str | None:
+    def get(self, key: str, field: str | None = None) -> dict[str, Any] | str:
         """
         Retrieve data from your personal secret storage.
 
         Loads the data dictionary stored under the specified key from Vault.
-        If field is specified, returns only that field's value. Returns None
-        if the key doesn't exist or if there's an access error.
+        If field is specified, returns only that field's value. Raises KeyError
+        if the key doesn't exist or if the specified field is not found.
 
         Parameters
         ----------
@@ -351,13 +342,14 @@ class SecretStore:
 
         Returns
         -------
-        dict[str, Any] or str or None
-            - If field is None: The complete stored data dictionary if found, None otherwise.
-            - If field is specified: The value of the specified field, or None if
-              field doesn't exist or secret is not found.
+        dict[str, Any] or str
+            - If field is None: The complete stored data dictionary.
+            - If field is specified: The value of the specified field.
 
         Raises
         ------
+        KeyError
+            If the key doesn't exist or if the specified field is not found.
         ConnectionError
             If unable to connect to Vault server.
         hvac.exceptions.InvalidRequest
@@ -377,11 +369,13 @@ class SecretStore:
         >>> print(f'OpenAI key: {openai_key}')
 
         >>> # Handle missing keys or fields
-        >>> config = secrets.get('nonexistent-key')
-        >>> if config is None:
+        >>> try:
+        ...     config = secrets.get('nonexistent-key')
+        ... except KeyError:
         ...     print('Key not found')
-        >>> missing_field = secrets.get('api-keys', field='nonexistent')
-        >>> if missing_field is None:
+        >>> try:
+        ...     missing_field = secrets.get('api-keys', field='nonexistent')
+        ... except KeyError:
         ...     print('Field not found')
         """
         self._ensure_authenticated()
@@ -397,10 +391,13 @@ class SecretStore:
 
                 # Return specific field if requested
                 if field is not None:
-                    return data.get(field)
+                    if field not in data:
+                        raise KeyError(f"Field '{field}' not found in secret '{key}'")
+                    return data[field]
 
                 return data
-            return None
+            else:
+                raise KeyError(f"Secret '{key}' not found")
         except Exception as e:
             if "permission denied" in str(e).lower():
                 logger.info("Permission denied, re-authenticating...")
@@ -411,10 +408,16 @@ class SecretStore:
                 if response and "data" in response and "data" in response["data"]:
                     data = response["data"]["data"]
                     if field is not None:
-                        return data.get(field)
+                        if field not in data:
+                            raise KeyError(
+                                f"Field '{field}' not found in secret '{key}'"
+                            )
+                        return data[field]
                     return data
+                else:
+                    raise KeyError(f"Secret '{key}' not found")
             logger.warning(f'Could not get secret "{key}": {e}')
-            return None
+            raise KeyError(f"Secret '{key}' not found") from e
 
     def delete(self, key: str) -> None:
         """
@@ -796,15 +799,15 @@ def put_env_to_secrets(
     ...     'DEBUG': 'false',
     ...     'MAX_WORKERS': '4'
     ... }
-    >>> path = put_env_to_secrets(secrets, env_vars)
-    >>> print(f'Stored at: {path}')
+    >>> put_env_to_secrets(secrets, env_vars)
     'jupyter/users/username/environment'
 
     >>> # Store with custom key
     >>> put_env_to_secrets(secrets, {'API_KEY': 'secret'}, 'production-config')
+    'jupyter/users/username/environment'
     """
     # Convert all values to strings and use **kwargs for put()
     string_env_dict = {k: str(v) for k, v in env_dict.items()}
-    path = secrets.put(key, **string_env_dict)
+    secrets.put(key, **string_env_dict)
     logger.info(f"Put {len(env_dict)} environment variables")
-    return path
+    return f"jupyter/users/{secrets.username}/{key}"
