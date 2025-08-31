@@ -143,4 +143,5 @@ When adding new services:
 - It must pass the command: `just --fmt --check --unstable`
 - Follow existing Justfile patterns
 - Only write code comments when necessary, as the code should be self-explanatory
+  (Avoid trivial comment for each code block)
 - Write output messages and code comments in English

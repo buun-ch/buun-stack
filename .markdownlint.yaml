@@ -1,6 +1,7 @@
 default: true
-no-bare-urls: false
 line-length: false
+no-bare-urls: false
+no-duplicate-heading: false
 no-inline-html: false
 ul-indent:
   indent: 4

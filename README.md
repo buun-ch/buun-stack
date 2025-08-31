@@ -112,6 +112,9 @@ Multi-user platform for interactive computing:
 - Integrated with Keycloak for OIDC authentication
 - Persistent storage for user workspaces
 - Support for multiple kernels and environments
+- Vault integration for secure secrets management
+
+See [JupyterHub Documentation](./docs/jupyterhub.md) for detailed setup and configuration.
 
 ## Common Operations
 
