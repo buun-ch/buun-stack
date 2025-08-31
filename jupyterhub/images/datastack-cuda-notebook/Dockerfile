@@ -130,6 +130,7 @@ RUN pip install \
     agno \
     fastembed \
     feature-engine \
+    hvac \
     jupyter-ai \
     jupyter-ai-magics[all] \
     kreuzberg \

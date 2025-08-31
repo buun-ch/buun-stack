@@ -1,10 +1,12 @@
 set fallback := true
 
+tempdir := `mktemp -d`
 export JUPYTERHUB_NAMESPACE := env("JUPYTERHUB_NAMESPACE", "jupyter")
 export JUPYTERHUB_CHART_VERSION := env("JUPYTERHUB_CHART_VERSION", "4.2.0")
 export JUPYTERHUB_OIDC_CLIENT_ID := env("JUPYTERHUB_OIDC_CLIENT_ID", "jupyterhub")
 export JUPYTERHUB_ENABLE_NFS_PV := env("JUPYTERHUB_ENABLE_NFS_PV", "")
-export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-1")
+export JUPYTERHUB_VAULT_INTEGRATION_ENABLED := env("JUPYTERHUB_VAULT_INTEGRATION_ENABLED", "false")
+export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-2")
 export KERNEL_IMAGE_BUUN_STACK_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_REPOSITORY", "buun-stack-notebook")
 export KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY", "buun-stack-cuda-notebook")
 export JUPYTER_PROFILE_MINIMAL_ENABLED := env("JUPYTER_PROFILE_MINIMAL_ENABLED", "false")
@@ -18,6 +20,7 @@ export JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED := env("JUPYTER_PROFILE_BUUN_STAC
 export IMAGE_REGISTRY := env("IMAGE_REGISTRY", "localhost:30500")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
+export VAULT_ADDR := env("VAULT_ADDR", "http://vault.vault.svc:8200")
 
 [private]
 default:
@@ -56,7 +59,6 @@ install:
     # just k8s::copy-regcred ${JUPYTERHUB_NAMESPACE}
     just keycloak::create-client ${KEYCLOAK_REALM} ${JUPYTERHUB_OIDC_CLIENT_ID} \
         "https://${JUPYTERHUB_HOST}/hub/oauth_callback"
-    # just vault::create-jupyter-role
     just add-helm-repo
     export JUPYTERHUB_OIDC_CLIENT_ID=${JUPYTERHUB_OIDC_CLIENT_ID}
     export KEYCLOAK_REALM=${KEYCLOAK_REALM}
@@ -103,6 +105,11 @@ install:
     # wait deployments manually because `helm upgrade --wait` does not work for JupyterHub
     just k8s::wait-deployments-ready ${JUPYTERHUB_NAMESPACE} hub proxy
 
+    # Setup Vault integration if enabled
+    if [ "${JUPYTERHUB_VAULT_INTEGRATION_ENABLED}" = "true" ]; then
+        just setup-vault-jwt-auth
+    fi
+
 # Uninstall JupyterHub
 uninstall:
     #!/bin/bash
@@ -148,3 +155,29 @@ build-kernel-images:
 push-kernel-images: build-kernel-images
     docker push ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG}
     docker push ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG}
+
+# Configure Vault for JupyterHub integration
+setup-vault-integration:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Creating JupyterHub Vault policy..."
+    just vault::write-policy jupyter-user $(pwd)/vault-policy.hcl
+    echo "✓ JupyterHub policy created"
+
+# Setup JWT auth for JupyterHub tokens (no re-authentication needed)
+setup-vault-jwt-auth:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up Vault integration for JupyterHub..."
+    just setup-vault-integration
+    just vault::setup-jwt-auth "jupyterhub" "jupyter-token" "jupyter-user"
+    echo "✓ Vault integration configured"
+    echo ""
+    echo "Users can now access Vault from notebooks using:"
+    echo "  import os, hvac"
+    echo "  client = hvac.Client(url=os.getenv('VAULT_ADDR'), verify=False)"
+    echo "  client.auth.jwt.jwt_login("
+    echo "      role='jupyter-token',"
+    echo "      jwt=os.getenv('JUPYTERHUB_OIDC_ACCESS_TOKEN'),"
+    echo "      path='jwt'"
+    echo "  )"

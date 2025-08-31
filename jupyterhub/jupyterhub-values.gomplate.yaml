@@ -24,9 +24,26 @@ hub:
         - profile
         - email
 
-  # db:
-  #   pvc:
-  #     storageClassName: longhorn
+{{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
+  extraConfig:
+    01-vault-integration: |
+      import os
+
+      async def pre_spawn_hook(spawner):
+          """Pass OIDC tokens and Vault config to notebook environment"""
+          auth_state = await spawner.user.get_auth_state()
+          if auth_state:
+              if 'access_token' in auth_state:
+                  spawner.environment['JUPYTERHUB_OIDC_ACCESS_TOKEN'] = auth_state['access_token']
+              if 'refresh_token' in auth_state:
+                  spawner.environment['JUPYTERHUB_OIDC_REFRESH_TOKEN'] = auth_state['refresh_token']
+              if 'id_token' in auth_state:
+                  spawner.environment['JUPYTERHUB_OIDC_ID_TOKEN'] = auth_state['id_token']
+              if 'expires_at' in auth_state:
+                  spawner.environment['JUPYTERHUB_OIDC_TOKEN_EXPIRES_AT'] = str(auth_state['expires_at'])
+
+      c.Spawner.pre_spawn_hook = pre_spawn_hook
+{{- end }}
 
   podSecurityContext:
     fsGroup: {{ .Env.JUPYTER_FSGID }}
@@ -45,6 +62,24 @@ singleuser:
         - ReadWriteOnce
     {{ end -}}
     capacity: 10Gi
+
+{{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
+  extraEnv:
+    VAULT_ADDR: "{{ .Env.VAULT_ADDR }}"
+    KEYCLOAK_HOST: "{{ .Env.KEYCLOAK_HOST }}"
+    KEYCLOAK_REALM: "{{ .Env.KEYCLOAK_REALM }}"
+
+  lifecycleHooks:
+    postStart:
+      exec:
+        command:
+          - /bin/bash
+          - -c
+          - |
+            # Install hvac for Vault integration
+            pip install --quiet hvac requests
+            echo "Vault integration ready"
+{{- end }}
   networkPolicy:
     egress:
       - to:
@@ -72,6 +107,17 @@ singleuser:
         ports:
           - port: 4000
             protocol: TCP
+{{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: vault
+        ports:
+          - port: 8200
+            protocol: TCP
+          - port: 8201
+            protocol: TCP
+{{- end }}
       - to:
         - ipBlock:
             cidr: 0.0.0.0/0
