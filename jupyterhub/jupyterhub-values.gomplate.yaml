@@ -49,6 +49,23 @@ hub:
 
       c.Spawner.pre_spawn_hook = pre_spawn_hook
 {{- end }}
+    02-postgres-integration: |
+      from functools import wraps
+
+      # Store the original pre_spawn_hook if it exists
+      original_hook = c.Spawner.pre_spawn_hook if hasattr(c.Spawner, 'pre_spawn_hook') else None
+
+      async def postgres_pre_spawn_hook(spawner):
+          """Add PostgreSQL connection information to notebook environment"""
+          # Call the original hook first if it exists
+          if original_hook:
+              await original_hook(spawner)
+
+          # Add PostgreSQL configuration
+          spawner.environment['POSTGRES_HOST'] = 'postgres-cluster-rw.postgres'
+          spawner.environment['POSTGRES_PORT'] = '5432'
+
+      c.Spawner.pre_spawn_hook = postgres_pre_spawn_hook
 
   podSecurityContext:
     fsGroup: {{ .Env.JUPYTER_FSGID }}
@@ -74,16 +91,16 @@ singleuser:
     KEYCLOAK_HOST: "{{ .Env.KEYCLOAK_HOST }}"
     KEYCLOAK_REALM: "{{ .Env.KEYCLOAK_REALM }}"
 
-  lifecycleHooks:
-    postStart:
-      exec:
-        command:
-          - /bin/bash
-          - -c
-          - |
-            # Install hvac for Vault integration
-            pip install --quiet hvac requests
-            echo "Vault integration ready"
+  # lifecycleHooks:
+  #   postStart:
+  #     exec:
+  #       command:
+  #         - /bin/bash
+  #         - -c
+  #         - |
+  #           # Install hvac for Vault integration
+  #           mamba install hvac requests
+  #           echo "Vault integration ready"
 {{- end }}
   networkPolicy:
     egress:

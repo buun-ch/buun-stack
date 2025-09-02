@@ -70,7 +70,9 @@ RUN mamba install --yes \
     'aif360' \
     'airflow' \
     'chromadb' \
+    'csvkit' \
     'dalex' \
+    'datafusion' \
     'dbt' \
     'dlt' \
     'duckdb' \
@@ -78,6 +80,7 @@ RUN mamba install --yes \
     'gitpython' \
     'grpcio-status' \
     'grpcio' \
+    'hvac' \
     'keras' \
     'langchain' \
     'langchain-ai21' \
@@ -112,6 +115,7 @@ RUN mamba install --yes \
     'pandas-profiling' \
     'pillow' \
     'polars' \
+    'psycopg2' \
     'pyarrow' \
     'qdrant-client' \
     'rapidfuzz' \
@@ -130,7 +134,6 @@ RUN pip install \
     agno \
     fastembed \
     feature-engine \
-    hvac \
     jupyter-ai \
     jupyter-ai-magics[all] \
     kreuzberg \
