@@ -144,6 +144,13 @@ singleuser:
       - to:
           - namespaceSelector:
               matchLabels:
+                kubernetes.io/metadata.name: postgres
+        ports:
+          - port: 5432
+            protocol: TCP
+      - to:
+          - namespaceSelector:
+              matchLabels:
                 kubernetes.io/metadata.name: chroma
         ports:
           - port: 8000
