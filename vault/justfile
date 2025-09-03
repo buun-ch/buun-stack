@@ -289,7 +289,14 @@ setup-oidc-auth:
     echo "You can now login to Vault using:"
     echo "  VAULT_ADDR=${VAULT_ADDR} vault login -method=oidc"
 
-# Setup JWT authentication for Keycloak tokens
+# Disable OIDC authentication
+disable-oidc-auth:
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_root_env_setup }}
+    vault auth disable oidc
+
+# Setup JWT authentication for Keycloak tokens (not used currently)
 setup-jwt-auth audience role policy='default':
     #!/bin/bash
     set -euo pipefail
@@ -324,13 +331,6 @@ setup-jwt-auth audience role policy='default':
     echo "  Policy: {{ policy }}"
     echo ""
     echo "Usage: client.auth.jwt.jwt_login(role='{{ role }}', jwt=token, path='jwt')"
-
-# Disable OIDC authentication
-disable-oidc-auth:
-    #!/bin/bash
-    set -euo pipefail
-    {{ _vault_root_env_setup }}
-    vault auth disable oidc
 
 # Get key value
 get path field:
