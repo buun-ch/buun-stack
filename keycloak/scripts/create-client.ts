@@ -24,6 +24,9 @@ const main = async () => {
 
   const redirectUris = redirectUrl.split(',').map(url => url.trim());
 
+  const sessionIdle = process.env.KEYCLOAK_CLIENT_SESSION_IDLE;
+  const sessionMax = process.env.KEYCLOAK_CLIENT_SESSION_MAX;
+
   const kcAdminClient = new KcAdminClient({
     baseUrl: `https://${keycloakHost}`,
     realmName: "master",
@@ -46,13 +49,28 @@ const main = async () => {
       return;
     }
 
-    const createdClient = await kcAdminClient.clients.create({
+    const clientConfig: any = {
       clientId: clientId,
       secret: clientSecret,
       enabled: true,
       redirectUris: redirectUris,
       publicClient: clientSecret && clientSecret !== '' ? false : true,
-    });
+    };
+
+    // Add session timeout settings if provided
+    if (sessionIdle && sessionIdle !== '') {
+      clientConfig.attributes = clientConfig.attributes || {};
+      clientConfig.attributes['client.session.idle.timeout'] = sessionIdle;
+      console.log(`Setting Client Session Idle Timeout: ${sessionIdle}`);
+    }
+
+    if (sessionMax && sessionMax !== '') {
+      clientConfig.attributes = clientConfig.attributes || {};
+      clientConfig.attributes['client.session.max.lifespan'] = sessionMax;
+      console.log(`Setting Client Session Max Lifespan: ${sessionMax}`);
+    }
+
+    const createdClient = await kcAdminClient.clients.create(clientConfig);
     console.log(`Client created successfully with ID: ${createdClient.id}`);
   } catch (error) {
     console.error("An error occurred:", error);

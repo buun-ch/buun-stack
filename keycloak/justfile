@@ -155,7 +155,7 @@ delete-realm realm:
     dotenvx run -q -f ../.env.local -- tsx ./scripts/delete-realm.ts
 
 # Create Keycloak client
-create-client realm client_id redirect_url client_secret='':
+create-client realm client_id redirect_url client_secret='' session_idle='' session_max='':
     #!/bin/bash
     set -euo pipefail
     export KEYCLOAK_ADMIN_USER=$(just admin-username)
@@ -164,6 +164,8 @@ create-client realm client_id redirect_url client_secret='':
     export KEYCLOAK_CLIENT_ID={{ client_id }}
     export KEYCLOAK_CLIENT_SECRET={{ client_secret }}
     export KEYCLOAK_REDIRECT_URL={{ redirect_url }}
+    export KEYCLOAK_CLIENT_SESSION_IDLE={{ session_idle }}
+    export KEYCLOAK_CLIENT_SESSION_MAX={{ session_max }}
     dotenvx run -q -f ../.env.local -- tsx ./scripts/create-client.ts
 
 # Delete Keycloak client
