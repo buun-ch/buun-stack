@@ -107,11 +107,9 @@ install:
         kubectl apply -n ${JUPYTERHUB_NAMESPACE} -f nfs-pvc.yaml
     fi
 
-    # Create or get JupyterHub Vault token before gomplate
-    if ! just vault::exist jupyterhub/vault-token &>/dev/null; then
-        echo "Creating JupyterHub Vault token..."
-        just create-jupyterhub-vault-token
-    fi
+    # Always create new JupyterHub Vault token on deployment
+    echo "Creating new JupyterHub Vault token for this deployment..."
+    just create-jupyterhub-vault-token
     export JUPYTERHUB_VAULT_TOKEN=$(just vault::get jupyterhub/vault-token token)
 
     # https://z2jh.jupyter.org/en/stable/
@@ -209,7 +207,7 @@ setup-vault-jwt-auth:
     echo "  # Each user gets their own isolated Vault token and policy"
 
 # Create JupyterHub Vault token (uses admin policy for JWT operations)
-create-jupyterhub-vault-token ttl="720h":
+create-jupyterhub-vault-token ttl="8760h":
     #!/bin/bash
     set -euo pipefail
     echo "Creating JupyterHub Vault token with admin policy..."
