@@ -137,14 +137,18 @@ create-admin-token root_token='': check-env
     vault token create -policy=admin
 
 # Create token with specified policy and store in Vault
-create-token-and-store policy path ttl="24h" root_token='': check-env
+create-token-and-store policy path ttl="24h" max_ttl="" root_token='': check-env
     #!/bin/bash
     set -euo pipefail
     {{ _vault_root_env_setup }}
 
     echo "Creating token with policy '{{ policy }}'..."
     # Create token with specified policy
-    token_output=$(vault token create -policy={{ policy }} -ttl={{ ttl }} -format=json)
+    max_ttl_arg=""
+    if [ -n "{{ max_ttl }}" ]; then
+        max_ttl_arg="-explicit-max-ttl={{ max_ttl }}"
+    fi
+    token_output=$(vault token create -policy={{ policy }} -ttl={{ ttl }} ${max_ttl_arg} -format=json)
     service_token=$(echo "${token_output}" | jq -r '.auth.client_token')
 
     echo "Storing token in Vault at path '{{ path }}'..."

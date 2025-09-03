@@ -17,6 +17,8 @@ export JUPYTER_PROFILE_TENSORFLOW_ENABLED := env("JUPYTER_PROFILE_TENSORFLOW_ENA
 export JUPYTER_PROFILE_BUUN_STACK_ENABLED := env("JUPYTER_PROFILE_BUUN_STACK_ENABLED", "false")
 export JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED := env("JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED", "false")
 export IMAGE_REGISTRY := env("IMAGE_REGISTRY", "localhost:30500")
+export NOTEBOOK_VAULT_TOKEN_TTL := env("NOTEBOOK_VAULT_TOKEN_TTL", "1h")
+export NOTEBOOK_VAULT_TOKEN_MAX_TTL := env("NOTEBOOK_VAULT_TOKEN_MAX_TTL", "720h")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
 export VAULT_ADDR := env("VAULT_ADDR", "http://vault.vault.svc:8200")
@@ -111,6 +113,9 @@ install:
     echo "Creating new JupyterHub Vault token for this deployment..."
     just create-jupyterhub-vault-token
     export JUPYTERHUB_VAULT_TOKEN=$(just vault::get jupyterhub/vault-token token)
+
+    # Read user policy template for Vault
+    export USER_POLICY_HCL=$(cat user_policy.hcl)
 
     # https://z2jh.jupyter.org/en/stable/
     gomplate -f jupyterhub-values.gomplate.yaml -o jupyterhub-values.yaml
@@ -207,14 +212,16 @@ setup-vault-jwt-auth:
     echo "  # Each user gets their own isolated Vault token and policy"
 
 # Create JupyterHub Vault token (uses admin policy for JWT operations)
-create-jupyterhub-vault-token ttl="8760h":
+create-jupyterhub-vault-token:
     #!/bin/bash
     set -euo pipefail
     echo "Creating JupyterHub Vault token with admin policy..."
+    echo "  TTL: ${NOTEBOOK_VAULT_TOKEN_TTL}"
+    echo "  Max TTL: ${NOTEBOOK_VAULT_TOKEN_MAX_TTL}"
 
     # JupyterHub needs admin privileges to read Keycloak credentials from Vault
     # Create token and store in Vault
-    just vault::create-token-and-store admin jupyterhub/vault-token {{ ttl }}
+    just vault::create-token-and-store admin jupyterhub/vault-token ${NOTEBOOK_VAULT_TOKEN_TTL} ${NOTEBOOK_VAULT_TOKEN_MAX_TTL}
 
     echo "✓ JupyterHub Vault token created and stored"
     echo ""

@@ -11,6 +11,11 @@ hub:
         #!/bin/bash
         pip install --no-cache-dir hvac==2.3.0
         exec jupyterhub --config /usr/local/etc/jupyterhub/jupyterhub_config.py --upgrade-db
+    user_policy.hcl:
+      mountPath: /srv/jupyterhub/user_policy.hcl
+      mode: 0644
+      stringData: |
+{{ .Env.USER_POLICY_HCL | strings.Indent 8 }}
 
   # Override the default command to run our startup script first
   command:
@@ -73,36 +78,15 @@ hub:
 
               # Step 2: Create user-specific policy
               user_policy_name = "jupyter-user-{}".format(username)
-              user_path = "secret/data/jupyter/users/{}/*".format(username)
-              user_metadata_path = "secret/metadata/jupyter/users/{}/*".format(username)
-              user_base_path = "secret/metadata/jupyter/users/{}".format(username)
 
-              user_policy = (
-                  "# User-specific policy for {}\n".format(username) +
-                  "path \"{}\" ".format(user_path) + "{\n" +
-                  "    capabilities = [\"create\", \"update\", \"read\", \"delete\", \"list\"]\n" +
-                  "}\n\n" +
-                  "path \"{}\" ".format(user_metadata_path) + "{\n" +
-                  "    capabilities = [\"list\", \"read\", \"delete\", \"update\"]\n" +
-                  "}\n\n" +
-                  "path \"{}\" ".format(user_base_path) + "{\n" +
-                  "    capabilities = [\"list\"]\n" +
-                  "}\n\n" +
-                  "# Read access to shared resources\n" +
-                  "path \"secret/data/jupyter/shared/*\" {\n" +
-                  "    capabilities = [\"read\", \"list\"]\n" +
-                  "}\n\n" +
-                  "path \"secret/metadata/jupyter/shared\" {\n" +
-                  "    capabilities = [\"list\"]\n" +
-                  "}\n\n" +
-                  "# Token management capabilities\n" +
-                  "path \"auth/token/lookup-self\" {\n" +
-                  "    capabilities = [\"read\"]\n" +
-                  "}\n\n" +
-                  "path \"auth/token/renew-self\" {\n" +
-                  "    capabilities = [\"update\"]\n" +
-                  "}"
-              )
+              # Read policy template from file
+              import os
+              policy_template_path = "/srv/jupyterhub/user_policy.hcl"
+              with open(policy_template_path, 'r') as f:
+                  policy_template = f.read()
+
+              # Replace {username} placeholder with actual username
+              user_policy = policy_template.replace("{username}", username)
 
               # Write user-specific policy
               try:
