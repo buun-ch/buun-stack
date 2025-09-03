@@ -131,7 +131,9 @@ singleuser:
     {{ else -}}
     type: dynamic
     dynamic:
-      storageClass: longhorn
+      {{ if env.Getenv "JUPYTERHUB_STORAGE_CLASS" -}}
+      storageClass: {{ .Env.JUPYTERHUB_STORAGE_CLASS }}
+      {{ end -}}
       storageAccessModes:
         - ReadWriteOnce
     {{ end -}}
