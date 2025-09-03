@@ -141,6 +141,7 @@ singleuser:
 
   extraEnv:
     VAULT_ADDR: "{{ .Env.VAULT_ADDR }}"
+
   networkPolicy:
     egress:
       - to:
@@ -182,14 +183,29 @@ singleuser:
         ports:
           - port: 8200
             protocol: TCP
+      # Allow DNS resolution
+      - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        ports:
+          - port: 53
+            protocol: UDP
+          - port: 53
+            protocol: TCP
+      # Allow HTTP traffic
+      - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        ports:
+          - port: 80
+            protocol: TCP
+      # Allow HTTPS traffic
       - to:
         - ipBlock:
             cidr: 0.0.0.0/0
         ports:
           - port: 443
             protocol: TCP
-        domains:
-          - '*.shds.dev'
 
   image:
     pullPolicy: IfNotPresent
@@ -248,6 +264,13 @@ singleuser:
         #     nvidia.com/gpu: "1"
     {{- end }}
 
+cull:
+  enabled: true
+  timeout: 7200      # 2 hours idle timeout
+  every: 600         # Check every 10 minutes
+  adminUsers: true   # Also cull admin users' server pods
+  users: false       # Don't delete user accounts, only stop server pods
+
 imagePullSecrets:
   - name: regcred
 
@@ -263,10 +286,3 @@ ingress:
   tls:
     - hosts:
         - {{ .Env.JUPYTERHUB_HOST }}
-
-cull:
-  enabled: true
-  timeout: 7200      # 2 hours idle timeout
-  every: 600         # Check every 10 minutes
-  adminUsers: true   # Also cull admin users' server pods
-  users: false       # Don't delete user accounts, only stop server pods
