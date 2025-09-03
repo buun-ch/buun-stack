@@ -12,7 +12,7 @@ def quickstart_example():
     print("🚀 buunstack QuickStart Example")
     print("=" * 40)
 
-    # Initialize SecretStore (auto-refresh enabled by default)
+    # Initialize SecretStore (JupyterHub sync enabled by default)
     secrets = SecretStore()
     print(f"✅ SecretStore initialized for user: {secrets.username}")
 
@@ -87,32 +87,29 @@ def advanced_example():
     print("\n🔧 Advanced Configuration Example")
     print("=" * 40)
 
-    # Manual token management
+    # Manual token management (disable JupyterHub sync)
     print("\n1️⃣ Manual token management:")
-    manual_secrets = SecretStore(auto_token_refresh=False)
-    print(f"   Auto-refresh: {manual_secrets.auto_token_refresh}")
+    manual_secrets = SecretStore(sync_with_jupyterhub=False)
+    print(f"   JupyterHub sync: {manual_secrets.sync_with_jupyterhub}")
 
     # Custom timing
     print("\n2️⃣ Custom refresh timing:")
     custom_secrets = SecretStore(
-        auto_token_refresh=True,
-        refresh_buffer_seconds=600,  # Refresh 10 minutes before expiry
-        background_refresh_interval=3600,  # Background refresh every hour
+        sync_with_jupyterhub=True,
+        refresh_buffer_seconds=600,  # Sync 10 minutes before expiry
     )
     print(f"   Refresh buffer: {custom_secrets.refresh_buffer_seconds}s")
-    print(f"   Background interval: {custom_secrets.background_refresh_interval}s")
+    print(f"   JupyterHub sync: {custom_secrets.sync_with_jupyterhub}")
 
-    # Background refresh (if auto_token_refresh is enabled)
-    if custom_secrets.auto_token_refresh and custom_secrets.refresh_token:
-        print("\n3️⃣ Starting background refresher:")
-        refresher = custom_secrets.start_background_refresh()
-        refresher_status = refresher.get_status()
-        print(f"   Running: {refresher_status['running']}")
-        print(f"   Interval: {refresher_status['interval_seconds']}s")
-
-        # Stop the refresher
-        custom_secrets.stop_background_refresh()
-        print("   Stopped background refresher")
+    # Check JupyterHub API configuration
+    print("\n3️⃣ JupyterHub API configuration:")
+    status = custom_secrets.get_status()
+    api_configured = status.get('jupyterhub_api_configured', False)
+    print(f"   API configured: {api_configured}")
+    if api_configured:
+        print(f"   API URL: {custom_secrets.jupyterhub_api_url}")
+    else:
+        print("   API token or URL not configured")
 
 
 if __name__ == "__main__":

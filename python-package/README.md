@@ -1,14 +1,14 @@
 # buunstack
 
-A Python package for buun-stack that provides secure secrets management with HashiCorp Vault and automatic Keycloak OIDC token refresh for JupyterHub users.
+A Python package for buun-stack that provides secure secrets management with HashiCorp Vault using pre-acquired Vault tokens from JupyterHub for seamless authentication.
 
 ## Features
 
 - 🔒 **Secure Secrets Management**: Integration with HashiCorp Vault
-- 🔄 **Automatic Token Refresh**: Seamless Keycloak OIDC token management
+- 🚀 **Pre-acquired Authentication**: Uses Vault tokens created at notebook spawn
 - 📱 **Simple API**: Easy-to-use interface for secrets storage and retrieval
+- 🔄 **Automatic Token Renewal**: Built-in token refresh for long-running sessions
 - 🏢 **Enterprise Ready**: Built for production environments
-- 🚀 **JupyterHub Integration**: Native support for JupyterHub workflows
 
 ## Quick Start
 
@@ -23,15 +23,15 @@ pip install buunstack
 ```python
 from buunstack import SecretStore
 
-# Initialize with automatic token refresh (default)
+# Initialize with pre-acquired Vault token (automatic)
 secrets = SecretStore()
 
 # Put API keys and configuration
-secrets.put('api-keys', {
-    'openai_key': 'sk-your-key-here',
-    'github_token': 'ghp_your-token',
-    'database_url': 'postgresql://user:pass@host:5432/db'
-})
+secrets.put('api-keys',
+    openai_key='sk-your-key-here',
+    github_token='ghp_your-token',
+    database_url='postgresql://user:pass@host:5432/db'
+)
 
 # Get secrets
 api_keys = secrets.get('api-keys')
@@ -44,18 +44,19 @@ all_secrets = secrets.list()
 ### Configuration Options
 
 ```python
-# Manual token management
-secrets = SecretStore(auto_token_refresh=False)
+# Disable JupyterHub token synchronization
+secrets = SecretStore(sync_with_jupyterhub=False)
 
-# Custom refresh timing
+# Custom token validity buffer
 secrets = SecretStore(
-    auto_token_refresh=True,
-    refresh_buffer_seconds=600,      # Refresh 10 minutes before expiry
-    background_refresh_interval=3600 # Background refresh every hour
+    sync_with_jupyterhub=True,
+    refresh_buffer_seconds=600  # Sync tokens 10 minutes before expiry
 )
 
-# Start background auto-refresh
-refresher = secrets.start_background_refresh()
+# Check synchronization status
+status = secrets.get_status()
+print(f"JupyterHub sync enabled: {status['sync_with_jupyterhub']}")
+print(f"API configured: {status.get('jupyterhub_api_configured', False)}")
 ```
 
 ### Environment Variables Helper

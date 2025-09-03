@@ -1,61 +1,60 @@
 """
-Secrets management for JupyterHub with Vault backend
+Secrets management with user-specific Vault token authentication
 """
 
 import logging
 import os
-import threading
 import warnings
-from datetime import datetime, timedelta
 from typing import Any, overload
 
 import hvac
-import jwt
-import requests
 
 # Suppress SSL warnings for self-signed certificates
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
-# Set up logging (disabled by default)
 logger = logging.getLogger("buunstack")
-logger.addHandler(logging.NullHandler())  # Default to no output
+log_level_str = os.getenv("BUUNSTACK_LOG_LEVEL", "warning").upper()
+log_level = getattr(logging, log_level_str, logging.WARNING)
+logger.setLevel(log_level)
+
+# For Jupyter notebooks, we need to ensure proper logging configuration
+# Always add handler if none exists, regardless of conditions
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setLevel(log_level)
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+    # Disable propagation to avoid root logger interference in notebooks
+    logger.propagate = False
+
+    # Debug: Log the handler addition
+    if log_level <= logging.DEBUG:
+        print(f"DEBUG: Added StreamHandler to buunstack logger (level={log_level})")
+        logging.getLogger().setLevel(log_level)
+
+# Additional debug information for troubleshooting
+if log_level <= logging.DEBUG:
+    print(
+        f"DEBUG: buunstack logger initialized - level={logger.level}, handlers={len(logger.handlers)}"
+    )
 
 
 class SecretStore:
     """
-    Simple secrets management for JupyterHub with Vault backend.
+    Secure secrets management with JupyterHub API authentication.
 
-    SecretStore provides a secure interface for managing secrets in JupyterHub
-    environments using HashiCorp Vault as the backend storage. It supports
-    automatic OIDC token refresh via Keycloak integration and provides both
-    manual and background token management options.
-
-    This class implements the singleton pattern to ensure only one instance
-    exists per user session, preventing duplicate background refresh threads.
-
-    Attributes
-    ----------
-    auto_token_refresh : bool
-        Whether automatic token refresh is enabled.
-    refresh_buffer_seconds : int
-        Seconds before token expiry to trigger refresh.
-    background_refresh_interval : int
-        Seconds between background refresh checks.
-    username : str or None
-        JupyterHub username from environment.
-    vault_addr : str or None
-        Vault server address from environment.
-    base_path : str
-        Base path for user's secrets in Vault.
+    Uses JupyterHub's vault-token API endpoint to obtain Vault tokens
+    by exchanging auth_state JWT. Implements singleton pattern for
+    consistent state across imports.
 
     Examples
     --------
     >>> secrets = SecretStore()
     >>> secrets.put('api-keys', openai='sk-123', github='ghp-456')
-    >>> data = secrets.get('api-keys')
-    >>> print(data['openai'])
-    'sk-123'
-    >>> # Or get specific field directly
     >>> openai_key = secrets.get('api-keys', field='openai')
     >>> print(openai_key)
     'sk-123'
@@ -65,204 +64,85 @@ class SecretStore:
     _initialized = False
 
     def __new__(cls, *args, **kwargs):
+        """Return singleton SecretStore instance."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(
-        self,
-        auto_token_refresh: bool = True,
-        refresh_buffer_seconds: int = 300,
-        background_refresh_interval: int = 1800,
-    ):
+    def __init__(self):
         """
-        Initialize SecretStore with authentication and configuration.
+        Initialize SecretStore with JupyterHub API authentication.
 
-        Note: Due to singleton pattern, parameters are only used on the first
-        instantiation. Subsequent calls return the existing instance with
-        its original configuration.
-
-        Parameters
-        ----------
-        auto_token_refresh : bool, optional
-            Enable automatic token refresh using Keycloak OIDC, by default True.
-            Requires KEYCLOAK_HOST, KEYCLOAK_REALM, and JUPYTERHUB_OIDC_REFRESH_TOKEN
-            environment variables. Only used on first instantiation.
-        refresh_buffer_seconds : int, optional
-            Seconds before token expiry to trigger refresh, by default 300.
-            Only used when auto_token_refresh is True. Only used on first instantiation.
-        background_refresh_interval : int, optional
-            Seconds between background refresh checks, by default 1800.
-            Only used when background refresh is started. Only used on first instantiation.
-
-        Raises
-        ------
-        ValueError
-            If required environment variables are missing:
-            - JUPYTERHUB_USER: JupyterHub username
-            - VAULT_ADDR: Vault server address
-            - JUPYTERHUB_OIDC_ACCESS_TOKEN: Initial access token
-            - KEYCLOAK_HOST, KEYCLOAK_REALM: Required for auto_token_refresh
-        ConnectionError
-            If unable to connect to Vault server or authenticate.
-
-        Examples
-        --------
-        >>> # Basic usage with auto-refresh
-        >>> secrets = SecretStore()
-
-        >>> # Manual token management
-        >>> secrets = SecretStore(auto_token_refresh=False)
-
-        >>> # Custom timing
-        >>> secrets = SecretStore(
-        ...     refresh_buffer_seconds=600,
-        ...     background_refresh_interval=3600
-        ... )
+        Uses JupyterHub's vault-token API endpoint to exchange
+        auth_state JWT for Vault tokens.
         """
         if self._initialized:
             return
 
-        self.auto_token_refresh = auto_token_refresh
-        self.refresh_buffer_seconds = refresh_buffer_seconds
-        self.background_refresh_interval = background_refresh_interval
-
         self.username = os.getenv("JUPYTERHUB_USER")
         self.vault_addr = os.getenv("VAULT_ADDR")
-
-        if self.auto_token_refresh:
-            self.keycloak_host = os.getenv("KEYCLOAK_HOST")
-            self.keycloak_realm = os.getenv("KEYCLOAK_REALM")
-            self.keycloak_client_id = os.getenv("KEYCLOAK_CLIENT_ID", "jupyterhub")
-            self.refresh_token = os.getenv("JUPYTERHUB_OIDC_REFRESH_TOKEN")
-
-        self.access_token = os.getenv("JUPYTERHUB_OIDC_ACCESS_TOKEN")
-        self.token_expiry = (
-            self._get_token_expiry(self.access_token) if self.access_token else None
-        )
-
-        self.client = hvac.Client(url=self.vault_addr, verify=False)
-
-        self._background_refresher = None
-
-        self._authenticate_vault()
-
         self.base_path = f"jupyter/users/{self.username}"
 
-        logger.info(f"SecretStore initialized for user: {self.username}")
-        logger.info(
-            f"Auto token refresh: {'enabled' if self.auto_token_refresh else 'disabled'}"
-        )
+        # Using pre-acquired Vault token from notebook spawn
 
-        if self.auto_token_refresh and self.token_expiry:
-            logger.info(f"Token expires at: {self.token_expiry}")
+        # Initialize Vault client
+        self.client = hvac.Client(url=self.vault_addr, verify=False)
+
+        # Attempt authentication
+        self._authenticate_vault()
+
+        logger.info(f"SecretStore initialized for user: {self.username}")
+        logger.info("Using user-specific Vault token authentication")
 
         self._initialized = True
 
-    def _get_token_expiry(self, token: str) -> datetime | None:
-        """Extract expiry time from JWT token"""
-        if not token:
-            return None
-
-        try:
-            payload = jwt.decode(token, options={"verify_signature": False})
-            exp = payload.get("exp")
-            if exp:
-                return datetime.fromtimestamp(exp)
-
-            # Fallback to iat + 1 hour
-            iat = payload.get("iat")
-            if iat:
-                return datetime.fromtimestamp(iat + 3600)
-        except Exception as e:
-            logger.warning(f"Could not decode token expiry: {e}")
-
-        return datetime.now() + timedelta(hours=1)
-
-    def _is_token_valid(self) -> bool:
-        """Check if current token is still valid"""
-        if not self.auto_token_refresh or not self.token_expiry:
-            return True  # Assume valid if refresh is disabled
-
-        time_until_expiry = (self.token_expiry - datetime.now()).total_seconds()
-        return time_until_expiry > self.refresh_buffer_seconds
-
-    def _refresh_keycloak_tokens(self) -> bool:
-        """Refresh tokens using Keycloak refresh token"""
-        if not self.auto_token_refresh:
-            return False
-
-        if not self.refresh_token or not self.keycloak_host or not self.keycloak_realm:
-            logger.error("Missing refresh token or Keycloak configuration")
-            return False
-
-        token_url = f"https://{self.keycloak_host}/realms/{self.keycloak_realm}/protocol/openid-connect/token"
-
-        try:
-            logger.info("Refreshing tokens from Keycloak...")
-            response = requests.post(
-                token_url,
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": self.refresh_token,
-                    "client_id": self.keycloak_client_id,
-                },
-                verify=False,
-            )
-
-            if response.status_code == 200:
-                tokens = response.json()
-
-                # Update tokens
-                self.access_token = tokens["access_token"]
-                if "refresh_token" in tokens:
-                    self.refresh_token = tokens["refresh_token"]
-
-                # Update environment variables
-                os.environ["JUPYTERHUB_OIDC_ACCESS_TOKEN"] = self.access_token
-                if "refresh_token" in tokens:
-                    os.environ["JUPYTERHUB_OIDC_REFRESH_TOKEN"] = self.refresh_token
-
-                # Update token expiry
-                self.token_expiry = self._get_token_expiry(self.access_token)
-
-                logger.info("✅ Tokens refreshed successfully")
-                return True
-            else:
-                logger.error(
-                    f"Token refresh failed: {response.status_code} - {response.text}"
-                )
-                return False
-
-        except Exception as e:
-            logger.error(f"Exception during token refresh: {e}")
-            return False
-
     def _authenticate_vault(self):
-        """Authenticate with Vault using current access token"""
-        if not self.access_token:
-            raise ValueError("No access token available")
+        """
+        Authenticate with Vault using user-specific token from notebook spawn.
 
-        try:
-            self.client.auth.jwt.jwt_login(
-                role="jupyter-token", jwt=self.access_token, path="jwt"
+        Raises
+        ------
+        Exception
+            If user-specific Vault token is not available.
+        """
+        vault_token = os.getenv("NOTEBOOK_VAULT_TOKEN")
+        if not vault_token:
+            raise Exception(
+                "No user-specific Vault token available. "
+                "Please restart your notebook server."
             )
-            logger.info("✅ Authenticated with Vault successfully")
-        except Exception as e:
-            logger.error(f"Vault authentication failed: {e}")
-            raise
+
+        self.client.token = vault_token
+        logger.info("✅ Using user-specific Vault token from notebook spawn")
 
     def _ensure_authenticated(self):
-        """Ensure we have valid tokens and Vault authentication"""
-        if self.auto_token_refresh and not self._is_token_valid():
-            logger.info("Token invalid or expiring soon")
+        """
+        Ensure we have valid Vault authentication with token renewal.
+        """
+        try:
+            if self.client.is_authenticated():
+                # Check if token needs renewal (if renewable and close to expiry)
+                try:
+                    token_info = self.client.auth.token.lookup_self()
+                    ttl = token_info.get("data", {}).get("ttl", 0)
+                    renewable = token_info.get("data", {}).get("renewable", False)
 
-            if self._refresh_keycloak_tokens():
-                self._authenticate_vault()
-            else:
-                raise Exception(
-                    "Failed to refresh tokens. Manual re-authentication required."
-                )
+                    # Renew if TTL < 10 minutes and renewable
+                    if renewable and ttl > 0 and ttl < 600:
+                        logger.info(f"Renewing Vault token (TTL: {ttl}s)")
+                        self.client.auth.token.renew_self()
+                        logger.info("✅ Vault token renewed successfully")
+
+                except Exception as e:
+                    logger.warning(f"Token renewal check failed: {e}")
+                return
+        except Exception:
+            pass
+
+        # Token expired or invalid - no fallback available with user-specific tokens
+        raise Exception(
+            "User-specific Vault token expired and cannot be refreshed. Please restart your notebook server."
+        )
 
     def put(self, key: str, **kwargs: Any) -> None:
         """
@@ -432,20 +312,24 @@ class SecretStore:
             logger.warning(f'Could not get secret "{key}": {e}')
             raise KeyError(f"Secret '{key}' not found") from e
 
-    def delete(self, key: str) -> None:
+    def delete(self, key: str, field: str | None = None) -> None:
         """
-        Delete a secret from your personal storage.
+        Delete a secret or a specific field from your personal storage.
 
-        Permanently removes the secret and all its versions from Vault.
-        This operation cannot be undone.
+        If field is None, permanently removes the entire secret and all its versions.
+        If field is specified, removes only that field from the secret.
 
         Parameters
         ----------
         key : str
-            The key/name of the secret to delete.
+            The key/name of the secret to delete or modify.
+        field : str, optional
+            Specific field to delete from the secret. If None, deletes entire secret.
 
         Raises
         ------
+        KeyError
+            If the key or field doesn't exist.
         ConnectionError
             If unable to connect to Vault server.
         hvac.exceptions.Forbidden
@@ -456,20 +340,66 @@ class SecretStore:
         Examples
         --------
         >>> secrets = SecretStore()
+        >>> # Delete entire secret
         >>> secrets.delete('old-api-key')
-        >>> # Secret is permanently removed
+        >>>
+        >>> # Delete only specific field
+        >>> secrets.put('credentials', github='token123', aws='secret456')
+        >>> secrets.delete('credentials', field='github')
+        >>> # Now only 'aws' field remains
         """
         self._ensure_authenticated()
 
         path = f"{self.base_path}/{key}"
-        try:
-            self.client.secrets.kv.v2.delete_metadata_and_all_versions(
-                path=path, mount_point="secret"
-            )
-            logger.info(f"Deleted secret: {key}")
-        except Exception as e:
-            logger.error(f'Failed to delete secret "{key}": {e}')
-            raise
+
+        if field is None:
+            # Delete entire secret
+            try:
+                self.client.secrets.kv.v2.delete_metadata_and_all_versions(
+                    path=path, mount_point="secret"
+                )
+                logger.info(f"Deleted secret: {key}")
+            except Exception as e:
+                logger.error(f'Failed to delete secret "{key}": {e}')
+                raise
+        else:
+            # Delete specific field only
+            try:
+                # First, get the current secret
+                response = self.client.secrets.kv.v2.read_secret_version(
+                    path=path, mount_point="secret", raise_on_deleted_version=False
+                )
+                if response and "data" in response and "data" in response["data"]:
+                    data = response["data"]["data"]
+
+                    # Check if field exists
+                    if field not in data:
+                        raise KeyError(f"Field '{field}' not found in secret '{key}'")
+
+                    # Remove the field
+                    del data[field]
+
+                    # If no fields remain, delete the entire secret
+                    if not data:
+                        self.client.secrets.kv.v2.delete_metadata_and_all_versions(
+                            path=path, mount_point="secret"
+                        )
+                        logger.info(f"Deleted secret '{key}' (no fields remaining)")
+                    else:
+                        # Update the secret without the deleted field
+                        self.client.secrets.kv.v2.create_or_update_secret(
+                            path=path, secret=data, mount_point="secret"
+                        )
+                        logger.info(f"Deleted field '{field}' from secret '{key}'")
+                else:
+                    raise KeyError(f"Secret '{key}' not found")
+            except KeyError:
+                raise
+            except Exception as e:
+                logger.error(
+                    f"Failed to delete field '{field}' from secret '{key}': {e}"
+                )
+                raise
 
     def list(self) -> list[str]:
         """
@@ -505,236 +435,35 @@ class SecretStore:
 
     def get_status(self) -> dict[str, Any]:
         """
-        Get comprehensive status information about the SecretStore instance.
-
-        Returns detailed information about configuration, authentication status,
-        token validity, and background refresh status.
+        Get status information about the SecretStore instance.
 
         Returns
         -------
         dict[str, Any]
             Status dictionary containing:
             - username: JupyterHub username
-            - auto_token_refresh: Whether auto-refresh is enabled
-            - has_access_token: Whether access token is available
             - vault_addr: Vault server address
-            - has_refresh_token: Whether refresh token is available (if auto_token_refresh=True)
-            - keycloak_configured: Whether Keycloak settings are configured (if auto_token_refresh=True)
-            - token_expires_at: Token expiration time (if available)
-            - token_expires_in_seconds: Seconds until token expires (if available)
-            - background_refresher_running: Whether background refresher is active
+            - authentication_method: Authentication method used
+            - vault_authenticated: Whether Vault client is authenticated
 
         Examples
         --------
         >>> secrets = SecretStore()
         >>> status = secrets.get_status()
         >>> print(f"User: {status['username']}")
-        >>> print(f"Token expires in: {status.get('token_expires_in_seconds', 'N/A')} seconds")
         """
         status = {
             "username": self.username,
-            "auto_token_refresh": self.auto_token_refresh,
-            "has_access_token": bool(self.access_token),
             "vault_addr": self.vault_addr,
+            "authentication_method": "User-specific Vault token",
         }
 
-        if self.auto_token_refresh:
-            status.update(
-                {
-                    "has_refresh_token": bool(self.refresh_token),
-                    "keycloak_configured": bool(
-                        self.keycloak_host and self.keycloak_realm
-                    ),
-                }
-            )
-
-            if self.token_expiry:
-                time_remaining = (self.token_expiry - datetime.now()).total_seconds()
-                status.update(
-                    {
-                        "token_valid": self._is_token_valid(),
-                        "token_expiry": self.token_expiry.isoformat(),
-                        "seconds_remaining": max(0, time_remaining),
-                        "minutes_remaining": max(0, time_remaining / 60),
-                    }
-                )
+        try:
+            status["vault_authenticated"] = self.client.is_authenticated()
+        except Exception:
+            status["vault_authenticated"] = False
 
         return status
-
-    def start_background_refresh(self) -> "BackgroundRefresher":
-        """
-        Start automatic background token refreshing.
-
-        Begins a background thread that periodically checks and refreshes
-        the access token before it expires. Only available when
-        auto_token_refresh is enabled.
-
-        Returns
-        -------
-        BackgroundRefresher
-            The background refresher instance that can be used to monitor
-            or control the refresh process.
-
-        Raises
-        ------
-        ValueError
-            If auto_token_refresh is False. Background refresh requires
-            automatic token refresh to be enabled.
-
-        Examples
-        --------
-        >>> secrets = SecretStore(auto_token_refresh=True)
-        >>> refresher = secrets.start_background_refresh()
-        >>> status = refresher.get_status()
-        >>> print(f"Background refresh running: {status['running']}")
-        """
-        if not self.auto_token_refresh:
-            raise ValueError("Background refresh requires auto_token_refresh=True")
-
-        if self._background_refresher is None:
-            self._background_refresher = BackgroundRefresher(
-                self, interval_seconds=self.background_refresh_interval
-            )
-
-        self._background_refresher.start()
-        return self._background_refresher
-
-    def stop_background_refresh(self) -> None:
-        """
-        Stop the background token refresher.
-
-        Stops the background thread that was refreshing tokens automatically.
-        It's safe to call this method even if no background refresher is running.
-
-        Examples
-        --------
-        >>> secrets = SecretStore()
-        >>> refresher = secrets.start_background_refresh()
-        >>> # ... do some work ...
-        >>> secrets.stop_background_refresh()
-        """
-        if self._background_refresher:
-            self._background_refresher.stop()
-
-
-class BackgroundRefresher:
-    """
-    Background token refresher for automatic token management.
-
-    This class runs in a separate daemon thread and periodically checks if
-    the access token needs to be refreshed, automatically handling the refresh
-    process to maintain uninterrupted access to Vault.
-
-    Attributes
-    ----------
-    secret_store : SecretStore
-        The SecretStore instance to refresh tokens for.
-    interval_seconds : int
-        Seconds between refresh checks.
-    refresh_count : int
-        Number of successful refreshes performed.
-    last_refresh : datetime or None
-        Timestamp of the last successful refresh.
-
-    Examples
-    --------
-    >>> secrets = SecretStore(auto_token_refresh=True)
-    >>> refresher = secrets.start_background_refresh()
-    >>> # Refresher runs automatically in background
-    >>> status = refresher.get_status()
-    >>> print(f"Refreshes performed: {status['refresh_count']}")
-    """
-
-    def __init__(self, secret_store: SecretStore, interval_seconds: int = 1800):
-        """
-        Initialize the background refresher.
-
-        Parameters
-        ----------
-        secret_store : SecretStore
-            The SecretStore instance to manage tokens for.
-        interval_seconds : int, optional
-            Seconds between refresh checks, by default 1800 (30 minutes).
-        """
-        self.secret_store = secret_store
-        self.interval_seconds = interval_seconds
-        self._stop_event = threading.Event()
-        self._thread = None
-        self.refresh_count = 0
-        self.last_refresh = None
-
-    def start(self) -> None:
-        """
-        Start the background refresh thread.
-
-        Creates and starts a daemon thread that will periodically check
-        and refresh tokens. Safe to call multiple times.
-        """
-        if self._thread is None or not self._thread.is_alive():
-            self._stop_event.clear()
-            self._thread = threading.Thread(target=self._refresh_loop, daemon=True)
-            self._thread.start()
-            logger.info(
-                f"Started background refresher (interval: {self.interval_seconds}s)"
-            )
-
-    def stop(self) -> None:
-        """
-        Stop the background refresh thread.
-
-        Signals the refresh thread to stop and waits up to 5 seconds
-        for it to finish gracefully.
-        """
-        if self._thread and self._thread.is_alive():
-            self._stop_event.set()
-            self._thread.join(timeout=5)
-            logger.info("Stopped background refresher")
-
-    def _refresh_loop(self):
-        while not self._stop_event.is_set():
-            if self._stop_event.wait(self.interval_seconds):
-                break
-
-            try:
-                if self.secret_store._refresh_keycloak_tokens():
-                    self.secret_store._authenticate_vault()
-                    self.refresh_count += 1
-                    self.last_refresh = datetime.now()
-                    logger.info(
-                        f"✅ Background refresh #{self.refresh_count} successful"
-                    )
-                else:
-                    logger.error("❌ Background refresh failed")
-            except Exception as e:
-                logger.error(f"Exception in background refresh: {e}")
-
-    def get_status(self) -> dict[str, Any]:
-        """
-        Get the current status of the background refresher.
-
-        Returns
-        -------
-        dict[str, Any]
-            Status dictionary containing:
-            - running: Whether the refresh thread is active
-            - refresh_count: Number of successful refreshes performed
-            - last_refresh: ISO timestamp of last successful refresh (or None)
-            - interval_seconds: Configured refresh interval
-
-        Examples
-        --------
-        >>> refresher = secrets.start_background_refresh()
-        >>> status = refresher.get_status()
-        >>> print(f"Running: {status['running']}, Count: {status['refresh_count']}")
-        """
-        return {
-            "running": self._thread and self._thread.is_alive(),
-            "refresh_count": self.refresh_count,
-            "last_refresh": self.last_refresh.isoformat()
-            if self.last_refresh
-            else None,
-            "interval_seconds": self.interval_seconds,
-        }
 
 
 # Utility functions
@@ -817,7 +546,7 @@ def put_env_to_secrets(
 
     >>> # Store with custom key
     >>> put_env_to_secrets(secrets, {'API_KEY': 'secret'}, 'production-config')
-    'jupyter/users/username/environment'
+    'jupyter/users/username/production-config'
     """
     # Convert all values to strings and use **kwargs for put()
     string_env_dict = {k: str(v) for k, v in env_dict.items()}

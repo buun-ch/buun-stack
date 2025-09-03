@@ -76,3 +76,7 @@ strict_equality = true
 minversion = "6.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
+
+[tool.pyright]
+reportUnusedParameter = "none"
+reportUnusedVariable = "warning"

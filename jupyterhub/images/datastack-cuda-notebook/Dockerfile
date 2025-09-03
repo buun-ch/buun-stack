@@ -146,12 +146,6 @@ RUN pip install \
     tavily-python \
     tweet-preprocessor
 
-# Install buunstack package
-COPY *.whl /opt/
-RUN pip install /opt/*.whl && \
-    fix-permissions "${CONDA_DIR}" && \
-    fix-permissions "/home/${NB_USER}"
-
 # Install PyTorch with pip (https://pytorch.org/get-started/locally/)
 # langchain-openai must be updated to avoid pydantic v2 error
 # https://github.com/run-llama/llama_index/issues/16540https://github.com/run-llama/llama_index/issues/16540
@@ -164,6 +158,11 @@ RUN pip install --no-cache-dir --extra-index-url=https://pypi.nvidia.com --index
     fix-permissions "${CONDA_DIR}" && \
     fix-permissions "/home/${NB_USER}"
 
+# Install buunstack package
+COPY *.whl /opt/
+RUN pip install /opt/*.whl && \
+    fix-permissions "${CONDA_DIR}" && \
+    fix-permissions "/home/${NB_USER}"
 
 WORKDIR "${HOME}"
 EXPOSE 4040

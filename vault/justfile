@@ -136,6 +136,29 @@ create-admin-token root_token='': check-env
     # Create token with admin policy
     vault token create -policy=admin
 
+# Create token with specified policy and store in Vault
+create-token-and-store policy path ttl="24h" root_token='': check-env
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_root_env_setup }}
+
+    echo "Creating token with policy '{{ policy }}'..."
+    # Create token with specified policy
+    token_output=$(vault token create -policy={{ policy }} -ttl={{ ttl }} -format=json)
+    service_token=$(echo "${token_output}" | jq -r '.auth.client_token')
+
+    echo "Storing token in Vault at path '{{ path }}'..."
+    # Store the token in Vault itself for later retrieval
+    vault kv put -mount=secret {{ path }} token="${service_token}"
+
+    echo "✓ Token created and stored in Vault"
+    echo "Policy: {{ policy }}"
+    echo "Path: secret/{{ path }}"
+    echo "Token (first 20 chars): ${service_token:0:20}..."
+    echo ""
+    echo "To retrieve the token later:"
+    echo "  just vault::get {{ path }} token"
+
 # Create admin policy for Vault
 create-admin-policy root_token='':
     #!/bin/bash
@@ -159,6 +182,12 @@ create-admin-policy root_token='':
     }
     path "sys/policies/acl/*" {
         capabilities = ["create", "read", "update", "delete", "list"]
+    }
+    path "auth/token/create" {
+        capabilities = ["create", "update"]
+    }
+    path "auth/token/create/*" {
+        capabilities = ["create", "update"]
     }
     EOF
     echo "Admin policy created successfully"
@@ -287,7 +316,7 @@ setup-jwt-auth audience role policy='default':
         user_claim="preferred_username" \
         token_policies="{{ policy }}" \
         ttl="1h" \
-        max_ttl="24h"
+        max_ttl="48h"
 
     echo "✓ JWT authentication configured"
     echo "  Audience: {{ audience }}"

@@ -1,4 +1,21 @@
 hub:
+  extraEnv:
+    JUPYTERHUB_CRYPT_KEY: {{ .Env.JUPYTERHUB_CRYPT_KEY | quote }}
+
+  # Install packages at container startup
+  extraFiles:
+    startup.sh:
+      mountPath: /usr/local/bin/startup.sh
+      mode: 0755
+      stringData: |
+        #!/bin/bash
+        pip install --no-cache-dir hvac==2.3.0
+        exec jupyterhub --config /usr/local/etc/jupyterhub/jupyterhub_config.py --upgrade-db
+
+  # Override the default command to run our startup script first
+  command:
+    - /usr/local/bin/startup.sh
+
   config:
     JupyterHub:
       authenticator_class: generic-oauth
@@ -24,48 +41,97 @@ hub:
         - profile
         - email
 
-{{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
   extraConfig:
-    01-vault-integration: |
-      import os
+    pre-spawn-hook: |
+      # Set environment variables for spawned containers
+      import hvac
 
       async def pre_spawn_hook(spawner):
-          """Pass OIDC tokens and Vault config to notebook environment"""
-          auth_state = await spawner.user.get_auth_state()
-          if auth_state:
-              if 'access_token' in auth_state:
-                  spawner.environment['JUPYTERHUB_OIDC_ACCESS_TOKEN'] = auth_state['access_token']
-              if 'refresh_token' in auth_state:
-                  spawner.environment['JUPYTERHUB_OIDC_REFRESH_TOKEN'] = auth_state['refresh_token']
-              if 'id_token' in auth_state:
-                  spawner.environment['JUPYTERHUB_OIDC_ID_TOKEN'] = auth_state['id_token']
-              if 'expires_at' in auth_state:
-                  spawner.environment['JUPYTERHUB_OIDC_TOKEN_EXPIRES_AT'] = str(auth_state['expires_at'])
+          """Set essential environment variables for spawned containers"""
+          # PostgreSQL configuration
+          spawner.environment["POSTGRES_HOST"] = "postgres-cluster-rw.postgres"
+          spawner.environment["POSTGRES_PORT"] = "5432"
 
-              # Add Keycloak configuration for token refresh
-              spawner.environment['KEYCLOAK_HOST'] = '{{ .Env.KEYCLOAK_HOST }}'
-              spawner.environment['KEYCLOAK_REALM'] = '{{ .Env.KEYCLOAK_REALM }}'
-              spawner.environment['KEYCLOAK_CLIENT_ID'] = 'jupyterhub'
+          # JupyterHub API configuration
+          spawner.environment["JUPYTERHUB_API_URL"] = "http://hub:8081/hub/api"
+
+          # Logging configuration
+          spawner.environment["BUUNSTACK_LOG_LEVEL"] = "{{ .Env.JUPYTER_BUUNSTACK_LOG_LEVEL }}"
+
+          # Create user-specific Vault token directly
+          try:
+              username = spawner.user.name
+
+              # Step 1: Initialize admin Vault client
+              vault_client = hvac.Client(url="{{ .Env.VAULT_ADDR }}", verify=False)
+              vault_client.token = "{{ .Env.JUPYTERHUB_VAULT_TOKEN }}"
+
+              if not vault_client.is_authenticated():
+                  raise Exception("Admin token is not authenticated")
+
+              # Step 2: Create user-specific policy
+              user_policy_name = "jupyter-user-{}".format(username)
+              user_path = "secret/data/jupyter/users/{}/*".format(username)
+              user_metadata_path = "secret/metadata/jupyter/users/{}/*".format(username)
+              user_base_path = "secret/metadata/jupyter/users/{}".format(username)
+
+              user_policy = (
+                  "# User-specific policy for {}\n".format(username) +
+                  "path \"{}\" ".format(user_path) + "{\n" +
+                  "    capabilities = [\"create\", \"update\", \"read\", \"delete\", \"list\"]\n" +
+                  "}\n\n" +
+                  "path \"{}\" ".format(user_metadata_path) + "{\n" +
+                  "    capabilities = [\"list\", \"read\", \"delete\", \"update\"]\n" +
+                  "}\n\n" +
+                  "path \"{}\" ".format(user_base_path) + "{\n" +
+                  "    capabilities = [\"list\"]\n" +
+                  "}\n\n" +
+                  "# Read access to shared resources\n" +
+                  "path \"secret/data/jupyter/shared/*\" {\n" +
+                  "    capabilities = [\"read\", \"list\"]\n" +
+                  "}\n\n" +
+                  "path \"secret/metadata/jupyter/shared\" {\n" +
+                  "    capabilities = [\"list\"]\n" +
+                  "}\n\n" +
+                  "# Token management capabilities\n" +
+                  "path \"auth/token/lookup-self\" {\n" +
+                  "    capabilities = [\"read\"]\n" +
+                  "}\n\n" +
+                  "path \"auth/token/renew-self\" {\n" +
+                  "    capabilities = [\"update\"]\n" +
+                  "}"
+              )
+
+              # Write user-specific policy
+              try:
+                  vault_client.sys.create_or_update_policy(user_policy_name, user_policy)
+                  spawner.log.info("✅ Created policy: {}".format(user_policy_name))
+              except Exception as policy_e:
+                  spawner.log.warning("Policy creation failed (may already exist): {}".format(policy_e))
+
+              # Step 3: Create user-specific token
+              token_response = vault_client.auth.token.create(
+                  policies=[user_policy_name],
+                  ttl="1h",
+                  renewable=True,
+                  display_name="notebook-{}".format(username)
+              )
+
+              user_vault_token = token_response["auth"]["client_token"]
+              lease_duration = token_response["auth"].get("lease_duration", 3600)
+
+              # Set user-specific Vault token as environment variable
+              spawner.environment["NOTEBOOK_VAULT_TOKEN"] = user_vault_token
+
+              spawner.log.info("✅ User-specific Vault token created for {} (expires in {}s, renewable)".format(username, lease_duration))
+
+          except Exception as e:
+              spawner.log.error("Failed to create user-specific Vault token for {}: {}".format(spawner.user.name, e))
+              import traceback
+              spawner.log.error("Full traceback: {}".format(traceback.format_exc()))
 
       c.Spawner.pre_spawn_hook = pre_spawn_hook
-{{- end }}
-    02-postgres-integration: |
-      from functools import wraps
 
-      # Store the original pre_spawn_hook if it exists
-      original_hook = c.Spawner.pre_spawn_hook if hasattr(c.Spawner, 'pre_spawn_hook') else None
-
-      async def postgres_pre_spawn_hook(spawner):
-          """Add PostgreSQL connection information to notebook environment"""
-          # Call the original hook first if it exists
-          if original_hook:
-              await original_hook(spawner)
-
-          # Add PostgreSQL configuration
-          spawner.environment['POSTGRES_HOST'] = 'postgres-cluster-rw.postgres'
-          spawner.environment['POSTGRES_PORT'] = '5432'
-
-      c.Spawner.pre_spawn_hook = postgres_pre_spawn_hook
 
   podSecurityContext:
     fsGroup: {{ .Env.JUPYTER_FSGID }}
@@ -85,23 +151,8 @@ singleuser:
     {{ end -}}
     capacity: 10Gi
 
-{{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
   extraEnv:
     VAULT_ADDR: "{{ .Env.VAULT_ADDR }}"
-    KEYCLOAK_HOST: "{{ .Env.KEYCLOAK_HOST }}"
-    KEYCLOAK_REALM: "{{ .Env.KEYCLOAK_REALM }}"
-
-  # lifecycleHooks:
-  #   postStart:
-  #     exec:
-  #       command:
-  #         - /bin/bash
-  #         - -c
-  #         - |
-  #           # Install hvac for Vault integration
-  #           mamba install hvac requests
-  #           echo "Vault integration ready"
-{{- end }}
   networkPolicy:
     egress:
       - to:
@@ -129,7 +180,6 @@ singleuser:
         ports:
           - port: 4000
             protocol: TCP
-{{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
       - to:
           - namespaceSelector:
               matchLabels:
@@ -137,9 +187,6 @@ singleuser:
         ports:
           - port: 8200
             protocol: TCP
-          - port: 8201
-            protocol: TCP
-{{- end }}
       - to:
         - ipBlock:
             cidr: 0.0.0.0/0

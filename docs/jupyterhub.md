@@ -110,7 +110,7 @@ JUPYTER_PYTHON_KERNEL_TAG=python-3.12-1
 
 ### Overview
 
-Vault integration enables secure secrets management directly from Jupyter notebooks without re-authentication. Users can store and retrieve API keys, database credentials, and other sensitive data securely.
+Vault integration enables secure secrets management directly from Jupyter notebooks using user-specific Vault tokens. Each user receives their own isolated Vault token during notebook spawn, ensuring complete separation of secrets between users. Users can store and retrieve API keys, database credentials, and other sensitive data securely with automatic token renewal.
 
 ### Prerequisites
 
@@ -133,7 +133,7 @@ just jupyterhub::install
 Or configure manually:
 
 ```bash
-# Setup Vault JWT authentication for JupyterHub
+# Setup Vault integration (creates user-specific tokens)
 just jupyterhub::setup-vault-jwt-auth
 ```
 
@@ -144,11 +144,11 @@ With Vault integration enabled, use the `buunstack` package in notebooks:
 ```python
 from buunstack import SecretStore
 
-# Initialize (uses JupyterHub session authentication)
+# Initialize (uses pre-acquired user-specific token)
 secrets = SecretStore()
 
 # Store secrets
-secrets.put('api-keys', 
+secrets.put('api-keys',
     openai='sk-...',
     github='ghp_...',
     database_url='postgresql://...')
@@ -160,16 +160,17 @@ openai_key = secrets.get('api-keys', field='openai')
 # List all secrets
 secret_names = secrets.list()
 
-# Delete secrets
-secrets.delete('old-api-key')
+# Delete secrets or specific fields
+secrets.delete('old-api-key')  # Delete entire secret
+secrets.delete('api-keys', field='github')  # Delete only github field
 ```
 
 ### Security Features
 
-- **User isolation**: Each user can only access their own secrets
-- **Automatic token refresh**: Background token management prevents authentication failures
+- **User isolation**: Each user receives a unique Vault token with access only to their own secrets
+- **Automatic token renewal**: Tokens can be renewed to extend session lifetime
 - **Audit trail**: All secret access is logged in Vault
-- **No re-authentication**: Uses existing JupyterHub OIDC session
+- **Individual policies**: Each user has their own Vault policy restricting access to their namespace
 
 ## Storage Options
 
@@ -273,7 +274,8 @@ Check Vault connectivity and authentication:
 # In a notebook
 import os
 print("Vault Address:", os.getenv('VAULT_ADDR'))
-print("Access Token:", bool(os.getenv('JUPYTERHUB_OIDC_ACCESS_TOKEN')))
+print("JWT Token:", bool(os.getenv('NOTEBOOK_VAULT_JWT')))
+print("Vault Token:", bool(os.getenv('NOTEBOOK_VAULT_TOKEN')))
 
 # Test SecretStore
 from buunstack import SecretStore
@@ -295,12 +297,172 @@ just keycloak::update-client buunstack jupyterhub \
   "https://your-jupyter-host/hub/oauth_callback"
 ```
 
+## Implementation
+
+### User-Specific Vault Token System
+
+The `buunstack` SecretStore uses pre-created user-specific Vault tokens that are generated during notebook spawn, ensuring complete user isolation and secure access to individual secret namespaces.
+
+#### Architecture Overview
+
+```plain
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   JupyterHub    │    │     Notebook     │    │      Vault      │
+│                 │    │                  │    │                 │
+│  ┌───────────┐  │    │  ┌────────────┐  │    │  ┌───────────┐  │
+│  │Pre-spawn  │  │───►│  │SecretStore │  ├───►│  │User Token │  │
+│  │   Hook    │  │    │  │            │  │    │  │  + Policy │  │
+│  └───────────┘  │    │  └────────────┘  │    │  └───────────┘  │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+```
+
+#### Token Lifecycle
+
+1. **Pre-spawn Hook Setup**
+   - JupyterHub uses admin Vault token to access Vault API
+   - Creates user-specific Vault policy with restricted path access
+   - Generates new user-specific Vault token with the created policy
+   - Passes user token to notebook environment via `NOTEBOOK_VAULT_TOKEN`
+
+2. **SecretStore Initialization**
+   - Reads user-specific token from environment variable:
+     - `NOTEBOOK_VAULT_TOKEN` (User-specific Vault token)
+   - Uses token for all Vault operations within user's namespace
+
+3. **Token Validation**
+   - Before operations, checks token validity using `lookup_self`
+   - Verifies token TTL and renewable status
+
+4. **Automatic Token Renewal**
+   - If token TTL is low (< 10 minutes) and renewable, renews token
+   - Uses `renew_self` capability granted by user policy
+   - Logs renewal success for monitoring
+
+#### Code Flow
+
+```python
+def _ensure_authenticated(self):
+    # Check if current Vault token is valid
+    try:
+        if self.client.is_authenticated():
+            # Check if token needs renewal
+            token_info = self.client.auth.token.lookup_self()
+            ttl = token_info.get("data", {}).get("ttl", 0)
+            renewable = token_info.get("data", {}).get("renewable", False)
+
+            # Renew if TTL < 10 minutes and renewable
+            if renewable and ttl > 0 and ttl < 600:
+                self.client.auth.token.renew_self()
+                logger.info("✅ Vault token renewed successfully")
+            return
+    except Exception:
+        pass
+
+    # Token expired and cannot be refreshed
+    raise Exception("User-specific Vault token expired and cannot be refreshed. Please restart your notebook server.")
+```
+
+#### Key Design Decisions
+
+##### 1. User-Specific Token Creation
+
+- Each user receives a unique Vault token during notebook spawn
+- Individual policies ensure complete user isolation
+- Admin token used only during pre-spawn hook for token creation
+
+##### 2. Policy-Based Access Control
+
+- User policies restrict access to `secret/data/jupyter/users/{username}/*`
+- Each user can only access their own secret namespace
+- Token management capabilities (`lookup_self`, `renew_self`) included
+
+##### 3. Singleton Pattern
+
+- Single SecretStore instance per notebook session
+- Prevents multiple simultaneous authentications
+- Maintains consistent token state
+
+##### 4. Pre-created User Tokens
+
+- Tokens are created during notebook spawn via pre-spawn hook
+- Reduces initialization overhead in notebooks
+- Provides immediate access to user's secret namespace
+
+#### Error Handling
+
+```python
+# Primary error scenarios and responses:
+
+1. User token unavailable
+   → Token stored in NOTEBOOK_VAULT_TOKEN env var
+   → Prompt to restart notebook server if missing
+
+2. Vault token expired
+   → Automatic renewal using renew_self if renewable
+   → Restart notebook server required if not renewable
+
+3. Vault authentication failure
+   → Log detailed error information
+   → Check user policy and token configuration
+
+4. Network connectivity issues
+   → Built-in retry in hvac client
+   → Provide actionable error messages
+```
+
+#### Configuration
+
+Environment variables passed to notebooks:
+
+```yaml
+# JupyterHub pre_spawn_hook sets:
+spawner.environment:
+  # Core services
+  POSTGRES_HOST: 'postgres-cluster-rw.postgres'
+  POSTGRES_PORT: '5432'
+  JUPYTERHUB_API_URL: 'http://hub:8081/hub/api'
+  BUUNSTACK_LOG_LEVEL: 'info'  # or 'debug' for detailed logging
+
+  # Vault integration
+  NOTEBOOK_VAULT_TOKEN: '<User-specific Vault token>'
+  VAULT_ADDR: 'http://vault.vault.svc:8200'
+```
+
+#### Monitoring and Debugging
+
+Enable detailed logging for troubleshooting:
+
+```python
+# In notebook
+import os
+os.environ['BUUNSTACK_LOG_LEVEL'] = 'DEBUG'
+
+# Restart kernel and check logs
+from buunstack import SecretStore
+secrets = SecretStore()
+
+# Check authentication status
+status = secrets.get_status()
+print("Username:", status['username'])
+print("Vault Address:", status['vault_addr'])
+print("Authentication Method:", status['authentication_method'])
+print("Vault Authenticated:", status['vault_authenticated'])
+```
+
+#### Performance Characteristics
+
+- **Token renewal overhead**: ~10-50ms for renew_self call
+- **Memory usage**: Minimal (single token stored as string)
+- **Network traffic**: Only during token renewal (when TTL < 10 minutes)
+- **Vault impact**: Standard token operations (lookup_self, renew_self)
+
 ## Performance Considerations
 
 - **Image Size**: Buun-stack images are ~13GB, plan storage accordingly
 - **Pull Time**: Initial pulls take 5-15 minutes depending on network
 - **Resource Usage**: Data science workloads require adequate CPU/memory
 - **Storage**: NFS provides better performance for shared datasets
+- **Token Renewal**: User token renewal adds minimal overhead
 
 For production deployments, consider:
 
@@ -308,3 +470,4 @@ For production deployments, consider:
 - Using faster storage backends
 - Configuring resource limits per user
 - Setting up monitoring and alerts
+- Monitoring Vault token expiration and renewal patterns
