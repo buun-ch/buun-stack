@@ -34,6 +34,8 @@ hub:
       login_service: keycloak
       # username_claim: email
       username_claim: preferred_username
+      auth_refresh_age: 300  # Refresh auth token every 5 minutes
+      refresh_pre_spawn: true  # Refresh token before spawning server
 
     OAuthenticator:
       scope:
@@ -268,3 +270,10 @@ ingress:
   tls:
     - hosts:
         - {{ .Env.JUPYTERHUB_HOST }}
+
+cull:
+  enabled: true
+  timeout: 7200      # 2 hours idle timeout
+  every: 600         # Check every 10 minutes
+  adminUsers: true   # Also cull admin users' server pods
+  users: false       # Don't delete user accounts, only stop server pods
