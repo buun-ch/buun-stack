@@ -14,13 +14,13 @@ _vault_root_env_setup := '''
     if [ -z "${VAULT_TOKEN:-}" ]; then
         if [ "${VAULT_DEBUG}" = "true" ]; then
             echo "" >&2
-            echo "💡 To avoid entering Vault root token repeatedly:" >&2
+            echo "💡 To avoid entering Vault admin or root token repeatedly:" >&2
             echo "   • Set environment variable: export VAULT_TOKEN=your_root_token" >&2
             echo "   • or write it in .env.local file: VAULT_TOKEN=your_root_token" >&2
             echo "   • Use 1Password reference: VAULT_TOKEN=op://vault/root/token" >&2
             echo "" >&2
         fi
-        VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
+        VAULT_TOKEN=$(gum input --prompt="Vault admin or root token: " --password --width=100)
     elif [[ "${VAULT_TOKEN}" == op://* ]]; then
         if ! command -v op &>/dev/null; then
             echo "Error: 1Password CLI (op) is not installed." >&2
