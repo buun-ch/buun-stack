@@ -116,7 +116,7 @@ hub:
               import traceback
               spawner.log.error("Full traceback: {}".format(traceback.format_exc()))
 
-      c.Spawner.pre_spawn_hook = pre_spawn_hook
+      c.KubeSpawner.pre_spawn_hook = pre_spawn_hook
 
 
   podSecurityContext:

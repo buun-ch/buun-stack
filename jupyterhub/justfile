@@ -25,7 +25,7 @@ export NOTEBOOK_VAULT_TOKEN_MAX_TTL := env("NOTEBOOK_VAULT_TOKEN_MAX_TTL", "720h
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
 export VAULT_ADDR := env("VAULT_ADDR", "http://vault.vault.svc:8200")
-export JUPYTER_BUUNSTACK_LOG_LEVEL := env("JUPYTER_BUUNSTACK_LOG_LEVEL", "info")
+export JUPYTER_BUUNSTACK_LOG_LEVEL := env("JUPYTER_BUUNSTACK_LOG_LEVEL", "warning")
 
 [private]
 default:
