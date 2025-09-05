@@ -195,7 +195,7 @@ build-kernel-images:
     fi
 
 # Push Jupyter notebook kernel images
-push-kernel-images: build-kernel-images
+push-kernel-images:
     #!/bin/bash
     set -euo pipefail
     docker push ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG}
