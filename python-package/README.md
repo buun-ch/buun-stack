@@ -37,8 +37,15 @@ secrets.put('api-keys',
 api_keys = secrets.get('api-keys')
 openai_key = api_keys['openai_key']
 
+# Get specific field directly
+openai_key = secrets.get('api-keys', field='openai_key')
+
 # List all your secrets
 all_secrets = secrets.list()
+
+# List fields in a specific secret
+fields = secrets.list_fields('api-keys')
+print(f'Available fields: {fields}')  # ['openai_key', 'github_token', 'database_url']
 ```
 
 ### Configuration Options
@@ -57,6 +64,20 @@ secrets = SecretStore(
 status = secrets.get_status()
 print(f"JupyterHub sync enabled: {status['sync_with_jupyterhub']}")
 print(f"API configured: {status.get('jupyterhub_api_configured', False)}")
+```
+
+### Advanced Operations
+
+```python
+# Delete a specific field from a secret
+secrets.delete('api-keys', field='github_token')
+
+# Delete an entire secret
+secrets.delete('old-config')
+
+# Check if a field exists before accessing
+if 'openai_key' in secrets.list_fields('api-keys'):
+    key = secrets.get('api-keys', field='openai_key')
 ```
 
 ### Environment Variables Helper
