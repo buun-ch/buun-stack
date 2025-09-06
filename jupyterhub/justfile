@@ -8,7 +8,7 @@ export JUPYTERHUB_OIDC_CLIENT_SESSION_MAX := env("JUPYTERHUB_OIDC_CLIENT_SESSION
 export JUPYTERHUB_NFS_PV_ENABLED := env("JUPYTERHUB_NFS_PV_ENABLED", "")
 export JUPYTERHUB_STORAGE_CLASS := env("JUPYTERHUB_STORAGE_CLASS", "")
 export JUPYTERHUB_VAULT_INTEGRATION_ENABLED := env("JUPYTERHUB_VAULT_INTEGRATION_ENABLED", "")
-export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-24")
+export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-28")
 export KERNEL_IMAGE_BUUN_STACK_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_REPOSITORY", "buun-stack-notebook")
 export KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY", "buun-stack-cuda-notebook")
 export JUPYTER_PROFILE_MINIMAL_ENABLED := env("JUPYTER_PROFILE_MINIMAL_ENABLED", "false")
@@ -20,8 +20,10 @@ export JUPYTER_PROFILE_TENSORFLOW_ENABLED := env("JUPYTER_PROFILE_TENSORFLOW_ENA
 export JUPYTER_PROFILE_BUUN_STACK_ENABLED := env("JUPYTER_PROFILE_BUUN_STACK_ENABLED", "false")
 export JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED := env("JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED", "false")
 export IMAGE_REGISTRY := env("IMAGE_REGISTRY", "localhost:30500")
-export NOTEBOOK_VAULT_TOKEN_TTL := env("NOTEBOOK_VAULT_TOKEN_TTL", "1h")
-export NOTEBOOK_VAULT_TOKEN_MAX_TTL := env("NOTEBOOK_VAULT_TOKEN_MAX_TTL", "720h")
+export JUPYTERHUB_VAULT_TOKEN_TTL := env("JUPYTERHUB_VAULT_TOKEN_TTL", "720h")  # 30 days
+export JUPYTERHUB_VAULT_TOKEN_MAX_TTL := env("JUPYTERHUB_VAULT_TOKEN_MAX_TTL", "8760h")  # 1 year
+export NOTEBOOK_VAULT_TOKEN_TTL := env("NOTEBOOK_VAULT_TOKEN_TTL", "24h")  # 1 day
+export NOTEBOOK_VAULT_TOKEN_MAX_TTL := env("NOTEBOOK_VAULT_TOKEN_MAX_TTL", "168h")  # 7 days
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
 export VAULT_ADDR := env("VAULT_ADDR", "http://vault.vault.svc:8200")
@@ -221,12 +223,12 @@ create-jupyterhub-vault-token:
     #!/bin/bash
     set -euo pipefail
     echo "Creating JupyterHub Vault token with admin policy..."
-    echo "  TTL: ${NOTEBOOK_VAULT_TOKEN_TTL}"
-    echo "  Max TTL: ${NOTEBOOK_VAULT_TOKEN_MAX_TTL}"
+    echo "  TTL: ${JUPYTERHUB_VAULT_TOKEN_TTL}"
+    echo "  Max TTL: ${JUPYTERHUB_VAULT_TOKEN_MAX_TTL}"
 
     # JupyterHub needs admin privileges to read Keycloak credentials from Vault
     # Create token and store in Vault
-    just vault::create-token-and-store admin jupyterhub/vault-token ${NOTEBOOK_VAULT_TOKEN_TTL} ${NOTEBOOK_VAULT_TOKEN_MAX_TTL}
+    just vault::create-token-and-store admin jupyterhub/vault-token ${JUPYTERHUB_VAULT_TOKEN_TTL} ${JUPYTERHUB_VAULT_TOKEN_MAX_TTL}
 
     echo "✓ JupyterHub Vault token created and stored"
     echo ""

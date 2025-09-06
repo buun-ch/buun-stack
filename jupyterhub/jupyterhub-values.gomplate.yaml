@@ -1,6 +1,10 @@
 hub:
   extraEnv:
     JUPYTERHUB_CRYPT_KEY: {{ .Env.JUPYTERHUB_CRYPT_KEY | quote }}
+    JUPYTERHUB_VAULT_TOKEN: {{ .Env.JUPYTERHUB_VAULT_TOKEN | quote }}
+    VAULT_ADDR: {{ .Env.VAULT_ADDR | quote }}
+    NOTEBOOK_VAULT_TOKEN_TTL: {{ .Env.NOTEBOOK_VAULT_TOKEN_TTL | quote }}
+    NOTEBOOK_VAULT_TOKEN_MAX_TTL: {{ .Env.NOTEBOOK_VAULT_TOKEN_MAX_TTL | quote }}
 
   # Install packages at container startup
   extraFiles:
@@ -70,8 +74,16 @@ hub:
               username = spawner.user.name
 
               # Step 1: Initialize admin Vault client
-              vault_client = hvac.Client(url="{{ .Env.VAULT_ADDR }}", verify=False)
-              vault_client.token = "{{ .Env.JUPYTERHUB_VAULT_TOKEN }}"
+              import os
+              vault_addr = os.environ.get("VAULT_ADDR", "{{ .Env.VAULT_ADDR }}")
+              vault_token = os.environ.get("JUPYTERHUB_VAULT_TOKEN", "{{ .Env.JUPYTERHUB_VAULT_TOKEN }}")
+
+              spawner.log.info(f"pre_spawn_hook starting for {username}")
+              spawner.log.info(f"Vault address: {vault_addr}")
+              spawner.log.info(f"Vault token present: {bool(vault_token)}, length: {len(vault_token) if vault_token else 0}")
+
+              vault_client = hvac.Client(url=vault_addr, verify=False)
+              vault_client.token = vault_token
 
               if not vault_client.is_authenticated():
                   raise Exception("Admin token is not authenticated")
@@ -96,11 +108,16 @@ hub:
                   spawner.log.warning("Policy creation failed (may already exist): {}".format(policy_e))
 
               # Step 3: Create user-specific token
+              # Get TTL settings from environment variables
+              user_token_ttl = os.environ.get("NOTEBOOK_VAULT_TOKEN_TTL", "24h")
+              user_token_max_ttl = os.environ.get("NOTEBOOK_VAULT_TOKEN_MAX_TTL", "168h")
+
               token_response = vault_client.auth.token.create(
                   policies=[user_policy_name],
-                  ttl="1h",
+                  ttl=user_token_ttl,
                   renewable=True,
-                  display_name="notebook-{}".format(username)
+                  display_name="notebook-{}".format(username),
+                  explicit_max_ttl=user_token_max_ttl
               )
 
               user_vault_token = token_response["auth"]["client_token"]
@@ -109,7 +126,7 @@ hub:
               # Set user-specific Vault token as environment variable
               spawner.environment["NOTEBOOK_VAULT_TOKEN"] = user_vault_token
 
-              spawner.log.info("✅ User-specific Vault token created for {} (expires in {}s, renewable)".format(username, lease_duration))
+              spawner.log.info("✅ User-specific Vault token created for {} (TTL: {}s, renewable, max TTL: {})".format(username, lease_duration, user_token_max_ttl))
 
           except Exception as e:
               spawner.log.error("Failed to create user-specific Vault token for {}: {}".format(spawner.user.name, e))
@@ -266,8 +283,17 @@ singleuser:
 
 cull:
   enabled: true
+
+  # for production
   timeout: 7200      # 2 hours idle timeout
   every: 600         # Check every 10 minutes
+
+  # for testing
+  # timeout: 300       # 5 minutes idle timeout (for testing)                                          │ │
+  # every: 60          # Check every 1 minute (for testing)                                            │ │
+
+  # maxAge: 86400    # Maximum age of a server pod (1 day)
+
   adminUsers: true   # Also cull admin users' server pods
   users: false       # Don't delete user accounts, only stop server pods
 
