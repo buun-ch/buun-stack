@@ -450,3 +450,7 @@ write-policy name file:
     set -euo pipefail
     {{ _vault_root_env_setup }}
     vault policy write {{ name }} {{ file }}
+
+# Login to Vault using OIDC
+login:
+    @vault login -method=oidc
