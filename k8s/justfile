@@ -170,7 +170,7 @@ copy-regcred namespace:
     #!/bin/bash
     set -euo pipefail
     if ! kubectl get -n default secret regcred &>/dev/null; then
-        just regcred-create default
+        just create-regcred default
     fi
     if kubectl get -n {{ namespace }} secret regcred &>/dev/null; then
         kubectl delete -n {{ namespace }} secret regcred
