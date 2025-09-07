@@ -1,0 +1,20 @@
+ingress:
+  main:
+    enabled: true
+    annotations:
+      kubernetes.io/ingress.class: traefik
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    ingressClassName: traefik
+    hosts:
+      - host: {{ .Env.MINIFLUX_HOST }}
+        paths:
+          - path: /
+    tls:
+      - hosts:
+          - {{ .Env.MINIFLUX_HOST }}
+
+env:
+  DATABASE_URL: "postgresql://{{ .Env.MINIFLUX_DB_USERNAME }}:{{ .Env.MINIFLUX_DB_PASSWORD }}@postgres-cluster-rw.postgres:5432/{{ .Env.MINIFLUX_DB_NAME }}"
+
+postgresql:
+  enabled: false

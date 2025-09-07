@@ -1,0 +1,60 @@
+set fallback := true
+
+export MINIFLUX_NAMESPACE := env("MINIFLUX_NAMESPACE", "miniflux")
+export MINIFLUX_CHART_VERSION := env("MINIFLUX_CHART_VERSION", "0.9.2")
+export MINIFLUX_DB_USERNAME := env("MINIFLUX_DB_USERNAME", "miniflux")
+export MINIFLUX_DB_PASSWORD := env("MINIFLUX_DB_PASSWORD", "")
+export MINIFLUX_DB_NAME := env("MINIFLUX_DB_NAME", "miniflux")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add gabe565 https://charts.gabe565.com
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove gabe565
+
+# Install Miniflux
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export MINIFLUX_HOST=${MINIFLUX_HOST:-}
+    while [ -z "${MINIFLUX_HOST}" ]; do
+        MINIFLUX_HOST=$(
+            gum input --prompt="Miniflux host (FQDN): " --width=100 \
+            --placeholder="e.g., miniflux.example.com"
+        )
+    done
+
+    if [ -z "${MINIFLUX_DB_PASSWORD}" ]; then
+        MINIFLUX_DB_PASSWORD=$(
+            gum input --prompt="Database password (empty to auto-generate): " \
+            --width=100 --password
+        )
+        if [ -z "${MINIFLUX_DB_PASSWORD}" ]; then
+            MINIFLUX_DB_PASSWORD=$(just utils::random-password)
+            echo "Generated random password: ${MINIFLUX_DB_PASSWORD}"
+        fi
+    fi
+
+    just postgres::create-user-and-db \
+        ${MINIFLUX_DB_USERNAME} ${MINIFLUX_DB_NAME} ${MINIFLUX_DB_PASSWORD}
+    just vault::put miniflux/db username=${MINIFLUX_DB_USERNAME} \
+            password=${MINIFLUX_DB_PASSWORD} database=${MINIFLUX_DB_NAME}
+
+    # https://github.com/gabe565/charts/tree/main/charts/miniflux
+    MINIFLUX_NAMESPACE=${MINIFLUX_NAMESPACE} \
+        gomplate -f miniflux-values.gomplate.yaml -o miniflux-values.yaml
+    helm upgrade --install miniflux gabe565/miniflux \
+        --version ${MINIFLUX_CHART_VERSION} -n ${MINIFLUX_NAMESPACE} --create-namespace --wait \
+        -f miniflux-values.yaml
+
+# Uninstall Miniflux
+uninstall:
+    helm uninstall miniflux -n ${MINIFLUX_NAMESPACE} --wait --ignore-not-found
+    kubectl delete namespace ${MINIFLUX_NAMESPACE} --ignore-not-found
