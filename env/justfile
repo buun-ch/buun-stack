@@ -24,6 +24,10 @@ check:
 setup:
     #!/bin/bash
     set -euo pipefail
+
+    npm i
+    pip install build
+
     if [ -f ../.env.local ]; then
         echo ".env.local already exists." >&2
         if gum confirm "Do you want to overwrite it?"; then
@@ -76,9 +80,6 @@ setup:
     done
     rm -f ../.env.local
     gomplate -f env.local.gomplate -o ../.env.local
-
-    npm i
-    pip install build
 
 # Set a specific key in .env.local
 [working-directory("..")]
