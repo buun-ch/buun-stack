@@ -5,6 +5,8 @@ export MINIFLUX_CHART_VERSION := env("MINIFLUX_CHART_VERSION", "0.9.2")
 export MINIFLUX_DB_USERNAME := env("MINIFLUX_DB_USERNAME", "miniflux")
 export MINIFLUX_DB_PASSWORD := env("MINIFLUX_DB_PASSWORD", "")
 export MINIFLUX_DB_NAME := env("MINIFLUX_DB_NAME", "miniflux")
+export MINIFLUX_ADMIN_USERNAME := env("MINIFLUX_ADMIN_USERNAME", "admin")
+export MINIFLUX_ADMIN_PASSWORD := env("MINIFLUX_ADMIN_PASSWORD", "")
 
 [private]
 default:
@@ -41,11 +43,23 @@ install:
             echo "Generated random password: ${MINIFLUX_DB_PASSWORD}"
         fi
     fi
-
     just postgres::create-user-and-db \
         ${MINIFLUX_DB_USERNAME} ${MINIFLUX_DB_NAME} ${MINIFLUX_DB_PASSWORD}
     just vault::put miniflux/db username=${MINIFLUX_DB_USERNAME} \
             password=${MINIFLUX_DB_PASSWORD} database=${MINIFLUX_DB_NAME}
+
+    if [ -z "${MINIFLUX_ADMIN_PASSWORD}" ]; then
+        MINIFLUX_ADMIN_PASSWORD=$(
+            gum input --prompt="Admin password (empty to auto-generate): " \
+            --width=100 --password
+        )
+        if [ -z "${MINIFLUX_ADMIN_PASSWORD}" ]; then
+            MINIFLUX_ADMIN_PASSWORD=$(just utils::random-password)
+            echo "Generated random password: ${MINIFLUX_ADMIN_PASSWORD}"
+        fi
+    fi
+    just vault::put miniflux/admin username=${MINIFLUX_ADMIN_USERNAME} \
+            password=${MINIFLUX_ADMIN_PASSWORD}
 
     # https://github.com/gabe565/charts/tree/main/charts/miniflux
     MINIFLUX_NAMESPACE=${MINIFLUX_NAMESPACE} \
@@ -58,3 +72,11 @@ install:
 uninstall:
     helm uninstall miniflux -n ${MINIFLUX_NAMESPACE} --wait --ignore-not-found
     kubectl delete namespace ${MINIFLUX_NAMESPACE} --ignore-not-found
+
+# Print admin username
+admin-username:
+    @just vault::get miniflux/admin username
+
+# Print admin password
+admin-password:
+    @just vault::get miniflux/admin password

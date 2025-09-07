@@ -15,6 +15,8 @@ ingress:
 
 env:
   DATABASE_URL: "postgresql://{{ .Env.MINIFLUX_DB_USERNAME }}:{{ .Env.MINIFLUX_DB_PASSWORD }}@postgres-cluster-rw.postgres:5432/{{ .Env.MINIFLUX_DB_NAME }}"
+  ADMIN_USERNAME: {{ .Env.MINIFLUX_ADMIN_USERNAME }}
+  ADMIN_PASSWORD: {{ .Env.MINIFLUX_ADMIN_PASSWORD }}
 
 postgresql:
   enabled: false
