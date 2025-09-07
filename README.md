@@ -184,7 +184,32 @@ kubectl --context yourpc-oidc get nodes
 
 ## Customization
 
-Create a `custom.just` file to add your own recipes and workflows. The system will automatically import this file if it exists.
+### Adding Custom Recipes
+
+You can extend buun-stack with your own Just recipes and services:
+
+1. Copy the example files:
+
+   ```bash
+   cp custom-example.just custom.just
+   cp -r custom-example custom
+   ```
+
+2. Use the custom recipes:
+
+   ```bash
+   # Install reddit-rss
+   just custom::reddit-rss::install
+
+   # Install Miniflux feed reader
+   just custom::miniflux::install
+   ```
+
+3. Create your own recipes:
+
+Add new modules to the `custom/` directory following the same pattern as the examples. Each module should have its own `justfile` with install, uninstall, and other relevant recipes.
+
+The `custom.just` file is automatically imported by the main Justfile if it exists, allowing you to maintain your custom workflows separately from the core stack.
 
 ## Troubleshooting
 
