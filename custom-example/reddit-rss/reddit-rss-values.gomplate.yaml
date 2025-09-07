@@ -1,0 +1,22 @@
+image:
+  repository: {{ .Env.REDDIT_RSS_IMAGE }}
+  tag: {{ .Env.REDDIT_RSS_IMAGE_TAG }}
+  pullPolicy: Always
+
+imagePullSecrets:
+  - name: regcred
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: {{ .Env.REDDIT_RSS_HOST }}
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls:
+    - hosts:
+        - {{ .Env.REDDIT_RSS_HOST }}

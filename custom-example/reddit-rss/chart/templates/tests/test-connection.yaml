@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "reddit-rss.fullname" . }}-test-connection"
+  labels:
+    {{- include "reddit-rss.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command: ['wget']
+      args: ['{{ include "reddit-rss.fullname" . }}:{{ .Values.service.port }}']
+  restartPolicy: Never

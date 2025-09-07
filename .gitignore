@@ -137,5 +137,5 @@ dist
 # Our rules
 /.env.local*
 /custom.just
-/custom/
+/custom
 /private/

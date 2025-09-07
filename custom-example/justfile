@@ -1,0 +1,7 @@
+set fallback := true
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+mod reddit-rss 'reddit-rss/justfile'

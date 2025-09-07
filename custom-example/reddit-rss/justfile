@@ -1,0 +1,87 @@
+set fallback := true
+
+export REDDIT_RSS_NAMESPACE := env("REDDIT_RSS_NAMESPACE", "reddit-rss")
+export REDDIT_RSS_CHART_VERSION := env("REDDIT_RSS_CHART_VERSION", "0.1.0")
+export REDDIT_RSS_IMAGE := env("REDDIT_RSS_IMAGE", "localhost:30500/reddit-rss")
+export REDDIT_RSS_IMAGE_TAG := env("REDDIT_RSS_IMAGE_TAG", "1.0.1")
+export REDDIT_OAUTH_CLIENT_ID := env("REDDIT_OAUTH_CLIENT_ID", "")
+export REDDIT_OAUTH_CLIENT_SECRET := env("REDDIT_OAUTH_CLIENT_SECRET", "")
+export REDDIT_USERNAME := env("REDDIT_USERNAME", "")
+export REDDIT_PASSWORD := env("REDDIT_PASSWORD", "")
+export REDDIT_USER_AGENT := env("REDDIT_USER_AGENT", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Install reddit-rss
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export REDDIT_RSS_HOST=${REDDIT_RSS_HOST:-}
+    while [ -z "${REDDIT_RSS_HOST}" ]; do
+        REDDIT_RSS_HOST=$(
+            gum input --prompt="reddit-rss host (FQDN): " --width=100 \
+            --placeholder="e.g., reddit-rss.example.com"
+        )
+    done
+
+    kubectl get namespace ${REDDIT_RSS_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${REDDIT_RSS_NAMESPACE}
+
+    # Authentication is disabled for now
+    # just reddit-rss::create-secret
+
+    gomplate -f reddit-rss-values.gomplate.yaml -o reddit-rss-values.yaml
+    helm upgrade --install reddit-rss ./chart \
+        --version ${REDDIT_RSS_CHART_VERSION} -n ${REDDIT_RSS_NAMESPACE} --wait \
+        -f reddit-rss-values.yaml
+
+# Uninstall reddit-rss
+uninstall:
+    helm uninstall reddit-rss -n ${REDDIT_RSS_NAMESPACE} --wait --ignore-not-found
+    kubectl delete namespace ${REDDIT_RSS_NAMESPACE} --ignore-not-found
+
+# Create secret for reddit-rss authentication
+create-secret:
+    #!/bin/bash
+    set -euo pipefail
+    if kubectl get secret -n "${REDDIT_RSS_NAMESPACE}" auth-config &>/dev/null; then
+        if gum confirm "Update existing auth-config secret?"; then
+            kubectl delete secret auth-config -n ${REDDIT_RSS_NAMESPACE}
+        else
+            echo "Skipping secret creation."
+            exit 0
+        fi
+    fi
+    while [ -z "${REDDIT_OAUTH_CLIENT_ID}" ]; do
+        export REDDIT_OAUTH_CLIENT_ID=$(gum input --prompt="OAUTH client ID: " --width=100)
+    done
+    while [ -z "${REDDIT_OAUTH_CLIENT_SECRET}" ]; do
+        export REDDIT_OAUTH_CLIENT_SECRET=$(
+            gum input --prompt="OAUTH client secret: " --width=100 --password
+        )
+    done
+    while [ -z "${REDDIT_USERNAME}" ]; do
+        export REDDIT_USERNAME=$(gum input --prompt="Reddit username: " --width=100)
+    done
+    while [ -z "${REDDIT_PASSWORD}" ]; do
+        export REDDIT_PASSWORD=$(gum input --prompt="Reddit password: " --width=100 --password)
+    done
+    while [ -z "${REDDIT_USER_AGENT}" ]; do
+        export REDDIT_USER_AGENT=$(
+            gum input --prompt="Reddit user agent: " --width=100 --value="rss by /u/username"
+        )
+    done
+    kubectl get namespace ${REDDIT_RSS_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${REDDIT_RSS_NAMESPACE}
+    kubectl create secret generic auth-config -n ${REDDIT_RSS_NAMESPACE} \
+        --from-literal=OAUTH_CLIENT_ID="${REDDIT_OAUTH_CLIENT_ID}" \
+        --from-literal=OAUTH_CLIENT_SECRET="${REDDIT_OAUTH_CLIENT_SECRET}" \
+        --from-literal=REDDIT_USERNAME="${REDDIT_USERNAME}" \
+        --from-literal=REDDIT_PASSWORD="${REDDIT_PASSWORD}" \
+        --from-literal=USER_AGENT="${REDDIT_USER_AGENT}"
+
+# Delete secret for reddit-rss authentication
+delete-secret:
+    kubectl delete secret auth-config -n ${REDDIT_RSS_NAMESPACE} --ignore-not-found
