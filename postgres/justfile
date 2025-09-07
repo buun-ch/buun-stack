@@ -242,13 +242,13 @@ revoke db_name='' username='':
     echo "Privileges revoked."
 
 # Create Postgres database and user
-create-user-and-db db_name='' username='' password='':
+create-user-and-db username='' db_name='' password='':
     just create-db "{{ db_name }}"
     just create-user "{{ username }}" "{{ password }}"
     just grant "{{ db_name }}" "{{ username }}"
 
 # Delete Postgres database and user
-delete-user-and-db db_name='' username='':
+delete-user-and-db username='' db_name='':
     #!/bin/bash
     set -euo pipefail
     DB_NAME=${DB_NAME:-"{{ db_name }}"}
