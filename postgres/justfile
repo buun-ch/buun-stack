@@ -277,19 +277,22 @@ psql *args='':
     @kubectl exec -it -n postgres postgres-cluster-1 -c postgres -- psql {{ args }}
 
 # Dump Postgres database by pg_dump
+[no-cd]
 dump db_name file:
-    kubectl exec -it -n ${CNPG_NAMESPACE} postgres-cluster-1 -c postgres -- bash -c \
-        "pg_dump -d postgresql://postgres:$(just password)@localhost/{{ db_name }} -Fc > \
+    kubectl exec -i -n ${CNPG_NAMESPACE} postgres-cluster-1 -c postgres -- bash -c \
+        "pg_dump -d postgresql://$(just postgres::admin-username):$(just postgres::admin-password)@localhost/{{ db_name }} -Fc > \
         /var/lib/postgresql/data/db.dump"
     kubectl cp -n ${CNPG_NAMESPACE} -c postgres \
         postgres-cluster-1:/var/lib/postgresql/data/db.dump {{ file }}
-    kubectl exec -it -n ${CNPG_NAMESPACE} postgres-cluster-1 -c postgres -- rm /var/lib/postgresql/data/db.dump
+    kubectl exec -i -n ${CNPG_NAMESPACE} postgres-cluster-1 -c postgres -- rm /var/lib/postgresql/data/db.dump
 
 # Restore Postgres database by pg_restore
+[no-cd]
 restore db_name file:
-    just create-db {{ db_name }}
+    just postgres::create-db {{ db_name }}
     kubectl cp {{ file }} -n ${CNPG_NAMESPACE} -c postgres \
         postgres-cluster-1:/var/lib/postgresql/data/db.dump
-    kubectl exec -it -n ${CNPG_NAMESPACE} postgres-cluster-1 -c postgres -- bash -c \
-        "pg_restore -d postgresql://postgres:$(just password)@localhost/{{ db_name }} \
+    kubectl exec -i -n ${CNPG_NAMESPACE} postgres-cluster-1 -c postgres -- bash -c \
+        "pg_restore --clean --if-exists --no-owner --no-privileges \
+        -d postgresql://$(just postgres::admin-username):$(just postgres::admin-password)@localhost/{{ db_name }} \
         /var/lib/postgresql/data/db.dump"
