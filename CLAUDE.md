@@ -92,9 +92,38 @@ Credentials are automatically generated and stored in Vault:
 just vault::get secret/postgres/superuser password
 ```
 
+#### Secret Management Rules
+
+1. **Environment File**: Do NOT write to `.env.local` directly for secrets. Use it only for configuration values.
+
+2. **Vault and External Secrets Integration**:
+   - When Vault and External Secrets are available, ALWAYS:
+     - Store secrets in Vault
+     - Create ExternalSecret resources to sync secrets from Vault to Kubernetes
+     - Let External Secrets Operator create the actual Secret resources
+   - Check availability with:
+
+     ```bash
+     if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+         # Use Vault + External Secrets pattern
+     fi
+     ```
+
+3. **Fallback Pattern**: Only create Kubernetes Secrets directly when Vault/External Secrets are not available.
+
+4. **Helm Values Secret References**:
+   - When Helm charts support referencing external Secrets (via `existingSecret`, `secretName`, etc.), ALWAYS use this pattern
+   - Create the Secret using External Secrets (preferred) or directly as Kubernetes Secret
+   - Reference the Secret in Helm values instead of embedding credentials
+
+5. **Keycloak Client Configuration**:
+   - Prefer creating Public clients (without client secret) when possible
+   - Public clients are suitable for browser-based applications and native apps
+   - Only use confidential clients (with secret) when required by the service
+
 ### Important Considerations
 
-1. **Root Token**: Vault root token is required for initial setup. Store securely or use 1Password reference.
+1. **Root Token**: Vault root token is required for initial setup.
 
 2. **OIDC Configuration**: When creating services that need authentication:
    - Create Keycloak client with `just keycloak::create-client`
