@@ -1,0 +1,84 @@
+# Metabase Helm Chart Values
+# https://github.com/pmint93/helm-charts/tree/master/charts/metabase
+
+image:
+  repository: metabase/metabase
+  tag: v0.51.1
+
+# Use PostgreSQL for production
+database:
+  type: postgres
+  host: postgres-cluster-rw.postgres
+  port: 5432
+  dbname: metabase
+  existingSecret: database-config
+  existingSecretUsernameKey: user
+  existingSecretPasswordKey: password
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - {{ .Env.METABASE_HOST }}
+  tls:
+    - hosts:
+        - {{ .Env.METABASE_HOST }}
+
+# Session configuration
+session:
+  existingSecret: metabase-config
+  existingSecretKey: session
+
+# Basic configuration
+extraEnv:
+  - name: MB_APPLICATION_NAME
+    value: "Metabase Analytics"
+  - name: MB_ENABLE_PUBLIC_SHARING
+    value: "true"
+  - name: MB_ENABLE_EMBEDDING
+    value: "true"
+
+# Resource limits
+resources:
+  limits:
+    memory: 2Gi
+    cpu: 1000m
+  requests:
+    memory: 1Gi
+    cpu: 500m
+
+# Security context
+securityContext:
+  runAsUser: 2000
+  runAsGroup: 2000
+  runAsNonRoot: true
+
+# Pod security context
+podSecurityContext:
+  fsGroup: 2000
+
+# Service account
+serviceAccount:
+  create: true
+
+# Log4j2 configuration to reduce verbose logging
+log4j2XML: |
+  <?xml version="1.0" encoding="UTF-8"?>
+  <Configuration status="WARN" shutdownHook="disable">
+    <Appenders>
+      <Console name="STDOUT" target="SYSTEM_OUT">
+        <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss,SSS} %-5p %c{1.} :: %m%n"/>
+      </Console>
+    </Appenders>
+    <Loggers>
+      <Logger name="metabase.middleware.log" level="WARN"/>
+      <Logger name="middleware.log" level="WARN"/>
+      <Logger name="metabase" level="WARN"/>
+      <Root level="WARN">
+        <AppenderRef ref="STDOUT"/>
+      </Root>
+    </Loggers>
+  </Configuration>

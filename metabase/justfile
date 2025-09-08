@@ -1,0 +1,122 @@
+set fallback := true
+
+export METABASE_NAMESPACE := env("METABASE_NAMESPACE", "metabase")
+export METABASE_CHART_VERSION := env("METABASE_CHART_VERSION", "2.22.0")
+export METABASE_HOST := env("METABASE_HOST", "")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add pmint93 https://pmint93.github.io/helm-charts
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove pmint93
+
+# Create Metabase namespace
+create-namespace:
+    @kubectl get namespace ${METABASE_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${METABASE_NAMESPACE}
+
+# Delete Metabase namespace
+delete-namespace:
+    @kubectl delete namespace ${METABASE_NAMESPACE} --ignore-not-found
+
+# Create Metabase session secret
+create-session-secret:
+    #!/bin/bash
+    set -euo pipefail
+    session_secret=$(just utils::random-password)
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Storing session secret in Vault..."
+        just vault::put metabase/config session="${session_secret}"
+
+        kubectl delete secret metabase-config -n ${METABASE_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret metabase-config -n ${METABASE_NAMESPACE} --ignore-not-found
+
+        # gomplate -f metabase-config-external-secret.gomplate.yaml | kubectl apply -f -
+        gomplate -f metabase-config-external-secret.gomplate.yaml \
+            -o metabase-config-external-secret.yaml
+        kubectl apply -f metabase-config-external-secret.yaml
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/metabase-config \
+            -n ${METABASE_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating secret directly..."
+        kubectl delete secret metabase-config -n ${METABASE_NAMESPACE} --ignore-not-found
+        kubectl create secret generic metabase-config -n ${METABASE_NAMESPACE} \
+            --from-literal=session="${session_secret}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put metabase/config session="${session_secret}"
+        fi
+    fi
+
+# Create Metabase database secret
+create-database-secret:
+    #!/bin/bash
+    set -euo pipefail
+    if kubectl get secret database-config -n ${METABASE_NAMESPACE} &>/dev/null; then
+        kubectl delete secret database-config -n ${METABASE_NAMESPACE}
+    fi
+    kubectl create secret generic database-config -n ${METABASE_NAMESPACE} \
+        --from-literal=host=postgres-cluster-rw.postgres \
+        --from-literal=port=5432 \
+        --from-literal=user=$(just postgres::admin-username) \
+        --from-literal=password=$(just postgres::admin-password) \
+        --from-literal=database=metabase
+
+# Delete Metabase database secret
+delete-database-secret:
+    @kubectl delete secret database-config -n ${METABASE_NAMESPACE} --ignore-not-found
+
+
+# Install Metabase
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export METABASE_HOST=${METABASE_HOST:-}
+    while [ -z "${METABASE_HOST}" ]; do
+        METABASE_HOST=$(
+            gum input --prompt="Metabase host (FQDN): " --width=100 \
+            --placeholder="e.g., metabase.example.com"
+        )
+    done
+
+    just create-namespace
+    just postgres::create-db metabase
+    just create-database-secret
+    just create-session-secret
+
+    just add-helm-repo
+    gomplate -f metabase-values.gomplate.yaml -o metabase-values.yaml
+
+    helm upgrade --cleanup-on-fail --install metabase pmint93/metabase \
+        --version ${METABASE_CHART_VERSION} -n ${METABASE_NAMESPACE} --wait \
+        -f metabase-values.yaml
+
+# Uninstall Metabase
+uninstall delete-db='true':
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall metabase -n ${METABASE_NAMESPACE} --ignore-not-found --wait
+    kubectl delete secret metabase-config -n ${METABASE_NAMESPACE} --ignore-not-found
+    kubectl delete externalsecret metabase-config -n ${METABASE_NAMESPACE} --ignore-not-found
+    just delete-database-secret
+    just delete-namespace
+    if [ "{{ delete-db }}" = "true" ]; then
+        just postgres::delete-db metabase
+    fi
+
+    # Clean up Vault entries if present
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+        just vault::delete metabase/config || true
+    fi

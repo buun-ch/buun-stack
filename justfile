@@ -12,6 +12,7 @@ mod keycloak
 mod jupyterhub
 mod k8s
 mod longhorn
+mod metabase
 mod minio
 mod postgres
 mod utils
