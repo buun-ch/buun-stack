@@ -15,13 +15,13 @@ This will prompt for:
 - JupyterHub host (FQDN)
 - NFS PV usage (if Longhorn is installed)
 - NFS server details (if NFS is enabled)
-- Vault integration setup
+- Vault integration setup (requires root token for initial setup)
 
 ### Prerequisites
 
 - Keycloak must be installed and configured
 - For NFS storage: Longhorn must be installed
-- For Vault integration: Vault must be installed and configured
+- For Vault integration: Vault and External Secrets Operator must be installed
 - Helm repository must be accessible
 
 ## Kernel Images
@@ -52,13 +52,13 @@ Enable/disable profiles using environment variables:
 
 ```bash
 # Enable buun-stack profile (CPU version)
-export JUPYTER_PROFILE_BUUN_STACK_ENABLED=true
+JUPYTER_PROFILE_BUUN_STACK_ENABLED=true
 
 # Enable buun-stack CUDA profile (GPU version)
-export JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED=true
+JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED=true
 
 # Disable default datascience profile
-export JUPYTER_PROFILE_DATASCIENCE_ENABLED=false
+JUPYTER_PROFILE_DATASCIENCE_ENABLED=false
 ```
 
 Available profile variables:
@@ -122,35 +122,66 @@ JUPYTER_PYTHON_KERNEL_TAG=python-3.12-28
 
 ### Overview
 
-Vault integration enables secure secrets management directly from Jupyter notebooks using user-specific Vault tokens. Each user receives their own isolated Vault token during notebook spawn, ensuring complete separation of secrets between users. Users can store and retrieve API keys, database credentials, and other sensitive data securely with automatic token renewal.
+Vault integration enables secure secrets management directly from Jupyter notebooks. The system uses:
+
+- **ExternalSecret** to fetch the admin token from Vault
+- **Renewable tokens** with unlimited Max TTL to avoid 30-day system limitations
+- **Token renewal script** that automatically renews tokens every 12 hours
+- **User-specific tokens** created during notebook spawn with isolated access
+
+### Architecture
+
+```plain
+┌──────────────────────────────────────────────────────────────────┐
+│                         JupyterHub Hub Pod                       │
+│                                                                  │
+│  ┌──────────────┐  ┌────────────────┐  ┌────────────────────┐  │
+│  │     Hub      │  │ Token Renewer  │  │  ExternalSecret   │  │
+│  │  Container   │◄─┤   Sidecar      │◄─┤   (mounted as     │  │
+│  │              │  │                │  │    Secret)        │  │
+│  └──────────────┘  └────────────────┘  └────────────────────┘  │
+│         │                    │                     ▲            │
+│         │                    │                     │            │
+│         ▼                    ▼                     │            │
+│  ┌──────────────────────────────────┐              │            │
+│  │    /vault/secrets/vault-token    │              │            │
+│  │  (Admin token for user creation) │              │            │
+│  └──────────────────────────────────┘              │            │
+└────────────────────────────────────────────────────┼────────────┘
+                                                      │
+                                          ┌───────────▼──────────┐
+                                          │       Vault          │
+                                          │  secret/jupyterhub/  │
+                                          │     vault-token      │
+                                          └──────────────────────┘
+```
 
 ### Prerequisites
 
 Vault integration requires:
 
 - Vault server installed and configured
-- Keycloak OIDC authentication configured
+- External Secrets Operator installed
+- ClusterSecretStore configured for Vault
 - **Buun-stack kernel images** (standard images don't include Vault integration)
 
 ### Setup
 
-Vault integration is configured during JupyterHub installation. You have two options:
-
-#### Option 1: Interactive setup (recommended)
+Vault integration is configured during JupyterHub installation:
 
 ```bash
 just jupyterhub::install
 # Answer "yes" when prompted about Vault integration
+# Provide Vault root token when prompted
 ```
 
-#### Option 2: Pre-configured setup
+The setup process:
 
-```bash
-export JUPYTERHUB_VAULT_INTEGRATION_ENABLED=true
-just jupyterhub::install
-```
-
-**Note**: The `just jupyterhub::setup-vault-integration` command is called automatically during installation if Vault integration is enabled. This configures Vault Agent for automatic token renewal and user-specific token management.
+1. Creates `jupyterhub-admin` policy with necessary permissions including `sudo` for orphan token creation
+2. Creates renewable admin token with 24h TTL and unlimited Max TTL
+3. Stores token in Vault at `secret/jupyterhub/vault-token`
+4. Creates ExternalSecret to fetch token from Vault
+5. Deploys token renewal sidecar for automatic renewal
 
 ### Usage in Notebooks
 
@@ -182,11 +213,31 @@ secrets.delete('api-keys', field='github')  # Delete only github field
 
 ### Security Features
 
-- **User isolation**: Each user receives a unique Vault token with access only to their own secrets
-- **Automatic token renewal**: Both admin and user tokens are automatically renewed by Vault Agent
-- **Vault Agent integration**: JupyterHub admin token is automatically renewed using Kubernetes authentication
+- **User isolation**: Each user receives an orphan token with access only to their namespace
+- **Automatic renewal**: Token renewal script renews admin token every 12 hours
+- **ExternalSecret integration**: Admin token fetched securely from Vault
+- **Orphan tokens**: User tokens are orphan tokens, not limited by parent policy restrictions
 - **Audit trail**: All secret access is logged in Vault
-- **Individual policies**: Each user has their own Vault policy restricting access to their namespace
+
+### Token Management
+
+#### Admin Token
+
+The admin token is managed through:
+
+1. **Creation**: `just jupyterhub::create-jupyterhub-vault-token` creates renewable token
+2. **Storage**: Stored in Vault at `secret/jupyterhub/vault-token`
+3. **Retrieval**: ExternalSecret fetches and mounts as Kubernetes Secret
+4. **Renewal**: `vault-token-renewer.sh` script renews every 12 hours
+
+#### User Tokens
+
+User tokens are created dynamically:
+
+1. **Pre-spawn hook** reads admin token from `/vault/secrets/vault-token`
+2. **Creates user policy** `jupyter-user-{username}` with restricted access
+3. **Creates orphan token** with user policy (requires `sudo` permission)
+4. **Sets environment variable** `NOTEBOOK_VAULT_TOKEN` in notebook container
 
 ## Storage Options
 
@@ -199,9 +250,9 @@ Uses Kubernetes PersistentVolumes for user home directories.
 For shared storage across nodes, configure NFS:
 
 ```bash
-export JUPYTERHUB_NFS_PV_ENABLED=true
-export JUPYTER_NFS_IP=192.168.10.1
-export JUPYTER_NFS_PATH=/volume1/drive1/jupyter
+JUPYTERHUB_NFS_PV_ENABLED=true
+JUPYTER_NFS_IP=192.168.10.1
+JUPYTER_NFS_PATH=/volume1/drive1/jupyter
 ```
 
 NFS storage requires:
@@ -230,22 +281,18 @@ JUPYTERHUB_NFS_PV_ENABLED=false
 
 # Vault integration
 JUPYTERHUB_VAULT_INTEGRATION_ENABLED=false
-VAULT_ADDR=http://vault.vault.svc:8200
+VAULT_ADDR=https://vault.example.com
 
 # Image settings
 JUPYTER_PYTHON_KERNEL_TAG=python-3.12-28
 IMAGE_REGISTRY=localhost:30500
 
 # Vault token TTL settings
-JUPYTERHUB_VAULT_TOKEN_TTL=24h       # Admin token: 1 day (auto-renewed by Vault Agent)
-JUPYTERHUB_VAULT_TOKEN_MAX_TTL=720h  # Admin token: 30 days (max renewal limit)
-NOTEBOOK_VAULT_TOKEN_TTL=24h         # User token: 1 day (auto-renewed)
-NOTEBOOK_VAULT_TOKEN_MAX_TTL=168h    # User token: 7 days (max renewal limit)
+JUPYTERHUB_VAULT_TOKEN_TTL=24h       # Admin token: renewed every 12h
+NOTEBOOK_VAULT_TOKEN_TTL=24h         # User token: 1 day
+NOTEBOOK_VAULT_TOKEN_MAX_TTL=168h    # User token: 7 days max
 
-# Vault Agent logging
-VAULT_AGENT_LOG_LEVEL=info           # Options: trace, debug, info, warn, error
-
-# Application logging
+# Logging
 JUPYTER_BUUNSTACK_LOG_LEVEL=warning  # Options: debug, info, warning, error
 ```
 
@@ -260,6 +307,13 @@ Customize JupyterHub behavior by editing `jupyterhub-values.gomplate.yaml` templ
 ```bash
 just jupyterhub::uninstall
 ```
+
+This removes:
+
+- JupyterHub deployment
+- User pods
+- PVCs
+- ExternalSecret
 
 ### Update
 
@@ -277,6 +331,18 @@ just jupyterhub::push-kernel-images
 just jupyterhub::install
 ```
 
+### Manual Token Refresh
+
+If needed, manually refresh the admin token:
+
+```bash
+# Create new renewable token
+just jupyterhub::create-jupyterhub-vault-token
+
+# Restart JupyterHub to pick up new token
+kubectl rollout restart deployment/hub -n jupyter
+```
+
 ## Troubleshooting
 
 ### Image Pull Issues
@@ -291,27 +357,32 @@ kubectl get pods -n jupyter
 kubectl describe pod <pod-name> -n jupyter
 
 # Increase timeout if needed
-helm upgrade jupyterhub jupyterhub/jupyterhub \
-  --timeout=30m -f jupyterhub-values.yaml
+helm upgrade jupyterhub jupyterhub/jupyterhub --timeout=30m -f jupyterhub-values.yaml
 ```
 
 ### Vault Integration Issues
 
-Check Vault connectivity and authentication:
+Check token and authentication:
 
-```python
-# In a notebook
-import os
-print("Vault Address:", os.getenv('VAULT_ADDR'))
-print("JWT Token:", bool(os.getenv('NOTEBOOK_VAULT_JWT')))
-print("Vault Token:", bool(os.getenv('NOTEBOOK_VAULT_TOKEN')))
+```bash
+# Check ExternalSecret status
+kubectl get externalsecret -n jupyter jupyterhub-vault-token
 
-# Test SecretStore
-from buunstack import SecretStore
-secrets = SecretStore()
-status = secrets.get_status()
-print(status)
+# Check if Secret was created
+kubectl get secret -n jupyter jupyterhub-vault-token
+
+# Check token renewal logs
+kubectl logs -n jupyter -l app.kubernetes.io/component=hub -c vault-agent
+
+# In a notebook, verify environment
+%env NOTEBOOK_VAULT_TOKEN
 ```
+
+Common issues:
+
+1. **"child policies must be subset of parent"**: Admin policy needs `sudo` permission for orphan tokens
+2. **Token not found**: Check ExternalSecret and ClusterSecretStore configuration
+3. **Permission denied**: Verify `jupyterhub-admin` policy has all required permissions
 
 ### Authentication Issues
 
@@ -336,177 +407,38 @@ JupyterHub uses the official Zero to JupyterHub (Z2JH) Helm chart:
 - Version: `4.2.0` (configurable via `JUPYTERHUB_CHART_VERSION`)
 - Documentation: https://z2jh.jupyter.org/
 
-### User-Specific Vault Token System
+### Token System Architecture
 
-The `buunstack` SecretStore uses pre-created user-specific Vault tokens that are generated during notebook spawn, ensuring complete user isolation and secure access to individual secret namespaces.
+The system uses a three-tier token approach:
 
-#### Architecture Overview
+1. **Renewable Admin Token**:
+   - Created with `explicit-max-ttl=0` (unlimited Max TTL)
+   - Renewed automatically every 12 hours
+   - Stored in Vault and fetched via ExternalSecret
 
-```plain
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   JupyterHub    │    │     Notebook     │    │      Vault      │
-│                 │    │                  │    │                 │
-│  ┌───────────┐  │    │  ┌────────────┐  │    │  ┌───────────┐  │
-│  │Pre-spawn  │  │───►│  │SecretStore │  ├───►│  │User Token │  │
-│  │   Hook    │  │    │  │            │  │    │  │  + Policy │  │
-│  └───────────┘  │    │  └────────────┘  │    │  └───────────┘  │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-```
+2. **Orphan User Tokens**:
+   - Created with `create_orphan()` API call
+   - Not limited by parent token policies
+   - Individual TTL and Max TTL settings
 
-**Key Components**:
+3. **Token Renewal Script**:
+   - Runs as sidecar container
+   - Reads token from ExternalSecret mount
+   - Handles renewal and re-retrieval on failure
 
-- **JupyterHub Admin Token**: Automatically renewed by Vault Agent, read from file at `/vault/secrets/vault-token`
-- **User-Specific Tokens**: Created dynamically during notebook spawn, available as `NOTEBOOK_VAULT_TOKEN` environment variable  
-- **User Policies**: Restrict access to `secret/data/jupyter/users/{username}/*`
-- **Vault Agent**: Sidecar container that handles automatic token renewal using Kubernetes authentication
+### Key Files
 
-#### Token Lifecycle
-
-1. **Pre-spawn Hook Setup**
-   - JupyterHub uses admin Vault token to access Vault API
-   - Creates user-specific Vault policy with restricted path access
-   - Generates new user-specific Vault token with the created policy
-   - Passes user token to notebook environment via `NOTEBOOK_VAULT_TOKEN`
-
-2. **SecretStore Initialization**
-   - Reads user-specific token from environment variable:
-     - `NOTEBOOK_VAULT_TOKEN` (User-specific Vault token)
-   - Uses token for all Vault operations within user's namespace
-
-3. **Token Validation**
-   - Before operations, checks token validity using `lookup_self`
-   - Verifies token TTL and renewable status
-
-4. **Automatic Token Renewal**
-   - If token TTL is low (< 10 minutes) and renewable, renews token
-   - Uses `renew_self` capability granted by user policy
-   - Logs renewal success for monitoring
-
-#### Code Flow
-
-```python
-def _ensure_authenticated(self):
-    # Check if current Vault token is valid
-    try:
-        if self.client.is_authenticated():
-            # Check if token needs renewal
-            token_info = self.client.auth.token.lookup_self()
-            ttl = token_info.get("data", {}).get("ttl", 0)
-            renewable = token_info.get("data", {}).get("renewable", False)
-
-            # Renew if TTL < 10 minutes and renewable
-            if renewable and ttl > 0 and ttl < 600:
-                self.client.auth.token.renew_self()
-                logger.info("✅ Vault token renewed successfully")
-            return
-    except Exception:
-        pass
-
-    # Token expired and cannot be refreshed
-    raise Exception("User-specific Vault token expired and cannot be refreshed. Please restart your notebook server.")
-```
-
-#### Key Design Decisions
-
-##### 1. User-Specific Token Creation
-
-- Each user receives a unique Vault token during notebook spawn
-- Individual policies ensure complete user isolation
-- Admin token used only during pre-spawn hook for token creation
-
-##### 2. Policy-Based Access Control
-
-- User policies restrict access to `secret/data/jupyter/users/{username}/*`
-- Each user can only access their own secret namespace
-- Token management capabilities (`lookup_self`, `renew_self`) included
-
-##### 3. Singleton Pattern
-
-- Single SecretStore instance per notebook session
-- Prevents multiple simultaneous authentications
-- Maintains consistent token state
-
-##### 4. Pre-created User Tokens
-
-- Tokens are created during notebook spawn via pre-spawn hook
-- Reduces initialization overhead in notebooks
-- Provides immediate access to user's secret namespace
-
-#### Error Handling
-
-```python
-# Primary error scenarios and responses:
-
-1. User token unavailable
-   → Token stored in NOTEBOOK_VAULT_TOKEN env var
-   → Prompt to restart notebook server if missing
-
-2. Vault token expired
-   → Automatic renewal using renew_self if renewable
-   → Restart notebook server required if not renewable
-
-3. Vault authentication failure
-   → Log detailed error information
-   → Check user policy and token configuration
-
-4. Network connectivity issues
-   → Built-in retry in hvac client
-   → Provide actionable error messages
-```
-
-#### Configuration
-
-Environment variables passed to notebooks:
-
-```yaml
-# JupyterHub pre_spawn_hook sets:
-spawner.environment:
-  # Core services
-  POSTGRES_HOST: 'postgres-cluster-rw.postgres'
-  POSTGRES_PORT: '5432'
-  JUPYTERHUB_API_URL: 'http://hub:8081/hub/api'
-  BUUNSTACK_LOG_LEVEL: 'info'  # or 'debug' for detailed logging
-
-  # Vault integration
-  NOTEBOOK_VAULT_TOKEN: '<User-specific Vault token>'
-  VAULT_ADDR: 'http://vault.vault.svc:8200'
-```
-
-#### Monitoring and Debugging
-
-Enable detailed logging for troubleshooting:
-
-```python
-# In notebook
-import os
-os.environ['BUUNSTACK_LOG_LEVEL'] = 'DEBUG'
-
-# Restart kernel and check logs
-from buunstack import SecretStore
-secrets = SecretStore()
-
-# Check authentication status
-status = secrets.get_status()
-print("Username:", status['username'])
-print("Vault Address:", status['vault_addr'])
-print("Authentication Method:", status['authentication_method'])
-print("Vault Authenticated:", status['vault_authenticated'])
-```
-
-#### Performance Characteristics
-
-- **Token renewal overhead**: ~10-50ms for renew_self call
-- **Memory usage**: Minimal (single token stored as string)
-- **Network traffic**: Only during token renewal (when TTL < 10 minutes)
-- **Vault impact**: Standard token operations (lookup_self, renew_self)
+- `jupyterhub-admin-policy.hcl`: Vault policy with admin permissions
+- `user_policy.hcl`: Template for user-specific policies
+- `vault-token-renewer.sh`: Token renewal script
+- `jupyterhub-vault-token-external-secret.gomplate.yaml`: ExternalSecret configuration
 
 ## Performance Considerations
 
 - **Image Size**: Buun-stack images are ~13GB, plan storage accordingly
 - **Pull Time**: Initial pulls take 5-15 minutes depending on network
 - **Resource Usage**: Data science workloads require adequate CPU/memory
-- **Storage**: NFS provides better performance for shared datasets
-- **Token Renewal**: User token renewal adds minimal overhead
+- **Token Renewal**: Minimal overhead (renewal every 12 hours)
 
 For production deployments, consider:
 
@@ -514,87 +446,13 @@ For production deployments, consider:
 - Using faster storage backends
 - Configuring resource limits per user
 - Setting up monitoring and alerts
-- Monitoring Vault token expiration and renewal patterns
-
-## Vault Agent Integration
-
-### Overview
-
-JupyterHub now uses Vault Agent for automatic token renewal, eliminating the need for manual token management. Vault Agent runs as a sidecar container in the JupyterHub hub pod and automatically renews the admin token using Kubernetes authentication.
-
-### Architecture
-
-```plain
-┌─────────────────────────────────────────────────────────────┐
-│                    JupyterHub Hub Pod                       │
-│                                                             │
-│  ┌─────────────────┐              ┌─────────────────────┐  │
-│  │   Hub Container │              │ Vault Agent Sidecar │  │
-│  │                 │              │                     │  │
-│  │ Reads token     │◄─────────────┤ Writes token        │  │
-│  │ from file       │              │ to shared volume    │  │
-│  │                 │              │                     │  │
-│  └─────────────────┘              └─────────────────────┘  │
-│           │                                 │               │
-│           │                                 │               │
-│           │                                 │               │
-│  ┌─────────▼─────────┐              ┌─────────▼─────────┐  │
-│  │ /vault/secrets/   │              │ Kubernetes Auth   │  │
-│  │   vault-token     │              │   with Vault      │  │
-│  └───────────────────┘              └───────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Key Features
-
-- **Automatic Renewal**: Admin token is automatically renewed every TTL/2 interval
-- **Kubernetes Authentication**: Uses Kubernetes ServiceAccount for secure token acquisition
-- **File-based Token Sharing**: Vault Agent writes tokens to shared volume, Hub reads from file
-- **Zero Downtime**: Token renewal happens in background without service interruption
-- **Configurable Logging**: Vault Agent log level can be configured via `VAULT_AGENT_LOG_LEVEL`
-
-### Monitoring Token Renewal
-
-Check Vault Agent status and token renewal:
-
-```bash
-# Monitor Vault Agent logs
-kubectl logs -n jupyter -l app.kubernetes.io/component=hub -c vault-agent -f
-
-# Use monitoring script
-cd jupyterhub
-./monitor-vault-token.sh
-
-# Check token details
-kubectl exec -n jupyter <hub-pod> -c hub -- curl -s -H "X-Vault-Token: $(cat /vault/secrets/vault-token)" $VAULT_ADDR/v1/auth/token/lookup-self
-```
-
-### Testing Token Renewal
-
-For testing purposes, you can use shorter TTL values to observe rapid token renewal:
-
-```bash
-# Test with 1-minute TTL (renews every 30 seconds)
-JUPYTERHUB_VAULT_TOKEN_TTL=1m VAULT_AGENT_LOG_LEVEL=debug just jupyterhub::install
-
-# Monitor renewal activity
-kubectl logs -n jupyter -l app.kubernetes.io/component=hub -c vault-agent -f | grep "renewed auth token"
-```
-
-### Configuration Files
-
-The Vault Agent integration uses several configuration files:
-
-- `vault-agent-config.gomplate.hcl`: Vault Agent configuration template
-- `token-monitor.tpl`: Template for logging token information
-- `monitor-vault-token.sh`: Monitoring script for token status
 
 ## Known Limitations
 
-1. **Token Max TTL**: Even with Vault Agent auto-renewal, tokens cannot be renewed beyond `JUPYTERHUB_VAULT_TOKEN_MAX_TTL` (default: 720h/30 days). After this period, JupyterHub must be redeployed to acquire a new token from Vault. With the default 30-day limit, this requires monthly maintenance.
+1. **Annual Token Recreation**: While tokens have unlimited Max TTL, best practice suggests recreating them annually
 
-2. **Cull Settings**: Server idle timeout is set to 2 hours by default. Adjust `cull.timeout` and `cull.every` in the Helm values for different requirements.
+2. **Cull Settings**: Server idle timeout is set to 2 hours by default. Adjust `cull.timeout` and `cull.every` in the Helm values for different requirements
 
-3. **NFS Storage**: When using NFS storage, ensure proper permissions are set on the NFS server. The default `JUPYTER_FSGID` is 100.
+3. **NFS Storage**: When using NFS storage, ensure proper permissions are set on the NFS server. The default `JUPYTER_FSGID` is 100
 
-4. **Vault Agent Resource Usage**: The Vault Agent sidecar uses minimal resources (50m CPU, 64Mi memory) but adds slight overhead to the hub pod.
+4. **ExternalSecret Dependency**: Requires External Secrets Operator to be installed and configured

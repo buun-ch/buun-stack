@@ -5,11 +5,8 @@ hub:
     NOTEBOOK_VAULT_TOKEN_TTL: {{ .Env.NOTEBOOK_VAULT_TOKEN_TTL | quote }}
     NOTEBOOK_VAULT_TOKEN_MAX_TTL: {{ .Env.NOTEBOOK_VAULT_TOKEN_MAX_TTL | quote }}
     {{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
-    # Vault Agent will provide token via file
+    # Vault Agent provides renewable token via file (unlimited max TTL)
     VAULT_TOKEN_FILE: "/vault/secrets/vault-token"
-    {{- else }}
-    # Traditional token via environment variable
-    JUPYTERHUB_VAULT_TOKEN: {{ .Env.JUPYTERHUB_VAULT_TOKEN | quote }}
     {{- end }}
 
   # Install packages at container startup
@@ -63,24 +60,24 @@ hub:
       # Set environment variables for spawned containers
       import hvac
 
+      {{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
       def get_vault_token():
-          """Read Vault token from file written by Vault Agent"""
+          """Read Vault token from file"""
           import os
-          token_file = os.environ.get('VAULT_TOKEN_FILE', '/vault/secrets/vault-token')
+
+          token_file = '/vault/secrets/vault-token'
           try:
               with open(token_file, 'r') as f:
                   token = f.read().strip()
                   if token:
                       return token
-                  else:
-                      raise Exception(f"Empty token file: {token_file}")
           except FileNotFoundError:
-              # Fallback to environment variable for backward compatibility
-              return os.environ.get("JUPYTERHUB_VAULT_TOKEN")
+              print(f"Token file not found: {token_file}")
           except Exception as e:
-              # Log error but attempt fallback
               print(f"Error reading token file {token_file}: {e}")
-              return os.environ.get("JUPYTERHUB_VAULT_TOKEN")
+
+          return None
+      {{- end }}
 
       async def pre_spawn_hook(spawner):
           """Set essential environment variables for spawned containers"""
@@ -94,6 +91,7 @@ hub:
           # Logging configuration
           spawner.environment["BUUNSTACK_LOG_LEVEL"] = "{{ .Env.JUPYTER_BUUNSTACK_LOG_LEVEL }}"
 
+          {{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
           # Create user-specific Vault token directly
           try:
               username = spawner.user.name
@@ -105,7 +103,7 @@ hub:
 
               spawner.log.info(f"pre_spawn_hook starting for {username}")
               spawner.log.info(f"Vault address: {vault_addr}")
-              spawner.log.info(f"Vault token source: {'file' if os.path.exists(os.environ.get('VAULT_TOKEN_FILE', '/vault/secrets/vault-token')) else 'env'}")
+              spawner.log.info(f"Vault token source: {'file' if os.path.exists('/vault/secrets/vault-token') else 'env'}")
               spawner.log.info(f"Vault token present: {bool(vault_token)}, length: {len(vault_token) if vault_token else 0}")
 
               if not vault_token:
@@ -141,7 +139,7 @@ hub:
               user_token_ttl = os.environ.get("NOTEBOOK_VAULT_TOKEN_TTL", "24h")
               user_token_max_ttl = os.environ.get("NOTEBOOK_VAULT_TOKEN_MAX_TTL", "168h")
 
-              token_response = vault_client.auth.token.create(
+              token_response = vault_client.auth.token.create_orphan(
                   policies=[user_policy_name],
                   ttl=user_token_ttl,
                   renewable=True,
@@ -161,6 +159,7 @@ hub:
               spawner.log.error("Failed to create user-specific Vault token for {}: {}".format(spawner.user.name, e))
               import traceback
               spawner.log.error("Full traceback: {}".format(traceback.format_exc()))
+          {{- end }}
 
       c.KubeSpawner.pre_spawn_hook = pre_spawn_hook
 
@@ -172,12 +171,18 @@ hub:
     - name: vault-config
       configMap:
         name: vault-agent-config
+    - name: vault-admin-token
+      secret:
+        secretName: jupyterhub-vault-token
 
   extraVolumeMounts:
     - name: vault-secrets
       mountPath: /vault/secrets
     - name: vault-config
       mountPath: /vault/config
+    - name: vault-admin-token
+      mountPath: /vault/admin-token
+      readOnly: true
 
   extraContainers:
     - name: vault-agent
@@ -195,8 +200,8 @@ hub:
         - /bin/sh
         - -c
         - |
-          # Start Vault Agent
-          vault agent -config=/vault/config/agent.hcl
+          # Start token renewal script (handles both retrieval and renewal)
+          exec sh /vault/config/vault-token-renewer.sh
       env:
         - name: VAULT_ADDR
           value: {{ .Env.VAULT_ADDR | quote }}
@@ -205,6 +210,9 @@ hub:
           mountPath: /vault/secrets
         - name: vault-config
           mountPath: /vault/config
+        - name: vault-admin-token
+          mountPath: /vault/admin-token
+          readOnly: true
       resources:
         requests:
           cpu: 50m

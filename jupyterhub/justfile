@@ -20,7 +20,6 @@ export JUPYTER_PROFILE_TENSORFLOW_ENABLED := env("JUPYTER_PROFILE_TENSORFLOW_ENA
 export JUPYTER_PROFILE_BUUN_STACK_ENABLED := env("JUPYTER_PROFILE_BUUN_STACK_ENABLED", "false")
 export JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED := env("JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED", "false")
 export JUPYTERHUB_VAULT_TOKEN_TTL := env("JUPYTERHUB_VAULT_TOKEN_TTL", "24h")
-export JUPYTERHUB_VAULT_TOKEN_MAX_TTL := env("JUPYTERHUB_VAULT_TOKEN_MAX_TTL", "720h")
 export NOTEBOOK_VAULT_TOKEN_TTL := env("NOTEBOOK_VAULT_TOKEN_TTL", "24h")
 export NOTEBOOK_VAULT_TOKEN_MAX_TTL := env("NOTEBOOK_VAULT_TOKEN_MAX_TTL", "168h")
 export VAULT_AGENT_LOG_LEVEL := env("VAULT_AGENT_LOG_LEVEL", "info")
@@ -54,7 +53,7 @@ delete-namespace:
     kubectl delete namespace ${JUPYTERHUB_NAMESPACE} --ignore-not-found
 
 # Install JupyterHub
-install:
+install root_token='':
     #!/bin/bash
     set -euo pipefail
     export JUPYTERHUB_HOST=${JUPYTERHUB_HOST:-}
@@ -129,8 +128,16 @@ install:
     if [ "${JUPYTERHUB_VAULT_INTEGRATION_ENABLED}" = "true" ]; then
         echo "Setting up Vault Agent for automatic token management..."
         echo "  Token TTL: ${JUPYTERHUB_VAULT_TOKEN_TTL}"
-        echo "  Token Max TTL: ${JUPYTERHUB_VAULT_TOKEN_MAX_TTL}"
-        just setup-vault-integration
+        export VAULT_TOKEN="{{ root_token }}"
+        while [ -z "${VAULT_TOKEN}" ]; do
+            VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
+        done
+        just setup-vault-integration ${VAULT_TOKEN}
+        just create-jupyterhub-vault-token ${VAULT_TOKEN}
+
+        # Create ExternalSecret for admin vault token
+        echo "Creating ExternalSecret for admin vault token..."
+        gomplate -f jupyterhub-vault-token-external-secret.gomplate.yaml | kubectl apply -f -
 
         # Read user policy template for Vault
         export USER_POLICY_HCL=$(cat user_policy.hcl)
@@ -155,6 +162,7 @@ uninstall:
     helm uninstall jupyterhub -n ${JUPYTERHUB_NAMESPACE} --wait --ignore-not-found
     kubectl delete pods -n ${JUPYTERHUB_NAMESPACE} -l app.kubernetes.io/component=singleuser-server
     kubectl delete -n ${JUPYTERHUB_NAMESPACE} pvc jupyter-nfs-pvc --ignore-not-found
+    kubectl delete -n ${JUPYTERHUB_NAMESPACE} externalsecret jupyterhub-vault-token --ignore-not-found
     if kubectl get pv jupyter-nfs-pv &>/dev/null; then
         kubectl patch pv jupyter-nfs-pv -p '{"spec":{"claimRef":null}}'
     fi
@@ -213,39 +221,43 @@ push-kernel-images:
 setup-vault-integration root_token='':
     #!/bin/bash
     set -euo pipefail
-    echo "Setting up Vault integration for JupyterHub..."
-
-    # Create Kubernetes role for JupyterHub in Vault
-    echo "Creating Kubernetes authentication role for JupyterHub..."
-    echo "  Service Account: hub"
-    echo "  Namespace: jupyter"
-    echo "  Policies: admin"
-    echo "  TTL: ${JUPYTERHUB_VAULT_TOKEN_TTL}"
-    echo "  Max TTL: ${JUPYTERHUB_VAULT_TOKEN_MAX_TTL}"
     export VAULT_TOKEN="{{ root_token }}"
     while [ -z "${VAULT_TOKEN}" ]; do
         VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
     done
-    vault write auth/kubernetes/role/jupyterhub \
+
+    echo "Setting up Vault integration for JupyterHub..."
+
+    # Create JupyterHub-specific policy and Kubernetes role in Vault
+    echo "Creating JupyterHub-specific Vault policy and Kubernetes role..."
+    echo "  Service Account: hub"
+    echo "  Namespace: jupyter"
+    echo "  Policy: jupyterhub-admin (custom policy with extended max TTL)"
+    echo "  TTL: ${JUPYTERHUB_VAULT_TOKEN_TTL}"
+
+    # Create JupyterHub-specific policy
+    echo "Creating jupyterhub-admin policy..."
+    vault policy write jupyterhub-admin jupyterhub-admin-policy.hcl
+
+    # Create Kubernetes role (use system-safe max_ttl to avoid warnings)
+    echo "Creating Kubernetes role..."
+    vault write auth/kubernetes/role/jupyterhub-admin \
         bound_service_account_names=hub \
         bound_service_account_namespaces=jupyter \
-        policies=admin \
+        policies=jupyterhub-admin \
         ttl=${JUPYTERHUB_VAULT_TOKEN_TTL} \
-        max_ttl=${JUPYTERHUB_VAULT_TOKEN_MAX_TTL}
+        max_ttl=720h
 
-    # Create Vault Agent configuration with gomplate
-    echo "Creating Vault Agent configuration..."
-    gomplate -f vault-agent-config.gomplate.hcl -o vault-agent-config.hcl
+    # Create ConfigMap with token renewal script
+    echo "Creating ConfigMap with token renewal script..."
     kubectl create configmap vault-agent-config -n ${JUPYTERHUB_NAMESPACE} \
-        --from-file=agent.hcl=vault-agent-config.hcl \
-        --from-file=token-monitor.tpl=token-monitor.tpl \
+        --from-file=vault-token-renewer.sh=vault-token-renewer.sh \
         --dry-run=client -o yaml | kubectl apply -f -
 
     echo "✓ Vault integration configured (user-specific tokens + auto-renewal)"
     echo ""
     echo "Configuration Summary:"
     echo "  JupyterHub Token TTL: ${JUPYTERHUB_VAULT_TOKEN_TTL}"
-    echo "  JupyterHub Token Max TTL: ${JUPYTERHUB_VAULT_TOKEN_MAX_TTL}"
     echo "  User Token TTL: ${NOTEBOOK_VAULT_TOKEN_TTL}"
     echo "  User Token Max TTL: ${NOTEBOOK_VAULT_TOKEN_MAX_TTL}"
     echo "  Vault Agent Log Level: ${VAULT_AGENT_LOG_LEVEL}"
@@ -257,19 +269,60 @@ setup-vault-integration root_token='':
     echo "  # Each user gets their own isolated Vault token and policy"
     echo "  # Admin token is automatically renewed by Vault Agent"
 
-# Create JupyterHub Vault token (uses admin policy for JWT operations)
-create-jupyterhub-vault-token:
+# Create JupyterHub Vault token (renewable with unlimited Max TTL)
+create-jupyterhub-vault-token root_token='':
     #!/bin/bash
     set -euo pipefail
-    echo "Creating JupyterHub Vault token with admin policy..."
-    echo "  TTL: ${JUPYTERHUB_VAULT_TOKEN_TTL}"
-    echo "  Max TTL: ${JUPYTERHUB_VAULT_TOKEN_MAX_TTL}"
+    export VAULT_TOKEN="{{ root_token }}"
+    while [ -z "${VAULT_TOKEN}" ]; do
+        VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
+    done
 
-    # JupyterHub needs admin privileges to read Keycloak credentials from Vault
-    # Create token and store in Vault
-    just vault::create-token-and-store admin jupyterhub/vault-token ${JUPYTERHUB_VAULT_TOKEN_TTL} ${JUPYTERHUB_VAULT_TOKEN_MAX_TTL}
+    echo "Creating JupyterHub admin Vault token"
 
-    echo "✓ JupyterHub Vault token created and stored"
+    # jupyterhub-admin policy should exist (created by setup-vault-integration)
+
+    # Check if token already exists
+    if vault kv get secret/jupyterhub/vault-token >/dev/null 2>&1; then
+        echo "Existing admin token found at secret/jupyterhub/vault-token"
+        if gum confirm "Replace existing token with new one?"; then
+            echo "Creating new admin token..."
+        else
+            echo "Using existing token"
+            return 0
+        fi
+    fi
+
+    # Create admin vault token with unlimited max TTL
     echo ""
-    echo "To use in JupyterHub deployment:"
-    echo "  JUPYTERHUB_VAULT_TOKEN=\$(just vault::get jupyterhub/vault-token token)"
+    echo "Creating admin token (TTL: 24h, Max TTL: unlimited)..."
+    TOKEN_RESPONSE=$(vault token create \
+        -policy=jupyterhub-admin \
+        -ttl=24h \
+        -explicit-max-ttl=0 \
+        -display-name="jupyterhub-admin" \
+        -renewable=true \
+        -format=json)
+
+    # Extract token
+    ADMIN_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r .auth.client_token)
+
+    if [ -z "$ADMIN_TOKEN" ] || [ "$ADMIN_TOKEN" = "null" ]; then
+        echo "❌ Failed to create admin token"
+        exit 1
+    fi
+
+    # Store token in Vault for JupyterHub to retrieve
+    echo "Storing admin token in Vault..."
+    vault kv put secret/jupyterhub/vault-token token="$ADMIN_TOKEN"
+
+    echo ""
+    echo "✅ Admin token created and stored successfully!"
+    echo ""
+    echo "Token behavior:"
+    echo "  - TTL: 24 hours (will expire in 24h without renewal)"
+    echo "  - Max TTL: Unlimited (can be renewed forever)"
+    echo "  - Vault Agent will renew every 12 hours"
+    echo "  - No more 30-day limitation!"
+    echo ""
+    echo "Token stored at: secret/jupyterhub/vault-token"
