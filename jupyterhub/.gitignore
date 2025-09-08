@@ -1,2 +1,3 @@
 jupyterhub-values.yaml
+vault-agent-config.hcl
 /notebooks/

@@ -1,10 +1,16 @@
 hub:
   extraEnv:
     JUPYTERHUB_CRYPT_KEY: {{ .Env.JUPYTERHUB_CRYPT_KEY | quote }}
-    JUPYTERHUB_VAULT_TOKEN: {{ .Env.JUPYTERHUB_VAULT_TOKEN | quote }}
     VAULT_ADDR: {{ .Env.VAULT_ADDR | quote }}
     NOTEBOOK_VAULT_TOKEN_TTL: {{ .Env.NOTEBOOK_VAULT_TOKEN_TTL | quote }}
     NOTEBOOK_VAULT_TOKEN_MAX_TTL: {{ .Env.NOTEBOOK_VAULT_TOKEN_MAX_TTL | quote }}
+    {{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
+    # Vault Agent will provide token via file
+    VAULT_TOKEN_FILE: "/vault/secrets/vault-token"
+    {{- else }}
+    # Traditional token via environment variable
+    JUPYTERHUB_VAULT_TOKEN: {{ .Env.JUPYTERHUB_VAULT_TOKEN | quote }}
+    {{- end }}
 
   # Install packages at container startup
   extraFiles:
@@ -57,6 +63,25 @@ hub:
       # Set environment variables for spawned containers
       import hvac
 
+      def get_vault_token():
+          """Read Vault token from file written by Vault Agent"""
+          import os
+          token_file = os.environ.get('VAULT_TOKEN_FILE', '/vault/secrets/vault-token')
+          try:
+              with open(token_file, 'r') as f:
+                  token = f.read().strip()
+                  if token:
+                      return token
+                  else:
+                      raise Exception(f"Empty token file: {token_file}")
+          except FileNotFoundError:
+              # Fallback to environment variable for backward compatibility
+              return os.environ.get("JUPYTERHUB_VAULT_TOKEN")
+          except Exception as e:
+              # Log error but attempt fallback
+              print(f"Error reading token file {token_file}: {e}")
+              return os.environ.get("JUPYTERHUB_VAULT_TOKEN")
+
       async def pre_spawn_hook(spawner):
           """Set essential environment variables for spawned containers"""
           # PostgreSQL configuration
@@ -73,14 +98,18 @@ hub:
           try:
               username = spawner.user.name
 
-              # Step 1: Initialize admin Vault client
+              # Step 1: Initialize admin Vault client with file-based token
               import os
               vault_addr = os.environ.get("VAULT_ADDR", "{{ .Env.VAULT_ADDR }}")
-              vault_token = os.environ.get("JUPYTERHUB_VAULT_TOKEN", "{{ .Env.JUPYTERHUB_VAULT_TOKEN }}")
+              vault_token = get_vault_token()
 
               spawner.log.info(f"pre_spawn_hook starting for {username}")
               spawner.log.info(f"Vault address: {vault_addr}")
+              spawner.log.info(f"Vault token source: {'file' if os.path.exists(os.environ.get('VAULT_TOKEN_FILE', '/vault/secrets/vault-token')) else 'env'}")
               spawner.log.info(f"Vault token present: {bool(vault_token)}, length: {len(vault_token) if vault_token else 0}")
+
+              if not vault_token:
+                  raise Exception("No Vault token available from file or environment")
 
               vault_client = hvac.Client(url=vault_addr, verify=False)
               vault_client.token = vault_token
@@ -135,6 +164,55 @@ hub:
 
       c.KubeSpawner.pre_spawn_hook = pre_spawn_hook
 
+  {{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
+  # Vault Agent sidecar configuration
+  extraVolumes:
+    - name: vault-secrets
+      emptyDir: {}
+    - name: vault-config
+      configMap:
+        name: vault-agent-config
+
+  extraVolumeMounts:
+    - name: vault-secrets
+      mountPath: /vault/secrets
+    - name: vault-config
+      mountPath: /vault/config
+
+  extraContainers:
+    - name: vault-agent
+      image: hashicorp/vault:1.15.2
+      securityContext:
+        runAsUser: 100
+        runAsGroup: 101
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
+        capabilities:
+          drop:
+          - ALL
+      command:
+        - /bin/sh
+        - -c
+        - |
+          # Start Vault Agent
+          vault agent -config=/vault/config/agent.hcl
+      env:
+        - name: VAULT_ADDR
+          value: {{ .Env.VAULT_ADDR | quote }}
+      volumeMounts:
+        - name: vault-secrets
+          mountPath: /vault/secrets
+        - name: vault-config
+          mountPath: /vault/config
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi
+  {{- end }}
 
   podSecurityContext:
     fsGroup: {{ .Env.JUPYTER_FSGID }}

@@ -150,7 +150,7 @@ export JUPYTERHUB_VAULT_INTEGRATION_ENABLED=true
 just jupyterhub::install
 ```
 
-**Note**: The `just jupyterhub::setup-vault-jwt-auth` command is called automatically during installation if Vault integration is enabled. This command currently serves as a placeholder for future JWT-based authentication enhancements.
+**Note**: The `just jupyterhub::setup-vault-integration` command is called automatically during installation if Vault integration is enabled. This configures Vault Agent for automatic token renewal and user-specific token management.
 
 ### Usage in Notebooks
 
@@ -183,7 +183,8 @@ secrets.delete('api-keys', field='github')  # Delete only github field
 ### Security Features
 
 - **User isolation**: Each user receives a unique Vault token with access only to their own secrets
-- **Automatic token renewal**: Tokens can be renewed to extend session lifetime
+- **Automatic token renewal**: Both admin and user tokens are automatically renewed by Vault Agent
+- **Vault Agent integration**: JupyterHub admin token is automatically renewed using Kubernetes authentication
 - **Audit trail**: All secret access is logged in Vault
 - **Individual policies**: Each user has their own Vault policy restricting access to their namespace
 
@@ -236,13 +237,16 @@ JUPYTER_PYTHON_KERNEL_TAG=python-3.12-28
 IMAGE_REGISTRY=localhost:30500
 
 # Vault token TTL settings
-JUPYTERHUB_VAULT_TOKEN_TTL=720h      # Admin token: 30 days (effective limit)
-JUPYTERHUB_VAULT_TOKEN_MAX_TTL=8760h # Admin token: 1 year (currently unused - no auto-renewal)
+JUPYTERHUB_VAULT_TOKEN_TTL=24h       # Admin token: 1 day (auto-renewed by Vault Agent)
+JUPYTERHUB_VAULT_TOKEN_MAX_TTL=720h  # Admin token: 30 days (max renewal limit)
 NOTEBOOK_VAULT_TOKEN_TTL=24h         # User token: 1 day (auto-renewed)
 NOTEBOOK_VAULT_TOKEN_MAX_TTL=168h    # User token: 7 days (max renewal limit)
 
-# Logging
-JUPYTER_BUUNSTACK_LOG_LEVEL=warning # Options: debug, info, warning, error
+# Vault Agent logging
+VAULT_AGENT_LOG_LEVEL=info           # Options: trace, debug, info, warn, error
+
+# Application logging
+JUPYTER_BUUNSTACK_LOG_LEVEL=warning  # Options: debug, info, warning, error
 ```
 
 ### Advanced Configuration
@@ -351,9 +355,10 @@ The `buunstack` SecretStore uses pre-created user-specific Vault tokens that are
 
 **Key Components**:
 
-- **JupyterHub Admin Token**: Created with admin policy, stored at `jupyterhub/vault-token`, available as `JUPYTERHUB_VAULT_TOKEN` environment variable
-- **User-Specific Tokens**: Created dynamically during notebook spawn, available as `NOTEBOOK_VAULT_TOKEN` environment variable
+- **JupyterHub Admin Token**: Automatically renewed by Vault Agent, read from file at `/vault/secrets/vault-token`
+- **User-Specific Tokens**: Created dynamically during notebook spawn, available as `NOTEBOOK_VAULT_TOKEN` environment variable  
 - **User Policies**: Restrict access to `secret/data/jupyter/users/{username}/*`
+- **Vault Agent**: Sidecar container that handles automatic token renewal using Kubernetes authentication
 
 #### Token Lifecycle
 
@@ -511,10 +516,85 @@ For production deployments, consider:
 - Setting up monitoring and alerts
 - Monitoring Vault token expiration and renewal patterns
 
+## Vault Agent Integration
+
+### Overview
+
+JupyterHub now uses Vault Agent for automatic token renewal, eliminating the need for manual token management. Vault Agent runs as a sidecar container in the JupyterHub hub pod and automatically renews the admin token using Kubernetes authentication.
+
+### Architecture
+
+```plain
+┌─────────────────────────────────────────────────────────────┐
+│                    JupyterHub Hub Pod                       │
+│                                                             │
+│  ┌─────────────────┐              ┌─────────────────────┐  │
+│  │   Hub Container │              │ Vault Agent Sidecar │  │
+│  │                 │              │                     │  │
+│  │ Reads token     │◄─────────────┤ Writes token        │  │
+│  │ from file       │              │ to shared volume    │  │
+│  │                 │              │                     │  │
+│  └─────────────────┘              └─────────────────────┘  │
+│           │                                 │               │
+│           │                                 │               │
+│           │                                 │               │
+│  ┌─────────▼─────────┐              ┌─────────▼─────────┐  │
+│  │ /vault/secrets/   │              │ Kubernetes Auth   │  │
+│  │   vault-token     │              │   with Vault      │  │
+│  └───────────────────┘              └───────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Features
+
+- **Automatic Renewal**: Admin token is automatically renewed every TTL/2 interval
+- **Kubernetes Authentication**: Uses Kubernetes ServiceAccount for secure token acquisition
+- **File-based Token Sharing**: Vault Agent writes tokens to shared volume, Hub reads from file
+- **Zero Downtime**: Token renewal happens in background without service interruption
+- **Configurable Logging**: Vault Agent log level can be configured via `VAULT_AGENT_LOG_LEVEL`
+
+### Monitoring Token Renewal
+
+Check Vault Agent status and token renewal:
+
+```bash
+# Monitor Vault Agent logs
+kubectl logs -n jupyter -l app.kubernetes.io/component=hub -c vault-agent -f
+
+# Use monitoring script
+cd jupyterhub
+./monitor-vault-token.sh
+
+# Check token details
+kubectl exec -n jupyter <hub-pod> -c hub -- curl -s -H "X-Vault-Token: $(cat /vault/secrets/vault-token)" $VAULT_ADDR/v1/auth/token/lookup-self
+```
+
+### Testing Token Renewal
+
+For testing purposes, you can use shorter TTL values to observe rapid token renewal:
+
+```bash
+# Test with 1-minute TTL (renews every 30 seconds)
+JUPYTERHUB_VAULT_TOKEN_TTL=1m VAULT_AGENT_LOG_LEVEL=debug just jupyterhub::install
+
+# Monitor renewal activity
+kubectl logs -n jupyter -l app.kubernetes.io/component=hub -c vault-agent -f | grep "renewed auth token"
+```
+
+### Configuration Files
+
+The Vault Agent integration uses several configuration files:
+
+- `vault-agent-config.gomplate.hcl`: Vault Agent configuration template
+- `token-monitor.tpl`: Template for logging token information
+- `monitor-vault-token.sh`: Monitoring script for token status
+
 ## Known Limitations
 
-1. **Admin Token Refresh**: JupyterHub's admin Vault token (`JUPYTERHUB_VAULT_TOKEN`) does not auto-refresh. You must redeploy JupyterHub before the token expires (default TTL: 720h/30 days). The `JUPYTERHUB_VAULT_TOKEN_MAX_TTL` setting is currently not utilized since automatic renewal is not implemented. Monitor the token expiration and schedule redeployments accordingly.
+1. **Token Max TTL**: Even with Vault Agent auto-renewal, tokens cannot be renewed beyond `JUPYTERHUB_VAULT_TOKEN_MAX_TTL` (default: 720h/30 days). After this period, JupyterHub must be redeployed to acquire a new token from Vault. With the default 30-day limit, this requires monthly maintenance.
 
 2. **Cull Settings**: Server idle timeout is set to 2 hours by default. Adjust `cull.timeout` and `cull.every` in the Helm values for different requirements.
 
 3. **NFS Storage**: When using NFS storage, ensure proper permissions are set on the NFS server. The default `JUPYTER_FSGID` is 100.
+
+4. **Vault Agent Resource Usage**: The Vault Agent sidecar uses minimal resources (50m CPU, 64Mi memory) but adds slight overhead to the hub pod.
