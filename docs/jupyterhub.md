@@ -22,8 +22,13 @@ This will prompt for:
 - Keycloak must be installed and configured
 - For NFS storage: Longhorn must be installed
 - For Vault integration: Vault must be installed and configured
+- Helm repository must be accessible
 
 ## Kernel Images
+
+### Important Note
+
+Building and using custom buun-stack images requires building the `buunstack` Python package first. The package wheel file will be included in the Docker image during build.
 
 JupyterHub supports multiple kernel image profiles:
 
@@ -85,12 +90,19 @@ Buun-stack images provide comprehensive data science environments with:
 Build and push buun-stack images to your registry:
 
 ```bash
-# Build images
+# Build images (includes building the buunstack Python package)
 just jupyterhub::build-kernel-images
 
 # Push to registry
 just jupyterhub::push-kernel-images
 ```
+
+The build process:
+
+1. Builds the `buunstack` Python package wheel
+2. Copies the wheel into the Docker build context
+3. Installs the wheel in the Docker image
+4. Cleans up temporary files
 
 ⚠️ **Note**: Buun-stack images are comprehensive and large (~13GB). Initial image pulls and deployments take significant time due to the extensive package set.
 
@@ -102,8 +114,8 @@ Configure image settings in `.env.local`:
 # Image registry
 IMAGE_REGISTRY=localhost:30500
 
-# Image tag
-JUPYTER_PYTHON_KERNEL_TAG=python-3.12-1
+# Image tag (current default)
+JUPYTER_PYTHON_KERNEL_TAG=python-3.12-28
 ```
 
 ## Vault Integration
@@ -122,20 +134,23 @@ Vault integration requires:
 
 ### Setup
 
-Enable Vault integration during installation:
+Vault integration is configured during JupyterHub installation. You have two options:
+
+#### Option 1: Interactive setup (recommended)
 
 ```bash
-# Set environment variable before installation or answer yes to prompt during install
+just jupyterhub::install
+# Answer "yes" when prompted about Vault integration
+```
+
+#### Option 2: Pre-configured setup
+
+```bash
 export JUPYTERHUB_VAULT_INTEGRATION_ENABLED=true
 just jupyterhub::install
 ```
 
-Or configure manually:
-
-```bash
-# Setup Vault integration (creates user-specific tokens)
-just jupyterhub::setup-vault-jwt-auth
-```
+**Note**: The `just jupyterhub::setup-vault-jwt-auth` command is called automatically during installation if Vault integration is enabled. This command currently serves as a placeholder for future JWT-based authentication enhancements.
 
 ### Usage in Notebooks
 
@@ -217,8 +232,17 @@ JUPYTERHUB_VAULT_INTEGRATION_ENABLED=false
 VAULT_ADDR=http://vault.vault.svc:8200
 
 # Image settings
-JUPYTER_PYTHON_KERNEL_TAG=python-3.12-6
+JUPYTER_PYTHON_KERNEL_TAG=python-3.12-28
 IMAGE_REGISTRY=localhost:30500
+
+# Vault token TTL settings
+JUPYTERHUB_VAULT_TOKEN_TTL=720h      # Admin token: 30 days (effective limit)
+JUPYTERHUB_VAULT_TOKEN_MAX_TTL=8760h # Admin token: 1 year (currently unused - no auto-renewal)
+NOTEBOOK_VAULT_TOKEN_TTL=24h         # User token: 1 day (auto-renewed)
+NOTEBOOK_VAULT_TOKEN_MAX_TTL=168h    # User token: 7 days (max renewal limit)
+
+# Logging
+JUPYTER_BUUNSTACK_LOG_LEVEL=warning # Options: debug, info, warning, error
 ```
 
 ### Advanced Configuration
@@ -238,10 +262,11 @@ just jupyterhub::uninstall
 Upgrade to newer versions:
 
 ```bash
-# Update image tag
-export JUPYTER_PYTHON_KERNEL_TAG=python-3.12-2
+# Update image tag in .env.local
+export JUPYTER_PYTHON_KERNEL_TAG=python-3.12-29
 
 # Rebuild and push images
+just jupyterhub::build-kernel-images
 just jupyterhub::push-kernel-images
 
 # Upgrade JupyterHub deployment
@@ -297,7 +322,15 @@ just keycloak::update-client buunstack jupyterhub \
   "https://your-jupyter-host/hub/oauth_callback"
 ```
 
-## Implementation
+## Technical Implementation Details
+
+### Helm Chart Version
+
+JupyterHub uses the official Zero to JupyterHub (Z2JH) Helm chart:
+
+- Chart: `jupyterhub/jupyterhub`
+- Version: `4.2.0` (configurable via `JUPYTERHUB_CHART_VERSION`)
+- Documentation: https://z2jh.jupyter.org/
 
 ### User-Specific Vault Token System
 
@@ -315,6 +348,12 @@ The `buunstack` SecretStore uses pre-created user-specific Vault tokens that are
 │  └───────────┘  │    │  └────────────┘  │    │  └───────────┘  │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
+
+**Key Components**:
+
+- **JupyterHub Admin Token**: Created with admin policy, stored at `jupyterhub/vault-token`, available as `JUPYTERHUB_VAULT_TOKEN` environment variable
+- **User-Specific Tokens**: Created dynamically during notebook spawn, available as `NOTEBOOK_VAULT_TOKEN` environment variable
+- **User Policies**: Restrict access to `secret/data/jupyter/users/{username}/*`
 
 #### Token Lifecycle
 
@@ -471,3 +510,11 @@ For production deployments, consider:
 - Configuring resource limits per user
 - Setting up monitoring and alerts
 - Monitoring Vault token expiration and renewal patterns
+
+## Known Limitations
+
+1. **Admin Token Refresh**: JupyterHub's admin Vault token (`JUPYTERHUB_VAULT_TOKEN`) does not auto-refresh. You must redeploy JupyterHub before the token expires (default TTL: 720h/30 days). The `JUPYTERHUB_VAULT_TOKEN_MAX_TTL` setting is currently not utilized since automatic renewal is not implemented. Monitor the token expiration and schedule redeployments accordingly.
+
+2. **Cull Settings**: Server idle timeout is set to 2 hours by default. Adjust `cull.timeout` and `cull.every` in the Helm values for different requirements.
+
+3. **NFS Storage**: When using NFS storage, ensure proper permissions are set on the NFS server. The default `JUPYTER_FSGID` is 100.
