@@ -1,3 +1,4 @@
 jupyterhub-values.yaml
+pre_spawn_hook.py
 vault-agent-config.hcl
 /notebooks/

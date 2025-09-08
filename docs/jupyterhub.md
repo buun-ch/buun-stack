@@ -126,7 +126,7 @@ Vault integration enables secure secrets management directly from Jupyter notebo
 
 - **ExternalSecret** to fetch the admin token from Vault
 - **Renewable tokens** with unlimited Max TTL to avoid 30-day system limitations
-- **Token renewal script** that automatically renews tokens every 12 hours
+- **Token renewal script** that automatically renews tokens at TTL/2 intervals (minimum 30 seconds)
 - **User-specific tokens** created during notebook spawn with isolated access
 
 ### Architecture
@@ -214,7 +214,7 @@ secrets.delete('api-keys', field='github')  # Delete only github field
 ### Security Features
 
 - **User isolation**: Each user receives an orphan token with access only to their namespace
-- **Automatic renewal**: Token renewal script renews admin token every 12 hours
+- **Automatic renewal**: Token renewal script renews admin token at TTL/2 intervals (minimum 30 seconds)
 - **ExternalSecret integration**: Admin token fetched securely from Vault
 - **Orphan tokens**: User tokens are orphan tokens, not limited by parent policy restrictions
 - **Audit trail**: All secret access is logged in Vault
@@ -228,7 +228,7 @@ The admin token is managed through:
 1. **Creation**: `just jupyterhub::create-jupyterhub-vault-token` creates renewable token
 2. **Storage**: Stored in Vault at `secret/jupyterhub/vault-token`
 3. **Retrieval**: ExternalSecret fetches and mounts as Kubernetes Secret
-4. **Renewal**: `vault-token-renewer.sh` script renews every 12 hours
+4. **Renewal**: `vault-token-renewer.sh` script renews at TTL/2 intervals
 
 #### User Tokens
 
@@ -238,6 +238,112 @@ User tokens are created dynamically:
 2. **Creates user policy** `jupyter-user-{username}` with restricted access
 3. **Creates orphan token** with user policy (requires `sudo` permission)
 4. **Sets environment variable** `NOTEBOOK_VAULT_TOKEN` in notebook container
+
+## Token Renewal Implementation
+
+### Admin Token Renewal
+
+The admin token renewal is handled by a sidecar container (`vault-agent`) running alongside the JupyterHub hub:
+
+**Implementation Details:**
+
+1. **Renewal Script**: `/vault/config/vault-token-renewer.sh`
+   - Runs in the `vault-agent` sidecar container
+   - Uses Vault 1.17.5 image with HashiCorp Vault CLI
+
+2. **Environment-Based TTL Configuration**:
+   ```bash
+   # Reads TTL from environment variable (set in .env.local)
+   TTL_RAW="${JUPYTERHUB_VAULT_TOKEN_TTL}"  # e.g., "5m", "24h"
+   
+   # Converts to seconds and calculates renewal interval
+   RENEWAL_INTERVAL=$((TTL_SECONDS / 2))  # TTL/2 with minimum 30s
+   ```
+
+3. **Token Source**: ExternalSecret → Kubernetes Secret → mounted file
+   ```bash
+   # Token retrieved from ExternalSecret-managed mount
+   ADMIN_TOKEN=$(cat /vault/admin-token/token)
+   ```
+
+4. **Renewal Loop**:
+   ```bash
+   while true; do
+       vault token renew >/dev/null 2>&1
+       sleep $RENEWAL_INTERVAL
+   done
+   ```
+
+5. **Error Handling**: If renewal fails, re-retrieves token from ExternalSecret mount
+
+**Key Files:**
+- `vault-token-renewer.sh`: Main renewal script
+- `jupyterhub-vault-token-external-secret.gomplate.yaml`: ExternalSecret configuration
+- `vault-agent-config` ConfigMap: Contains the renewal script
+
+### User Token Renewal
+
+User token renewal is handled within the notebook environment by the `buunstack` Python package:
+
+**Implementation Details:**
+
+1. **Token Source**: Environment variable set by pre-spawn hook
+   ```python
+   # In pre_spawn_hook.gomplate.py
+   spawner.environment["NOTEBOOK_VAULT_TOKEN"] = user_vault_token
+   ```
+
+2. **Automatic Renewal**: Built into `SecretStore` class operations
+   ```python
+   # In buunstack/secrets.py
+   def _ensure_authenticated(self):
+       token_info = self.client.auth.token.lookup_self()
+       ttl = token_info.get("data", {}).get("ttl", 0)
+       renewable = token_info.get("data", {}).get("renewable", False)
+       
+       # Renew if TTL < 10 minutes and renewable
+       if renewable and ttl > 0 and ttl < 600:
+           self.client.auth.token.renew_self()
+   ```
+
+3. **Renewal Trigger**: Every `SecretStore` operation (get, put, delete, list)
+   - Checks token validity before operation
+   - Automatically renews if TTL < 10 minutes
+   - Transparent to user code
+
+4. **Token Configuration** (set during creation):
+   - **TTL**: `NOTEBOOK_VAULT_TOKEN_TTL` (default: 24h)
+   - **Max TTL**: `NOTEBOOK_VAULT_TOKEN_MAX_TTL` (default: 168h = 7 days)
+   - **Policy**: User-specific `jupyter-user-{username}`
+   - **Type**: Orphan token (independent of parent token lifecycle)
+
+5. **Expiry Handling**: When token reaches Max TTL:
+   - Cannot be renewed further
+   - User must restart notebook server (triggers new token creation)
+   - Prevented by `JUPYTERHUB_CULL_MAX_AGE` setting (6 days < 7 day Max TTL)
+
+**Key Files:**
+- `pre_spawn_hook.gomplate.py`: User token creation logic
+- `buunstack/secrets.py`: Token renewal implementation
+- `user_policy.hcl`: User token permissions template
+
+### Token Lifecycle Summary
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Admin Token   │    │   User Token     │    │  Pod Lifecycle  │
+│                 │    │                  │    │                 │
+│ Created: Manual │    │ Created: Spawn   │    │ Max Age: 6 days │
+│ TTL: 5m-24h     │    │ TTL: 24h         │    │ Auto-restart    │
+│ Max TTL: ∞      │    │ Max TTL: 7 days  │    │ before expiry   │
+│ Renewal: Auto   │    │ Renewal: Auto    │    │                 │
+│ Interval: TTL/2 │    │ Trigger: Usage   │    │                 │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+         │                       │                       │
+         ▼                       ▼                       ▼
+   vault-agent              buunstack.py            cull.maxAge
+   sidecar                  SecretStore            pod restart
+```
 
 ## Storage Options
 
@@ -288,9 +394,13 @@ JUPYTER_PYTHON_KERNEL_TAG=python-3.12-28
 IMAGE_REGISTRY=localhost:30500
 
 # Vault token TTL settings
-JUPYTERHUB_VAULT_TOKEN_TTL=24h       # Admin token: renewed every 12h
+JUPYTERHUB_VAULT_TOKEN_TTL=24h       # Admin token: renewed at TTL/2 intervals
 NOTEBOOK_VAULT_TOKEN_TTL=24h         # User token: 1 day
 NOTEBOOK_VAULT_TOKEN_MAX_TTL=168h    # User token: 7 days max
+
+# Server pod lifecycle settings
+JUPYTERHUB_CULL_MAX_AGE=518400       # Max pod age in seconds (6 days = 518400s)
+                                     # MUST be < NOTEBOOK_VAULT_TOKEN_MAX_TTL to prevent token expiry
 
 # Logging
 JUPYTER_BUUNSTACK_LOG_LEVEL=warning  # Options: debug, info, warning, error
@@ -413,7 +523,7 @@ The system uses a three-tier token approach:
 
 1. **Renewable Admin Token**:
    - Created with `explicit-max-ttl=0` (unlimited Max TTL)
-   - Renewed automatically every 12 hours
+   - Renewed automatically at TTL/2 intervals (minimum 30 seconds)
    - Stored in Vault and fetched via ExternalSecret
 
 2. **Orphan User Tokens**:
@@ -438,7 +548,7 @@ The system uses a three-tier token approach:
 - **Image Size**: Buun-stack images are ~13GB, plan storage accordingly
 - **Pull Time**: Initial pulls take 5-15 minutes depending on network
 - **Resource Usage**: Data science workloads require adequate CPU/memory
-- **Token Renewal**: Minimal overhead (renewal every 12 hours)
+- **Token Renewal**: Minimal overhead (renewal at TTL/2 intervals)
 
 For production deployments, consider:
 
@@ -451,8 +561,10 @@ For production deployments, consider:
 
 1. **Annual Token Recreation**: While tokens have unlimited Max TTL, best practice suggests recreating them annually
 
-2. **Cull Settings**: Server idle timeout is set to 2 hours by default. Adjust `cull.timeout` and `cull.every` in the Helm values for different requirements
+2. **Token Expiry and Pod Lifecycle**: User tokens have a maximum TTL of 7 days (`NOTEBOOK_VAULT_TOKEN_MAX_TTL=168h`). To prevent token expiry in long-running server pods, `JUPYTERHUB_CULL_MAX_AGE` is set to 6 days (518400s) by default. This ensures pods are restarted with fresh tokens before expiry.
 
-3. **NFS Storage**: When using NFS storage, ensure proper permissions are set on the NFS server. The default `JUPYTER_FSGID` is 100
+3. **Cull Settings**: Server idle timeout is set to 2 hours by default. Adjust `cull.timeout` and `cull.every` in the Helm values for different requirements
 
-4. **ExternalSecret Dependency**: Requires External Secrets Operator to be installed and configured
+4. **NFS Storage**: When using NFS storage, ensure proper permissions are set on the NFS server. The default `JUPYTER_FSGID` is 100
+
+5. **ExternalSecret Dependency**: Requires External Secrets Operator to be installed and configured

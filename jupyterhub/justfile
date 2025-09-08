@@ -22,6 +22,7 @@ export JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED := env("JUPYTER_PROFILE_BUUN_STAC
 export JUPYTERHUB_VAULT_TOKEN_TTL := env("JUPYTERHUB_VAULT_TOKEN_TTL", "24h")
 export NOTEBOOK_VAULT_TOKEN_TTL := env("NOTEBOOK_VAULT_TOKEN_TTL", "24h")
 export NOTEBOOK_VAULT_TOKEN_MAX_TTL := env("NOTEBOOK_VAULT_TOKEN_MAX_TTL", "168h")
+export JUPYTERHUB_CULL_MAX_AGE := env("JUPYTERHUB_CULL_MAX_AGE", "518400")
 export VAULT_AGENT_LOG_LEVEL := env("VAULT_AGENT_LOG_LEVEL", "info")
 export JUPYTER_BUUNSTACK_LOG_LEVEL := env("JUPYTER_BUUNSTACK_LOG_LEVEL", "warning")
 export IMAGE_REGISTRY := env("IMAGE_REGISTRY", "localhost:30500")
@@ -146,6 +147,10 @@ install root_token='':
         export USER_POLICY_HCL=""
     fi
 
+    # Generate pre_spawn_hook.py
+    echo "Generating pre_spawn_hook.py..."
+    gomplate -f pre_spawn_hook.gomplate.py -o pre_spawn_hook.py
+
     # https://z2jh.jupyter.org/en/stable/
     gomplate -f jupyterhub-values.gomplate.yaml -o jupyterhub-values.yaml
 
@@ -261,7 +266,7 @@ setup-vault-integration root_token='':
     echo "  User Token TTL: ${NOTEBOOK_VAULT_TOKEN_TTL}"
     echo "  User Token Max TTL: ${NOTEBOOK_VAULT_TOKEN_MAX_TTL}"
     echo "  Vault Agent Log Level: ${VAULT_AGENT_LOG_LEVEL}"
-    echo "  Auto-renewal: Every $(( $(echo ${JUPYTERHUB_VAULT_TOKEN_TTL} | sed 's/m/*60/g; s/h/*3600/g; s/s//g' | bc) / 2 ))s (TTL/2)"
+    echo "  Auto-renewal: Every TTL/2 (minimum 30s) based on actual token TTL"
     echo ""
     echo "Users can now access Vault from notebooks using:"
     echo "  from buunstack import SecretStore"
@@ -295,10 +300,10 @@ create-jupyterhub-vault-token root_token='':
 
     # Create admin vault token with unlimited max TTL
     echo ""
-    echo "Creating admin token (TTL: 24h, Max TTL: unlimited)..."
+    echo "Creating admin token (TTL: ${JUPYTERHUB_VAULT_TOKEN_TTL}, Max TTL: unlimited)..."
     TOKEN_RESPONSE=$(vault token create \
         -policy=jupyterhub-admin \
-        -ttl=24h \
+        -ttl=${JUPYTERHUB_VAULT_TOKEN_TTL} \
         -explicit-max-ttl=0 \
         -display-name="jupyterhub-admin" \
         -renewable=true \
@@ -320,9 +325,9 @@ create-jupyterhub-vault-token root_token='':
     echo "✅ Admin token created and stored successfully!"
     echo ""
     echo "Token behavior:"
-    echo "  - TTL: 24 hours (will expire in 24h without renewal)"
+    echo "  - TTL: ${JUPYTERHUB_VAULT_TOKEN_TTL} (will expire without renewal)"
     echo "  - Max TTL: Unlimited (can be renewed forever)"
-    echo "  - Vault Agent will renew every 12 hours"
+    echo "  - Vault Agent will renew at TTL/2 intervals (minimum 30s)"
     echo "  - No more 30-day limitation!"
     echo ""
     echo "Token stored at: secret/jupyterhub/vault-token"
