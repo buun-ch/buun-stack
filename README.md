@@ -13,6 +13,7 @@ A Kubernetes development stack for self-hosted environments, designed to run on 
 - **Database**: PostgreSQL cluster
 - **Object Storage**: MinIO S3-compatible storage
 - **Data Science**: JupyterHub for collaborative notebooks
+- **Analytics**: Metabase for business intelligence and data visualization
 - **Remote Access**: Cloudflare Tunnel for secure internet connectivity
 - **Automation**: Just task runner with templated configurations
 
@@ -116,6 +117,25 @@ Multi-user platform for interactive computing:
 
 See [JupyterHub Documentation](./docs/jupyterhub.md) for detailed setup and configuration.
 
+### Metabase
+
+Business intelligence and data visualization platform:
+
+- Open-source analytics and dashboards
+- Interactive data exploration
+- PostgreSQL integration for data storage
+- Automated setup with Helm
+- Session management through Vault/External Secrets
+- Simplified deployment (no OIDC dependency)
+
+Installation:
+
+```bash
+just metabase::install
+```
+
+Access Metabase at `https://metabase.yourdomain.com` and complete the initial setup wizard to create an admin account.
+
 ## Common Operations
 
 ### User Management
@@ -180,6 +200,7 @@ kubectl --context yourpc-oidc get nodes
 # Web interfaces
 # Vault: https://vault.yourdomain.com
 # Keycloak: https://auth.yourdomain.com
+# Metabase: https://metabase.yourdomain.com
 ```
 
 ## Customization
