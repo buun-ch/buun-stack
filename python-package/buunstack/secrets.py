@@ -141,10 +141,89 @@ class SecretStore:
         except Exception:
             pass
 
-        # Token expired or invalid - no fallback available with user-specific tokens
-        raise Exception(
-            "User-specific Vault token expired and cannot be refreshed. Please restart your notebook server."
-        )
+        # Token expired or invalid - provide detailed expiry information
+        token_ttl = os.getenv("NOTEBOOK_VAULT_TOKEN_TTL", "24h")
+        token_max_ttl = os.getenv("NOTEBOOK_VAULT_TOKEN_MAX_TTL", "168h")
+
+        # Try to get actual token information for better error message
+        token_info = None
+        try:
+            token_info = self.client.auth.token.lookup_self()
+        except Exception:
+            pass
+
+        if token_info:
+            data = token_info.get("data", {})
+            ttl = data.get("ttl", 0)
+            creation_time = data.get("creation_time", 0)
+            expire_time = data.get("expire_time", "unknown")
+            renewable = data.get("renewable", False)
+
+            if ttl <= 0 and renewable:
+                # Token expired but was renewable - likely hit Max TTL
+                import datetime
+
+                try:
+                    current_time = datetime.datetime.now()
+                    if creation_time:
+                        created_at = datetime.datetime.fromtimestamp(creation_time)
+                        age_hours = (current_time - created_at).total_seconds() / 3600
+                        error_msg = (
+                            f"Vault Token Expired\n\n"
+                            f"Your notebook's Vault token has reached its maximum lifetime and cannot be renewed.\n\n"
+                            f"Token Details:\n"
+                            f"• Created: {created_at.strftime('%Y-%m-%d %H:%M:%S')} ({age_hours:.1f}h ago)\n"
+                            f"• TTL (renewal period): {token_ttl}\n"
+                            f"• Max TTL (maximum lifetime): {token_max_ttl}\n"
+                            f"• Expired at: {expire_time}\n\n"
+                            f"How Token Renewal Works:\n"
+                            f"• Your token is automatically renewed every time you use SecretStore\n"
+                            f"• Each renewal extends the token for another {token_ttl}\n"
+                            f"• However, tokens cannot be renewed beyond {token_max_ttl} from creation\n"
+                            f"• Regular usage (within {token_ttl} intervals) keeps your token alive for up to {token_max_ttl}\n\n"
+                            f"Solution:\n"
+                            f"Please restart your notebook server to get a fresh token with a new {token_max_ttl} lifetime."
+                        )
+                    else:
+                        error_msg = (
+                            f"Vault Token Expired\n\n"
+                            f"Your notebook's Vault token has expired and cannot be renewed.\n\n"
+                            f"Token Settings:\n"
+                            f"• TTL (renewal period): {token_ttl}\n"
+                            f"• Max TTL (maximum lifetime): {token_max_ttl}\n\n"
+                            f"Tip: Regular usage (within {token_ttl} intervals) keeps your token alive for up to {token_max_ttl}.\n\n"
+                            f"Solution: Please restart your notebook server to get a fresh token."
+                        )
+                except Exception:
+                    error_msg = (
+                        f"Vault Token Expired\n\n"
+                        f"Your notebook's Vault token has expired and cannot be renewed.\n\n"
+                        f"Token Settings:\n"
+                        f"• TTL (renewal period): {token_ttl}\n"
+                        f"• Max TTL (maximum lifetime): {token_max_ttl}\n\n"
+                        f"Tip: Regular usage (within {token_ttl} intervals) keeps your token alive for up to {token_max_ttl}.\n\n"
+                        f"Solution: Please restart your notebook server to get a fresh token."
+                    )
+            else:
+                # Token invalid for other reasons
+                error_msg = (
+                    "Vault Authentication Failed\n\n"
+                    "Your notebook's Vault token is invalid or corrupted.\n\n"
+                    "Solution: Please restart your notebook server to get a fresh token."
+                )
+        else:
+            # Cannot retrieve token info - generic message
+            error_msg = (
+                f"Vault Authentication Failed\n\n"
+                f"Your notebook's Vault token is invalid or has expired.\n\n"
+                f"Token Settings:\n"
+                f"• TTL (renewal period): {token_ttl}\n"
+                f"• Max TTL (maximum lifetime): {token_max_ttl}\n\n"
+                f"Tip: Regular usage (within {token_ttl} intervals) keeps your token alive for up to {token_max_ttl}.\n\n"
+                f"Solution: Please restart your notebook server to get a fresh token."
+            )
+
+        raise Exception(error_msg)
 
     def put(self, key: str, **kwargs: Any) -> None:
         """

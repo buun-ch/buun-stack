@@ -8,7 +8,7 @@ export JUPYTERHUB_OIDC_CLIENT_SESSION_MAX := env("JUPYTERHUB_OIDC_CLIENT_SESSION
 export JUPYTERHUB_NFS_PV_ENABLED := env("JUPYTERHUB_NFS_PV_ENABLED", "")
 export JUPYTERHUB_STORAGE_CLASS := env("JUPYTERHUB_STORAGE_CLASS", "")
 export JUPYTERHUB_VAULT_INTEGRATION_ENABLED := env("JUPYTERHUB_VAULT_INTEGRATION_ENABLED", "")
-export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-28")
+export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-30")
 export KERNEL_IMAGE_BUUN_STACK_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_REPOSITORY", "buun-stack-notebook")
 export KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY", "buun-stack-cuda-notebook")
 export JUPYTER_PROFILE_MINIMAL_ENABLED := env("JUPYTER_PROFILE_MINIMAL_ENABLED", "false")
@@ -22,7 +22,7 @@ export JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED := env("JUPYTER_PROFILE_BUUN_STAC
 export JUPYTERHUB_VAULT_TOKEN_TTL := env("JUPYTERHUB_VAULT_TOKEN_TTL", "24h")
 export NOTEBOOK_VAULT_TOKEN_TTL := env("NOTEBOOK_VAULT_TOKEN_TTL", "24h")
 export NOTEBOOK_VAULT_TOKEN_MAX_TTL := env("NOTEBOOK_VAULT_TOKEN_MAX_TTL", "168h")
-export JUPYTERHUB_CULL_MAX_AGE := env("JUPYTERHUB_CULL_MAX_AGE", "518400")
+export JUPYTERHUB_CULL_MAX_AGE := env("JUPYTERHUB_CULL_MAX_AGE", "604800")
 export VAULT_AGENT_LOG_LEVEL := env("VAULT_AGENT_LOG_LEVEL", "info")
 export JUPYTER_BUUNSTACK_LOG_LEVEL := env("JUPYTER_BUUNSTACK_LOG_LEVEL", "warning")
 export IMAGE_REGISTRY := env("IMAGE_REGISTRY", "localhost:30500")
@@ -255,7 +255,7 @@ setup-vault-integration root_token='':
 
     # Create ConfigMap with token renewal script
     echo "Creating ConfigMap with token renewal script..."
-    kubectl create configmap vault-agent-config -n ${JUPYTERHUB_NAMESPACE} \
+    kubectl create configmap vault-token-renewer-config -n ${JUPYTERHUB_NAMESPACE} \
         --from-file=vault-token-renewer.sh=vault-token-renewer.sh \
         --dry-run=client -o yaml | kubectl apply -f -
 

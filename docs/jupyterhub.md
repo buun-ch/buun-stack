@@ -132,28 +132,28 @@ Vault integration enables secure secrets management directly from Jupyter notebo
 ### Architecture
 
 ```plain
-┌──────────────────────────────────────────────────────────────────┐
-│                         JupyterHub Hub Pod                       │
-│                                                                  │
+┌────────────────────────────────────────────────────────────────┐
+│                         JupyterHub Hub Pod                     │
+│                                                                │
 │  ┌──────────────┐  ┌────────────────┐  ┌────────────────────┐  │
-│  │     Hub      │  │ Token Renewer  │  │  ExternalSecret   │  │
-│  │  Container   │◄─┤   Sidecar      │◄─┤   (mounted as     │  │
-│  │              │  │                │  │    Secret)        │  │
+│  │     Hub      │  │ Token Renewer  │  │  ExternalSecret    │  │
+│  │  Container   │◄─┤   Sidecar      │◄─┤   (mounted as      │  │
+│  │              │  │                │  │    Secret)         │  │
 │  └──────────────┘  └────────────────┘  └────────────────────┘  │
-│         │                    │                     ▲            │
-│         │                    │                     │            │
-│         ▼                    ▼                     │            │
-│  ┌──────────────────────────────────┐              │            │
-│  │    /vault/secrets/vault-token    │              │            │
-│  │  (Admin token for user creation) │              │            │
-│  └──────────────────────────────────┘              │            │
-└────────────────────────────────────────────────────┼────────────┘
-                                                      │
-                                          ┌───────────▼──────────┐
-                                          │       Vault          │
-                                          │  secret/jupyterhub/  │
-                                          │     vault-token      │
-                                          └──────────────────────┘
+│         │                    │                     ▲           │
+│         │                    │                     │           │
+│         ▼                    ▼                     │           │
+│  ┌──────────────────────────────────┐              │           │
+│  │    /vault/secrets/vault-token    │              │           │
+│  │  (Admin token for user creation) │              │           │
+│  └──────────────────────────────────┘              │           │
+└────────────────────────────────────────────────────┼───────────┘
+                                                     │
+                                         ┌───────────▼──────────┐
+                                         │       Vault          │
+                                         │  secret/jupyterhub/  │
+                                         │     vault-token      │
+                                         └──────────────────────┘
 ```
 
 ### Prerequisites
@@ -163,7 +163,7 @@ Vault integration requires:
 - Vault server installed and configured
 - External Secrets Operator installed
 - ClusterSecretStore configured for Vault
-- **Buun-stack kernel images** (standard images don't include Vault integration)
+- Buun-stack kernel images (standard images don't include Vault integration)
 
 ### Setup
 
@@ -243,15 +243,16 @@ User tokens are created dynamically:
 
 ### Admin Token Renewal
 
-The admin token renewal is handled by a sidecar container (`vault-agent`) running alongside the JupyterHub hub:
+The admin token renewal is handled by a sidecar container (`vault-token-renewer`) running alongside the JupyterHub hub:
 
 **Implementation Details:**
 
 1. **Renewal Script**: `/vault/config/vault-token-renewer.sh`
-   - Runs in the `vault-agent` sidecar container
+   - Runs in the `vault-token-renewer` sidecar container
    - Uses Vault 1.17.5 image with HashiCorp Vault CLI
 
 2. **Environment-Based TTL Configuration**:
+
    ```bash
    # Reads TTL from environment variable (set in .env.local)
    TTL_RAW="${JUPYTERHUB_VAULT_TOKEN_TTL}"  # e.g., "5m", "24h"
@@ -261,12 +262,14 @@ The admin token renewal is handled by a sidecar container (`vault-agent`) runnin
    ```
 
 3. **Token Source**: ExternalSecret → Kubernetes Secret → mounted file
+
    ```bash
    # Token retrieved from ExternalSecret-managed mount
    ADMIN_TOKEN=$(cat /vault/admin-token/token)
    ```
 
 4. **Renewal Loop**:
+
    ```bash
    while true; do
        vault token renew >/dev/null 2>&1
@@ -277,9 +280,10 @@ The admin token renewal is handled by a sidecar container (`vault-agent`) runnin
 5. **Error Handling**: If renewal fails, re-retrieves token from ExternalSecret mount
 
 **Key Files:**
+
 - `vault-token-renewer.sh`: Main renewal script
 - `jupyterhub-vault-token-external-secret.gomplate.yaml`: ExternalSecret configuration
-- `vault-agent-config` ConfigMap: Contains the renewal script
+- `vault-token-renewer-config` ConfigMap: Contains the renewal script
 
 ### User Token Renewal
 
@@ -288,12 +292,14 @@ User token renewal is handled within the notebook environment by the `buunstack`
 **Implementation Details:**
 
 1. **Token Source**: Environment variable set by pre-spawn hook
+
    ```python
    # In pre_spawn_hook.gomplate.py
    spawner.environment["NOTEBOOK_VAULT_TOKEN"] = user_vault_token
    ```
 
 2. **Automatic Renewal**: Built into `SecretStore` class operations
+
    ```python
    # In buunstack/secrets.py
    def _ensure_authenticated(self):
@@ -312,7 +318,7 @@ User token renewal is handled within the notebook environment by the `buunstack`
    - Transparent to user code
 
 4. **Token Configuration** (set during creation):
-   - **TTL**: `NOTEBOOK_VAULT_TOKEN_TTL` (default: 24h)
+   - **TTL**: `NOTEBOOK_VAULT_TOKEN_TTL` (default: 24h = 1 day)
    - **Max TTL**: `NOTEBOOK_VAULT_TOKEN_MAX_TTL` (default: 168h = 7 days)
    - **Policy**: User-specific `jupyter-user-{username}`
    - **Type**: Orphan token (independent of parent token lifecycle)
@@ -323,6 +329,7 @@ User token renewal is handled within the notebook environment by the `buunstack`
    - Prevented by `JUPYTERHUB_CULL_MAX_AGE` setting (6 days < 7 day Max TTL)
 
 **Key Files:**
+
 - `pre_spawn_hook.gomplate.py`: User token creation logic
 - `buunstack/secrets.py`: Token renewal implementation
 - `user_policy.hcl`: User token permissions template
@@ -333,15 +340,15 @@ User token renewal is handled within the notebook environment by the `buunstack`
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   Admin Token   │    │   User Token     │    │  Pod Lifecycle  │
 │                 │    │                  │    │                 │
-│ Created: Manual │    │ Created: Spawn   │    │ Max Age: 6 days │
-│ TTL: 5m-24h     │    │ TTL: 24h         │    │ Auto-restart    │
-│ Max TTL: ∞      │    │ Max TTL: 7 days  │    │ before expiry   │
+│ Created: Manual │    │ Created: Spawn   │    │ Max Age: 7 days │
+│ TTL: 5m-24h     │    │ TTL: 1 day       │    │ Auto-restart    │
+│ Max TTL: ∞      │    │ Max TTL: 7 days  │    │ at Max TTL      │
 │ Renewal: Auto   │    │ Renewal: Auto    │    │                 │
 │ Interval: TTL/2 │    │ Trigger: Usage   │    │                 │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
          │                       │                       │
          ▼                       ▼                       ▼
-   vault-agent              buunstack.py            cull.maxAge
+   vault-token-renewer      buunstack.py            cull.maxAge
    sidecar                  SecretStore            pod restart
 ```
 
@@ -395,12 +402,12 @@ IMAGE_REGISTRY=localhost:30500
 
 # Vault token TTL settings
 JUPYTERHUB_VAULT_TOKEN_TTL=24h       # Admin token: renewed at TTL/2 intervals
-NOTEBOOK_VAULT_TOKEN_TTL=24h         # User token: 1 day
+NOTEBOOK_VAULT_TOKEN_TTL=24h         # User token: 1 day (renewed on usage)
 NOTEBOOK_VAULT_TOKEN_MAX_TTL=168h    # User token: 7 days max
 
 # Server pod lifecycle settings
-JUPYTERHUB_CULL_MAX_AGE=518400       # Max pod age in seconds (6 days = 518400s)
-                                     # MUST be < NOTEBOOK_VAULT_TOKEN_MAX_TTL to prevent token expiry
+JUPYTERHUB_CULL_MAX_AGE=604800       # Max pod age in seconds (7 days = 604800s)
+                                     # Should be <= NOTEBOOK_VAULT_TOKEN_MAX_TTL
 
 # Logging
 JUPYTER_BUUNSTACK_LOG_LEVEL=warning  # Options: debug, info, warning, error
@@ -482,7 +489,7 @@ kubectl get externalsecret -n jupyter jupyterhub-vault-token
 kubectl get secret -n jupyter jupyterhub-vault-token
 
 # Check token renewal logs
-kubectl logs -n jupyter -l app.kubernetes.io/component=hub -c vault-agent
+kubectl logs -n jupyter -l app.kubernetes.io/component=hub -c vault-token-renewer
 
 # In a notebook, verify environment
 %env NOTEBOOK_VAULT_TOKEN
@@ -561,7 +568,7 @@ For production deployments, consider:
 
 1. **Annual Token Recreation**: While tokens have unlimited Max TTL, best practice suggests recreating them annually
 
-2. **Token Expiry and Pod Lifecycle**: User tokens have a maximum TTL of 7 days (`NOTEBOOK_VAULT_TOKEN_MAX_TTL=168h`). To prevent token expiry in long-running server pods, `JUPYTERHUB_CULL_MAX_AGE` is set to 6 days (518400s) by default. This ensures pods are restarted with fresh tokens before expiry.
+2. **Token Expiry and Pod Lifecycle**: User tokens have a TTL of 1 day (`NOTEBOOK_VAULT_TOKEN_TTL=24h`) and maximum TTL of 7 days (`NOTEBOOK_VAULT_TOKEN_MAX_TTL=168h`). Daily usage extends the token for another day, allowing up to 7 days of continuous use. Server pods are automatically restarted after 7 days (`JUPYTERHUB_CULL_MAX_AGE=604800s`) to refresh tokens.
 
 3. **Cull Settings**: Server idle timeout is set to 2 hours by default. Adjust `cull.timeout` and `cull.every` in the Helm values for different requirements
 
