@@ -255,7 +255,7 @@ The admin token renewal is handled by a sidecar container (`vault-agent`) runnin
    ```bash
    # Reads TTL from environment variable (set in .env.local)
    TTL_RAW="${JUPYTERHUB_VAULT_TOKEN_TTL}"  # e.g., "5m", "24h"
-   
+
    # Converts to seconds and calculates renewal interval
    RENEWAL_INTERVAL=$((TTL_SECONDS / 2))  # TTL/2 with minimum 30s
    ```
@@ -300,7 +300,7 @@ User token renewal is handled within the notebook environment by the `buunstack`
        token_info = self.client.auth.token.lookup_self()
        ttl = token_info.get("data", {}).get("ttl", 0)
        renewable = token_info.get("data", {}).get("renewable", False)
-       
+
        # Renew if TTL < 10 minutes and renewable
        if renewable and ttl > 0 and ttl < 600:
            self.client.auth.token.renew_self()
