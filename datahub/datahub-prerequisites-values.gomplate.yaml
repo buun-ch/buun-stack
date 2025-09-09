@@ -1,0 +1,80 @@
+# DataHub Prerequisites Values
+# External services required by DataHub
+
+# MySQL disabled - using PostgreSQL
+mysql:
+  enabled: false
+
+# PostgreSQL configuration (external)
+postgresql:
+  enabled: false
+
+# Elasticsearch configuration
+elasticsearch:
+  enabled: true
+  replicas: 1
+  minimumMasterNodes: 1
+  # Use newer version to fix cgroup v2 compatibility (7.17.3 → 7.17.26)
+  image: "docker.elastic.co/elasticsearch/elasticsearch"
+  imageTag: "7.17.26"
+  # Resource limits for development
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+  # Persistence
+  persistence:
+    enabled: true
+    size: "10Gi"
+  # Security configuration
+  esConfig:
+    elasticsearch.yml: |
+      xpack.security.enabled: false
+      xpack.security.transport.ssl.enabled: false
+      xpack.security.http.ssl.enabled: false
+
+# Kafka configuration
+kafka:
+  enabled: true
+  replicaCount: 1
+  # Resource limits
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  # Persistence
+  persistence:
+    enabled: true
+    size: "10Gi"
+  # Zookeeper configuration
+  zookeeper:
+    enabled: true
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    persistence:
+      enabled: true
+      size: "5Gi"
+
+# Schema Registry
+cp-schema-registry:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"

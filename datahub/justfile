@@ -1,0 +1,235 @@
+set fallback := true
+
+export DATAHUB_NAMESPACE := env("DATAHUB_NAMESPACE", "datahub")
+export DATAHUB_CHART_VERSION := env("DATAHUB_CHART_VERSION", "0.6.21")
+export DATAHUB_PREREQUISITES_CHART_VERSION := env("DATAHUB_PREREQUISITES_CHART_VERSION", "0.1.15")
+export DATAHUB_VERSION := env("DATAHUB_VERSION", "v1.2.0")
+export DATAHUB_HOST := env("DATAHUB_HOST", "")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add datahub https://helm.datahubproject.io/
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove datahub
+
+# Create DataHub namespace
+create-namespace:
+    @kubectl get namespace ${DATAHUB_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${DATAHUB_NAMESPACE}
+
+# Delete DataHub namespace
+delete-namespace:
+    @kubectl delete namespace ${DATAHUB_NAMESPACE} --ignore-not-found
+
+# Setup database for DataHub
+setup-database:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up DataHub database..."
+
+    if just postgres::db-exists datahub &>/dev/null; then
+        echo "Database 'datahub' already exists. DataHub will handle schema migrations."
+    else
+        echo "Creating new database 'datahub'..."
+        just postgres::create-db datahub
+    fi
+
+    # Generate password for user creation/update
+    # For existing users, preserve existing password if possible
+    if just postgres::user-exists datahub &>/dev/null; then
+        echo "User 'datahub' already exists."
+        # Check if we can get existing password from Vault/Secret
+        if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            # Try to get existing password from Vault
+            if DB_PASSWORD=$(just vault::get datahub/database password 2>/dev/null); then
+                echo "Using existing password from Vault."
+            else
+                echo "Generating new password and updating Vault..."
+                DB_PASSWORD=$(just utils::random-password)
+                just postgres::psql -c "ALTER USER datahub WITH PASSWORD '$DB_PASSWORD';"
+            fi
+        else
+            # For direct Secret approach, generate new password
+            echo "Generating new password for existing user..."
+            DB_PASSWORD=$(just utils::random-password)
+            just postgres::psql -c "ALTER USER datahub WITH PASSWORD '$DB_PASSWORD';"
+        fi
+    else
+        echo "Creating new user 'datahub'..."
+        DB_PASSWORD=$(just utils::random-password)
+        just postgres::create-user datahub "$DB_PASSWORD"
+    fi
+
+    echo "Ensuring database permissions..."
+    just postgres::grant datahub datahub
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing credentials in Vault and creating ExternalSecret..."
+        just vault::put datahub/database username=datahub password="$DB_PASSWORD"
+        gomplate -f datahub-database-external-secret.gomplate.yaml -o datahub-database-external-secret.yaml
+        kubectl apply -f datahub-database-external-secret.yaml
+        echo "Waiting for database secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/datahub-database-external-secret \
+            -n ${DATAHUB_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret datahub-database-secret -n ${DATAHUB_NAMESPACE} --ignore-not-found
+        kubectl create secret generic datahub-database-secret -n ${DATAHUB_NAMESPACE} \
+            --from-literal=username=datahub \
+            --from-literal=password="$DB_PASSWORD"
+        echo "Database secret created directly in Kubernetes"
+    fi
+    echo "Database setup completed. DataHub will handle schema initialization and migrations."
+
+# Delete database secret
+delete-database-secret:
+    @kubectl delete secret datahub-database-secret -n ${DATAHUB_NAMESPACE} --ignore-not-found
+
+# Create OAuth client in Keycloak for DataHub authentication
+create-oauth-client:
+    #!/bin/bash
+    set -euo pipefail
+    if [ -z "${DATAHUB_HOST}" ]; then
+        echo "Error: DATAHUB_HOST environment variable is required"
+        exit 1
+    fi
+    echo "Creating DataHub OAuth client in Keycloak..."
+    # Delete existing client to ensure fresh creation
+    echo "Removing existing client if present..."
+    just keycloak::delete-client ${KEYCLOAK_REALM} datahub || true
+
+    CLIENT_SECRET=$(just utils::random-password)
+    just keycloak::create-client \
+        ${KEYCLOAK_REALM} \
+        datahub \
+        "https://${DATAHUB_HOST}/callback/oidc" \
+        "$CLIENT_SECRET"
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing credentials in Vault and recreating ExternalSecret..."
+        just vault::put datahub/oauth \
+            client_id=datahub \
+            client_secret="$CLIENT_SECRET"
+        # Delete existing ExternalSecret to force recreation and refresh
+        kubectl delete externalsecret datahub-oauth-external-secret -n ${DATAHUB_NAMESPACE} --ignore-not-found
+        kubectl delete secret datahub-oauth-secret -n ${DATAHUB_NAMESPACE} --ignore-not-found
+        gomplate -f datahub-oauth-external-secret.gomplate.yaml -o datahub-oauth-external-secret.yaml
+        kubectl apply -f datahub-oauth-external-secret.yaml
+        echo "Waiting for OAuth secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/datahub-oauth-external-secret \
+            -n ${DATAHUB_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret datahub-oauth-secret -n ${DATAHUB_NAMESPACE} --ignore-not-found
+        kubectl create secret generic datahub-oauth-secret -n ${DATAHUB_NAMESPACE} \
+            --from-literal=client_id=datahub \
+            --from-literal=client_secret="$CLIENT_SECRET"
+        echo "OAuth secret created directly in Kubernetes"
+    fi
+    echo "OAuth client created successfully"
+
+# Delete OAuth secret
+delete-oauth-secret:
+    @kubectl delete secret datahub-oauth-secret -n ${DATAHUB_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret datahub-oauth-external-secret -n ${DATAHUB_NAMESPACE} --ignore-not-found
+
+# Install DataHub prerequisites
+install-prerequisites:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Installing DataHub prerequisites..."
+    just add-helm-repo
+    gomplate -f datahub-prerequisites-values.gomplate.yaml -o datahub-prerequisites-values.yaml
+    helm upgrade --install datahub-prerequisites datahub/datahub-prerequisites \
+        --namespace ${DATAHUB_NAMESPACE} \
+        --version ${DATAHUB_PREREQUISITES_CHART_VERSION} \
+        -f datahub-prerequisites-values.yaml \
+        --wait --timeout=10m
+    echo "Prerequisites installation completed"
+
+# Install DataHub main application
+install-datahub:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Installing DataHub main application..."
+    gomplate -f datahub-values.gomplate.yaml -o datahub-values.yaml
+    helm upgrade --install datahub datahub/datahub \
+        --namespace ${DATAHUB_NAMESPACE} \
+        --version ${DATAHUB_CHART_VERSION} \
+        -f datahub-values.yaml \
+        --wait --timeout=20m
+    echo "DataHub installation completed"
+
+# Install DataHub (full setup)
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export DATAHUB_HOST=${DATAHUB_HOST:-}
+    while [ -z "${DATAHUB_HOST}" ]; do
+        DATAHUB_HOST=$(
+            gum input --prompt="DataHub host (FQDN): " --width=100 \
+            --placeholder="e.g., datahub.example.com"
+        )
+    done
+    echo "Installing DataHub..."
+    just create-namespace
+    just setup-database
+    just create-oauth-client
+    just install-prerequisites
+    just install-datahub
+    echo "DataHub installation completed"
+    echo "Access DataHub at: https://${DATAHUB_HOST}"
+
+# Uninstall DataHub prerequisites
+uninstall-prerequisites:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling DataHub prerequisites..."
+    helm uninstall datahub-prerequisites -n ${DATAHUB_NAMESPACE} --ignore-not-found
+
+# Uninstall DataHub main application
+uninstall-datahub:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling DataHub main application..."
+    helm uninstall datahub -n ${DATAHUB_NAMESPACE} --ignore-not-found
+
+# Uninstall DataHub (complete removal)
+uninstall delete-db='true':
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling DataHub..."
+    just uninstall-datahub
+    just uninstall-prerequisites
+    just delete-oauth-secret
+    just delete-database-secret
+    just delete-namespace
+    if [ "{{ delete-db }}" = "true" ]; then
+        just postgres::delete-db datahub
+    fi
+    echo "DataHub uninstalled"
+
+# Clean up database and secrets
+cleanup:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete the DataHub database and all secrets."
+    if gum confirm "Are you sure you want to proceed?"; then
+        echo "Cleaning up DataHub resources..."
+        just postgres::delete-db datahub || true
+        just vault::delete datahub/database || true
+        just vault::delete datahub/oauth || true
+        just keycloak::delete-client datahub || true
+        echo "Cleanup completed"
+    else
+        echo "Cleanup cancelled"
+    fi

@@ -14,6 +14,7 @@ A Kubernetes development stack for self-hosted environments, designed to run on 
 - **Object Storage**: MinIO S3-compatible storage
 - **Data Science**: JupyterHub for collaborative notebooks
 - **Analytics**: Metabase for business intelligence and data visualization
+- **Data Catalog**: DataHub for metadata management and data discovery
 - **Remote Access**: Cloudflare Tunnel for secure internet connectivity
 - **Automation**: Just task runner with templated configurations
 
@@ -135,6 +136,26 @@ just metabase::install
 ```
 
 Access Metabase at `https://metabase.yourdomain.com` and complete the initial setup wizard to create an admin account.
+
+### DataHub
+
+Modern data catalog and metadata management platform:
+
+- Centralized data discovery and documentation
+- Data lineage tracking and impact analysis  
+- Schema evolution monitoring
+- OIDC integration with Keycloak for secure access
+- Elasticsearch-powered search and indexing
+- Kafka-based real-time metadata streaming
+- PostgreSQL backend for metadata storage
+
+Installation:
+
+```bash
+just datahub::install
+```
+
+Access DataHub at `https://datahub.yourdomain.com` and use "Sign in with SSO" to authenticate via Keycloak.
 
 ## Common Operations
 

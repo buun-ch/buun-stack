@@ -1,0 +1,4 @@
+datahub-prerequisites-values.yaml
+datahub-values.yaml
+datahub-database-external-secret.yaml
+datahub-oauth-external-secret.yaml

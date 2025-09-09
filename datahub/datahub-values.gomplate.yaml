@@ -1,0 +1,210 @@
+# DataHub Main Application Values
+# Core DataHub services configuration
+
+# Global settings
+global:
+  datahub:
+    version: {{ .Env.DATAHUB_VERSION }}
+    monitoring:
+      enablePrometheus: true
+
+  # Kafka configuration
+  kafka:
+    bootstrap:
+      server: "datahub-prerequisites-kafka:9092"
+    zookeeper:
+      server: "datahub-prerequisites-zookeeper:2181"
+
+  # Global database configuration
+  sql:
+    datasource:
+      host: "postgres-cluster-rw.postgres.svc.cluster.local:5432"
+      hostForPostgresClient: "postgres-cluster-rw.postgres.svc.cluster.local"
+      hostForpostgresqlClient: "postgres-cluster-rw.postgres.svc.cluster.local"
+      port: "5432"
+      database: "datahub"
+      username: "datahub"
+      password:
+        secretRef: "datahub-database-secret"
+        secretKey: "password"
+      driver: "org.postgresql.Driver"
+      url: "jdbc:postgresql://postgres-cluster-rw.postgres.svc.cluster.local:5432/datahub?sslmode=require"
+
+# Database configuration (PostgreSQL)
+datahub-gms:
+  enabled: true
+  replicaCount: 1
+
+  # Authentication configuration - using extraEnvs for OIDC
+  extraEnvs:
+    - name: AUTH_OIDC_ENABLED
+      value: "true"
+    - name: AUTH_OIDC_CLIENT_ID
+      valueFrom:
+        secretKeyRef:
+          name: datahub-oauth-secret
+          key: client_id
+    - name: AUTH_OIDC_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: datahub-oauth-secret
+          key: client_secret
+    - name: AUTH_OIDC_DISCOVERY_URI
+      value: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/.well-known/openid-configuration"
+    - name: AUTH_OIDC_BASE_URL
+      value: "https://{{ .Env.DATAHUB_HOST }}"
+
+  # Service configuration  
+  service:
+    type: ClusterIP
+
+  # Resource configuration
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+
+  # JVM configuration
+  env:
+    - name: JAVA_OPTS
+      value: "-Xms1g -Xmx3g"
+
+# Frontend service
+datahub-frontend:
+  enabled: true
+  replicaCount: 1
+
+  # Authentication configuration - using extraEnvs for OIDC
+  extraEnvs:
+    - name: AUTH_OIDC_ENABLED
+      value: "true"
+    - name: AUTH_OIDC_CLIENT_ID
+      valueFrom:
+        secretKeyRef:
+          name: datahub-oauth-secret
+          key: client_id
+    - name: AUTH_OIDC_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: datahub-oauth-secret
+          key: client_secret
+    - name: AUTH_OIDC_DISCOVERY_URI
+      value: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/.well-known/openid-configuration"
+    - name: AUTH_OIDC_BASE_URL
+      value: "https://{{ .Env.DATAHUB_HOST }}"
+
+  # Resource configuration
+  # Service configuration
+  service:
+    type: ClusterIP
+  
+  # Ingress configuration
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      kubernetes.io/ingress.class: traefik
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    hosts:
+      - host: {{ .Env.DATAHUB_HOST }}
+        paths:
+          - /
+    tls:
+      - hosts:
+          - {{ .Env.DATAHUB_HOST }}
+
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+
+# Actions service
+datahub-actions:
+  enabled: true
+  replicaCount: 1
+
+  # Resource configuration
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+# MCE Consumer
+datahub-mce-consumer:
+  enabled: true
+  replicaCount: 1
+
+  # Resource configuration
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+# MAE Consumer
+datahub-mae-consumer:
+  enabled: true
+  replicaCount: 1
+
+  # Resource configuration
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+# Setup Jobs
+# DataHub's built-in PostgreSQL setup job handles schema initialization and migrations
+# Our justfile ensures the database and user exist with proper permissions
+mysqlSetupJob:
+  enabled: false
+
+postgresqlSetupJob:
+  enabled: true
+  host: "postgres-cluster-rw.postgres.svc.cluster.local"
+  hostForpostgresqlClient: "postgres-cluster-rw.postgres.svc.cluster.local"
+  port: "5432"
+  url: "jdbc:postgresql://postgres-cluster-rw.postgres.svc.cluster.local:5432/datahub"
+  database: "datahub"
+  username: "datahub"
+  password:
+    secretRef: "datahub-database-secret"
+    secretKey: "password"
+  # Allow DataHub to handle schema migrations for existing databases
+  extraInitContainers: []
+  # Configure job to be idempotent for existing databases
+  jobAnnotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+
+# External services configuration
+elasticsearch:
+  # Use prerequisites elasticsearch
+  host: "prerequisites-elasticsearch-master:9200"
+
+kafka:
+  # Use prerequisites kafka
+  bootstrap:
+    server: "prerequisites-cp-kafka:9092"
+  schemaregistry:
+    url: "http://prerequisites-cp-schema-registry:8081"
+
+# Disable local services (use prerequisites)
+mysql:
+  enabled: false
+postgresql:
+  enabled: false
