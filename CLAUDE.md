@@ -85,12 +85,22 @@ All scripts in `/keycloak/scripts/` follow this pattern:
 
 ### Credential Storage Pattern
 
-Credentials are automatically generated and stored in Vault:
+The credential storage approach depends on whether External Secrets Operator is available:
+
+**When External Secrets is available** (determined by `helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE}`):
+
+- Credentials are generated and stored in Vault using `just vault::put` commands
+- Vault commands are used for secret management
 
 ```bash
-# Example: PostgreSQL superuser password
+# Example: PostgreSQL superuser password (only when External Secrets is available)
 just vault::get secret/postgres/superuser password
 ```
+
+**When External Secrets is NOT available**:
+
+- Credentials are stored directly as Kubernetes Secrets
+- Vault commands are NOT used
 
 #### Secret Management Rules
 
@@ -120,6 +130,11 @@ just vault::get secret/postgres/superuser password
    - Prefer creating Public clients (without client secret) when possible
    - Public clients are suitable for browser-based applications and native apps
    - Only use confidential clients (with secret) when required by the service
+
+6. **Password Generation**:
+   - Use `just utils::random-password` whenever possible to generate random passwords
+   - Avoid using `openssl rand -base64 32` or other direct methods
+   - This ensures consistent password generation across all modules
 
 ### Important Considerations
 
