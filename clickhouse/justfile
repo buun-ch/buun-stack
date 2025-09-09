@@ -1,0 +1,403 @@
+set fallback := true
+
+export CLICKHOUSE_NAMESPACE := env("CLICKHOUSE_NAMESPACE", "clickhouse")
+export CLICKHOUSE_CHART_VERSION := env("CLICKHOUSE_CHART_VERSION", "0.25.3")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add clickhouse-operator https://docs.altinity.com/clickhouse-operator/
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove clickhouse-operator
+
+# Create ClickHouse namespace
+create-namespace:
+    @kubectl get namespace ${CLICKHOUSE_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${CLICKHOUSE_NAMESPACE}
+
+# Delete ClickHouse namespace
+delete-namespace:
+    @kubectl delete namespace ${CLICKHOUSE_NAMESPACE} --ignore-not-found
+
+# Create ClickHouse credentials secret
+create-credentials:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up ClickHouse credentials..."
+
+    # Generate admin password
+    ADMIN_PASSWORD=$(just utils::random-password)
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing credentials in Vault and creating ExternalSecret..."
+        just vault::put clickhouse/credentials admin="$ADMIN_PASSWORD"
+        gomplate -f clickhouse-credentials-external-secret.gomplate.yaml -o clickhouse-credentials-external-secret.yaml
+        kubectl apply -f clickhouse-credentials-external-secret.yaml
+        echo "Waiting for credentials secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/clickhouse-credentials-external-secret \
+            -n ${CLICKHOUSE_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret clickhouse-credentials -n ${CLICKHOUSE_NAMESPACE} --ignore-not-found
+        kubectl create secret generic clickhouse-credentials -n ${CLICKHOUSE_NAMESPACE} \
+            --from-literal=admin="$ADMIN_PASSWORD"
+        echo "Credentials secret created directly in Kubernetes"
+    fi
+    echo "ClickHouse credentials setup completed"
+
+# Delete ClickHouse credentials secret
+delete-credentials-secret:
+    @kubectl delete secret clickhouse-credentials -n ${CLICKHOUSE_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret clickhouse-credentials-external-secret -n ${CLICKHOUSE_NAMESPACE} --ignore-not-found
+
+# Install ClickHouse
+install:
+    just create-namespace
+    just install-zookeeper
+    just create-credentials
+    just add-helm-repo
+    helm upgrade --install clickhouse-operator clickhouse-operator/altinity-clickhouse-operator \
+        --version ${CLICKHOUSE_CHART_VERSION} -n ${CLICKHOUSE_NAMESPACE} --wait
+    kubectl apply -n ${CLICKHOUSE_NAMESPACE} -f ./clickhouse.yaml
+    echo "Waiting for ClickHouse installation to be ready..."
+    kubectl wait --for=jsonpath='{.status.status}'=Completed \
+        clickhouseinstallation/clickhouse -n ${CLICKHOUSE_NAMESPACE} --timeout=600s
+    echo "ClickHouse installation completed successfully"
+
+# Uninstall ClickHouse
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling ClickHouse..."
+    if kubectl get clickhouseinstallations.clickhouse.altinity.com \
+        -n ${CLICKHOUSE_NAMESPACE} &>/dev/null; then
+        echo "Deleting ClickHouseInstallation resources..."
+        kubectl delete clickhouseinstallations.clickhouse.altinity.com --all \
+            -n ${CLICKHOUSE_NAMESPACE} --timeout=30s --ignore-not-found || {
+            echo "Graceful deletion timed out, forcing finalizer removal..."
+            for chi in $(kubectl get clickhouseinstallations.clickhouse.altinity.com \
+                -n ${CLICKHOUSE_NAMESPACE} -o name 2>/dev/null); do
+                kubectl patch "$chi" -n ${CLICKHOUSE_NAMESPACE} \
+                    --type='merge' -p='{"metadata":{"finalizers":null}}' || true
+            done
+        }
+    fi
+    helm uninstall clickhouse-operator -n ${CLICKHOUSE_NAMESPACE} --wait --ignore-not-found
+    just uninstall-zookeeper
+    just delete-credentials-secret
+    just delete-namespace
+    echo "ClickHouse uninstalled successfully"
+
+# Print ClickHouse admin password
+admin-password:
+    #!/bin/bash
+    set -euo pipefail
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Getting password from Vault..."
+        just vault::get clickhouse/credentials admin
+    else
+        echo "Getting password from Kubernetes Secret..."
+        kubectl get secret clickhouse-credentials -n ${CLICKHOUSE_NAMESPACE} \
+            -o jsonpath='{.data.admin}' | base64 -d
+        echo
+    fi
+
+# Connect to ClickHouse as admin
+connect-admin: check-env
+    @just utils::check-connection clickhouse-clickhouse.clickhouse 9000
+    @clickhouse client --host clickhouse-clickhouse.clickhouse --port 9000 \
+        --user admin --password $(just clickhouse::admin-password)
+
+# Connect to ClickHouse
+connect user: check-env
+    @just utils::check-connection clickhouse-clickhouse.clickhouse 9000
+    @clickhouse client --host clickhouse-clickhouse.clickhouse --port 9000 \
+        --user {{ user }} --ask-password
+
+# Create ClickHouse user
+create-user username='' password='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME=${USERNAME:-"{{ username }}"}
+    PASSWORD=${PASSWORD:-"{{ password }}"}
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    if just user-exists ${USERNAME} &>/dev/null; then
+        echo "User ${USERNAME} already exists" >&2
+        exit
+    fi
+    if [ -z "${PASSWORD}" ]; then
+        PASSWORD=$(gum input --prompt="Password: " --password --width=100 \
+            --placeholder="Empty to generate a random password")
+    fi
+    if [ -z "${PASSWORD}" ]; then
+        PASSWORD=$(just utils::random-password)
+        echo "Generated random password: ${PASSWORD}"
+    fi
+    echo "Creating ClickHouse user '${USERNAME}'..."
+    just connect-admin <<EOF
+    CREATE USER '${USERNAME}' IDENTIFIED BY '${PASSWORD}';
+    EOF
+    echo "User ${USERNAME} created."
+
+# Create new user for ClickHouse (deprecated - use create-user instead)
+create-user-old username='' password='' database='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="{{ username }}"
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    PASSWORD="{{ password }}"
+    while [ -z "${PASSWORD}" ]; do
+        PASSWORD=$(gum input --prompt="Password: " --password --width=100)
+    done
+    DATABASE="{{ database }}"
+    while [ -z "${DATABASE}" ]; do
+        DATABASE=$(gum input --prompt="Database: " --width=100)
+    done
+    if [ "${DATABASE}" != "default" ]; then
+        if ! just db-exists ${DATABASE}; then
+            echo "Database '${DATABASE}' does not exist"
+            just create-db ${DATABASE}
+        fi
+    fi
+    echo "Creating ClickHouse user '${USERNAME}'..."
+    just connect-admin <<EOF
+    CREATE USER '${USERNAME}' IDENTIFIED BY '${PASSWORD}' DEFAULT DATABASE '${DATABASE}';
+    EOF
+
+# Delete ClickHouse user
+delete-user username='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME=${USERNAME:-"{{ username }}"}
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    if ! just user-exists ${USERNAME} &>/dev/null; then
+        echo "User ${USERNAME} does not exist." >&2
+        exit
+    fi
+    echo "Deleting ClickHouse user '${USERNAME}'..."
+    just connect-admin <<EOF
+    DROP USER '${USERNAME}';
+    EOF
+    echo "User ${USERNAME} deleted."
+
+# Grant all privileges on database to user
+grant db_name='' username='':
+    #!/bin/bash
+    set -euo pipefail
+    DB_NAME=${DB_NAME:-"{{ db_name }}"}
+    USERNAME=${USERNAME:-"{{ username }}"}
+    while [ -z "${DB_NAME}" ]; do
+        DB_NAME=$(gum input --prompt="Database name: " --width=100)
+    done
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    if ! just db-exists ${DB_NAME}; then
+        echo "Database ${DB_NAME} does not exist." >&2
+        exit 1
+    fi
+    if ! just user-exists ${USERNAME}; then
+        echo "User ${USERNAME} does not exist." >&2
+        exit 1
+    fi
+    echo "Granting all privileges on '${DB_NAME}' to ClickHouse user '${USERNAME}'..."
+    just connect-admin <<EOF
+    GRANT ALL ON ${DB_NAME}.* TO '${USERNAME}';
+    EOF
+    echo "Privileges granted."
+
+# Grant user access to ClickHouse database (deprecated - use grant instead)
+grant-user username='' database='default':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="{{ username }}"
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    DATABASE="{{ database }}"
+    while [ -z "${DATABASE}" ]; do
+        DATABASE=$(gum input --prompt="Database: " --width=100)
+    done
+    echo "Granting SELECT permission on '${DATABASE}' to ClickHouse user '${USERNAME}'..."
+    just connect-admin <<EOF
+    GRANT ALL ON ${DATABASE}.* TO '${USERNAME}';
+    EOF
+
+# Revoke all privileges on database from user
+revoke db_name='' username='':
+    #!/bin/bash
+    set -euo pipefail
+    DB_NAME=${DB_NAME:-"{{ db_name }}"}
+    USERNAME=${USERNAME:-"{{ username }}"}
+    while [ -z "${DB_NAME}" ]; do
+        DB_NAME=$(gum input --prompt="Database name: " --width=100)
+    done
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    if ! just db-exists ${DB_NAME}; then
+        echo "Database ${DB_NAME} does not exist." >&2
+        exit 1
+    fi
+    if ! just user-exists ${USERNAME}; then
+        echo "User ${USERNAME} does not exist." >&2
+        exit 1
+    fi
+    echo "Revoking all privileges on '${DB_NAME}' from ClickHouse user '${USERNAME}'..."
+    just connect-admin <<EOF
+    REVOKE ALL ON ${DB_NAME}.* FROM '${USERNAME}';
+    EOF
+    echo "Privileges revoked."
+
+# Create ClickHouse database and user
+create-user-and-db username='' db_name='' password='':
+    just create-db "{{ db_name }}"
+    just create-user "{{ username }}" "{{ password }}"
+    just grant "{{ db_name }}" "{{ username }}"
+
+# Delete ClickHouse database and user
+delete-user-and-db username='' db_name='':
+    #!/bin/bash
+    set -euo pipefail
+    DB_NAME=${DB_NAME:-"{{ db_name }}"}
+    USERNAME=${USERNAME:-"{{ username }}"}
+    if just db-exists ${DB_NAME} &>/dev/null; then
+        if just user-exists ${USERNAME} &>/dev/null; then
+            just revoke "${DB_NAME}" "${USERNAME}"
+        else
+            echo "User ${USERNAME} does not exist, skipping revoke."
+        fi
+        just delete-db "${DB_NAME}"
+    else
+        echo "Database ${DB_NAME} does not exist, skipping database deletion."
+    fi
+    if just user-exists ${USERNAME} &>/dev/null; then
+        just delete-user "${USERNAME}"
+    else
+        echo "User ${USERNAME} does not exist, skipping user deletion."
+    fi
+    echo "Cleanup completed."
+
+# List all users in ClickHouse
+list-users:
+    #!/bin/bash
+    set -euo pipefail
+    just connect-admin <<EOF
+    SHOW USERS;
+    EOF
+
+# Check if user exists in ClickHouse
+[no-exit-message]
+user-exists username='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="{{ username }}"
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    result=$(just connect-admin <<EOF
+    SELECT name FROM system.users WHERE name = '${USERNAME}';
+    EOF
+    )
+    if [[ -n "$result" && "$result" == *"$USERNAME"* ]]; then
+        echo "User '$USERNAME' exists."
+        exit 0
+    else
+        echo "User '$USERNAME' does not exist."
+        exit 1
+    fi
+
+# Create DB in ClickHouse
+create-db database='default':
+    #!/bin/bash
+    set -euo pipefail
+    DATABASE="{{ database }}"
+    while [ -z "${DATABASE}" ]; do
+        DATABASE=$(gum input --prompt="Database: " --width=100)
+    done
+    echo "Creating ClickHouse database '${DATABASE}'..."
+    just connect-admin <<EOF
+    CREATE DATABASE IF NOT EXISTS ${DATABASE};
+    EOF
+
+# Check if DB exists in ClickHouse
+[no-exit-message]
+db-exists database='default':
+    #!/bin/bash
+    set -euo pipefail
+    DATABASE="{{ database }}"
+    while [ -z "${DATABASE}" ]; do
+        DATABASE=$(gum input --prompt="Database: " --width=100)
+    done
+    result=$(just connect-admin <<EOF
+    SHOW DATABASES LIKE '${DATABASE}';
+    EOF
+    )
+    if [[ -n "$result" && "$result" == *"$DATABASE"* ]]; then
+        echo "Database '$DATABASE' exists."
+        exit 0
+    else
+        echo "Database '$DATABASE' does not exist."
+        exit 1
+    fi
+
+# Print user privilege
+user-privilege username='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="{{ username }}"
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    just connect-admin <<EOF
+    SHOW GRANTS FOR '${USERNAME}';
+    EOF
+
+# Install ZooKeeper
+install-zookeeper:
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace zookeeper &>/dev/null; then
+        kubectl create namespace zookeeper
+    fi
+    kubectl apply -n ${CLICKHOUSE_NAMESPACE} -f ./zookeeper.yaml
+
+# Uninstall ZooKeeper
+uninstall-zookeeper:
+    kubectl delete -n ${CLICKHOUSE_NAMESPACE} -f ./zookeeper.yaml
+
+# Clean up ClickHouse resources
+cleanup:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete all ClickHouse resources and secrets."
+    if gum confirm "Are you sure you want to proceed?"; then
+        echo "Cleaning up ClickHouse resources..."
+        just vault::delete clickhouse/credentials || true
+        echo "Cleanup completed"
+    else
+        echo "Cleanup cancelled"
+    fi
+
+# Check the environment
+[private]
+check-env:
+    #!/bin/bash
+    set -euo pipefail
+    if ! command -v clickhouse &>/dev/null; then
+        echo "clickhouse CLI is not installed. Please install it first."
+        exit 1
+    fi
