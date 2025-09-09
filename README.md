@@ -142,7 +142,7 @@ Access Metabase at `https://metabase.yourdomain.com` and complete the initial se
 Modern data catalog and metadata management platform:
 
 - Centralized data discovery and documentation
-- Data lineage tracking and impact analysis  
+- Data lineage tracking and impact analysis
 - Schema evolution monitoring
 - OIDC integration with Keycloak for secure access
 - Elasticsearch-powered search and indexing
