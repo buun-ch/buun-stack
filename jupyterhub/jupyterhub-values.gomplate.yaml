@@ -193,6 +193,15 @@ singleuser:
         ports:
           - port: 8200
             protocol: TCP
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: clickhouse
+        ports:
+          - port: 8123
+            protocol: TCP
+          - port: 9000
+            protocol: TCP
       # Allow DNS resolution
       - to:
         - ipBlock:

@@ -8,7 +8,7 @@ export JUPYTERHUB_OIDC_CLIENT_SESSION_MAX := env("JUPYTERHUB_OIDC_CLIENT_SESSION
 export JUPYTERHUB_NFS_PV_ENABLED := env("JUPYTERHUB_NFS_PV_ENABLED", "")
 export JUPYTERHUB_STORAGE_CLASS := env("JUPYTERHUB_STORAGE_CLASS", "")
 export JUPYTERHUB_VAULT_INTEGRATION_ENABLED := env("JUPYTERHUB_VAULT_INTEGRATION_ENABLED", "")
-export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-31")
+export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-34")
 export KERNEL_IMAGE_BUUN_STACK_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_REPOSITORY", "buun-stack-notebook")
 export KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY", "buun-stack-cuda-notebook")
 export JUPYTER_PROFILE_MINIMAL_ENABLED := env("JUPYTER_PROFILE_MINIMAL_ENABLED", "false")
@@ -26,6 +26,8 @@ export JUPYTERHUB_CULL_MAX_AGE := env("JUPYTERHUB_CULL_MAX_AGE", "604800")
 export VAULT_AGENT_LOG_LEVEL := env("VAULT_AGENT_LOG_LEVEL", "info")
 export JUPYTER_BUUNSTACK_LOG_LEVEL := env("JUPYTER_BUUNSTACK_LOG_LEVEL", "warning")
 export IMAGE_REGISTRY := env("IMAGE_REGISTRY", "localhost:30500")
+export SPARK_DOWNLOAD_URL := env("SPARK_DOWNLOAD_URL", "https://dlcdn.apache.org/spark/")
+export SPARK_VERSION := env("SPARK_VERSION", "4.0.1")
 export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export VAULT_HOST := env("VAULT_HOST", "")
@@ -195,8 +197,8 @@ build-kernel-images:
         cp ../../../python-package/dist/*.whl ./
         docker build -t \
         ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG} \
-        --build-arg spark_version="3.5.4" \
-        --build-arg spark_download_url="https://archive.apache.org/dist/spark/" \
+        --build-arg spark_version="${SPARK_VERSION}" \
+        --build-arg spark_download_url="${SPARK_DOWNLOAD_URL}" \
         .
     )
     rm -f ./images/datastack-notebook/*.whl
@@ -206,8 +208,8 @@ build-kernel-images:
             cp ../../../python-package/dist/*.whl ./
             docker build -t \
             ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG} \
-            --build-arg spark_version="3.5.4" \
-            --build-arg spark_download_url="https://archive.apache.org/dist/spark/" \
+            --build-arg spark_version="${SPARK_VERSION}" \
+            --build-arg spark_download_url="${SPARK_DOWNLOAD_URL}" \
             .
         )
         rm -f ./images/datastack-cuda-notebook/*.whl

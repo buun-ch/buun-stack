@@ -20,7 +20,16 @@ RUN apt-get update --yes && \
     apt-get install --yes --no-install-recommends \
     bash jq \
     "openjdk-${openjdk_version}-jre-headless" \
-    ca-certificates-java && \
+    ca-certificates-java \
+    gnupg
+
+# Install ClickHouse client
+RUN curl -fsSL 'https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key' | \
+    gpg --dearmor -o /usr/share/keyrings/clickhouse-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/clickhouse-keyring.gpg] https://packages.clickhouse.com/deb stable main" | \
+    tee /etc/apt/sources.list.d/clickhouse.list && \
+    apt-get update --yes && \
+    apt-get install --yes --no-install-recommends clickhouse-client && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # If spark_version is not set, latest Spark will be installed
@@ -70,6 +79,7 @@ RUN mamba install --yes \
     'aif360' \
     'airflow' \
     'chromadb' \
+    'clickhouse-connect' \
     'csvkit' \
     'dalex' \
     'datafusion' \
