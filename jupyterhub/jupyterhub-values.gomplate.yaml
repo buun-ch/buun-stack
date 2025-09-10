@@ -164,13 +164,6 @@ singleuser:
       - to:
           - namespaceSelector:
               matchLabels:
-                kubernetes.io/metadata.name: chroma
-        ports:
-          - port: 8000
-            protocol: TCP
-      - to:
-          - namespaceSelector:
-              matchLabels:
                 kubernetes.io/metadata.name: qdrant
         ports:
           - port: 6333
@@ -201,6 +194,13 @@ singleuser:
           - port: 8123
             protocol: TCP
           - port: 9000
+            protocol: TCP
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: airflow
+        ports:
+          - port: 8080
             protocol: TCP
       # Allow DNS resolution
       - to:
