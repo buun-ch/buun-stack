@@ -1,9 +1,14 @@
 set fallback := true
 
-export AIRFLOW_NAMESPACE := env("AIRFLOW_NAMESPACE", "airflow")
+export AIRFLOW_NAMESPACE := env("AIRFLOW_NAMESPACE", "jupyter")
 export AIRFLOW_CHART_VERSION := env("AIRFLOW_CHART_VERSION", "1.18.0")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export AIRFLOW_DAGS_PERSISTENCE_ENABLED := env("AIRFLOW_DAGS_PERSISTENCE_ENABLED", "")
+export AIRFLOW_DAGS_STORAGE_TYPE := env("AIRFLOW_DAGS_STORAGE_TYPE", "")
+export AIRFLOW_NFS_IP := env("AIRFLOW_NFS_IP", "")
+export AIRFLOW_NFS_PATH := env("AIRFLOW_NFS_PATH", "")
+export AIRFLOW_DAGS_STORAGE_SIZE := env("AIRFLOW_DAGS_STORAGE_SIZE", "10Gi")
 
 [private]
 default:
@@ -18,7 +23,7 @@ add-helm-repo:
 remove-helm-repo:
     helm repo remove apache-airflow
 
-# Create Airflow namespace
+# Create namespace (shared with JupyterHub when using jupyter namespace)
 create-namespace:
     @kubectl get namespace ${AIRFLOW_NAMESPACE} &>/dev/null || \
         kubectl create namespace ${AIRFLOW_NAMESPACE}
@@ -247,6 +252,17 @@ install:
             --placeholder="e.g., airflow.example.com"
         )
     done
+    if [ -z "${AIRFLOW_DAGS_PERSISTENCE_ENABLED}" ]; then
+        if gum confirm "Enable DAG persistence with PVC?"; then
+            AIRFLOW_DAGS_PERSISTENCE_ENABLED="true"
+        else
+            AIRFLOW_DAGS_PERSISTENCE_ENABLED="false"
+        fi
+    fi
+    # Force default storage type (NFS disabled due to permission issues)
+    if [ "${AIRFLOW_DAGS_PERSISTENCE_ENABLED}" = "true" ]; then
+        AIRFLOW_DAGS_STORAGE_TYPE="default"
+    fi
     echo "Installing Airflow..."
     just create-namespace
     just setup-database
@@ -254,7 +270,10 @@ install:
     just create-keycloak-roles
     just add-helm-repo
 
-    # Create API server config ConfigMap
+    if [ "${AIRFLOW_DAGS_PERSISTENCE_ENABLED}" = "true" ]; then
+        just setup-dags-storage "default"
+    fi
+
     KEYCLOAK_HOST=${KEYCLOAK_HOST} KEYCLOAK_REALM=${KEYCLOAK_REALM} \
         gomplate -f webserver_config.py.gomplate -o webserver_config.py
     kubectl delete configmap airflow-api-server-config -n ${AIRFLOW_NAMESPACE} --ignore-not-found
@@ -268,6 +287,14 @@ install:
         -f airflow-values.yaml
     echo "Airflow installation completed"
     echo "Access Airflow at: https://${AIRFLOW_HOST}"
+    if [ "${AIRFLOW_NAMESPACE}" = "jupyter" ] && [ "${AIRFLOW_DAGS_PERSISTENCE_ENABLED}" = "true" ]; then
+        echo ""
+        echo "📝 JupyterHub Integration Notes:"
+        echo "   • If JupyterHub is already installed with DAG mounting enabled:"
+        echo "     Restart user pods to access DAGs: kubectl delete pods -n jupyter -l app.kubernetes.io/component=singleuser-server"
+        echo "   • If JupyterHub will be installed later:"
+        echo "     Enable 'Airflow DAG storage mounting' during JupyterHub installation"
+    fi
 
 # Uninstall Airflow
 uninstall delete-db='true':
@@ -393,6 +420,35 @@ delete-api-user username='':
     else
         echo "Deletion cancelled"
     fi
+
+# Setup DAG storage (PVC)
+setup-dags-storage storage-type='':
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up DAG storage (default)..."
+    echo "Creating PersistentVolumeClaim with default StorageClass..."
+    kubectl apply -n ${AIRFLOW_NAMESPACE} -f dags-pvc.yaml
+    echo "✅ Default storage configured"
+    echo "   PVC: airflow-dags-pvc"
+    echo "   Uses cluster default StorageClass (k3s local-path, etc.)"
+    echo ""
+    echo "DAG storage is ready for use"
+    echo "Mount path in pods: /opt/airflow/dags"
+    echo ""
+    if [ "${AIRFLOW_NAMESPACE}" = "jupyter" ]; then
+        echo "📝 JupyterHub Integration:"
+        echo "   Since Airflow is in the 'jupyter' namespace, JupyterHub can mount this PVC"
+        echo "   Enable 'Airflow DAG storage mounting' when installing JupyterHub"
+        echo "   DAGs will be available at: /opt/airflow-dags in notebooks"
+    fi
+
+# Delete DAG storage
+delete-dags-storage:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deleting DAG storage resources..."
+    kubectl delete pvc airflow-dags-pvc -n ${AIRFLOW_NAMESPACE} --ignore-not-found
+    echo "✅ DAG storage deleted"
 
 # Clean up database and secrets
 cleanup:

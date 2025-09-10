@@ -2,13 +2,16 @@ apiVersion: v1
 kind: PersistentVolume
 metadata:
   name: jupyter-nfs-pv
+  labels:
+    type: jupyter-nfs
+    app: jupyterhub
 spec:
   capacity:
     storage: 10Gi
   accessModes:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: longhorn
+  storageClassName: jupyter-nfs-static
   volumeMode: Filesystem
   nfs:
     server: {{ .Env.JUPYTER_NFS_IP }}

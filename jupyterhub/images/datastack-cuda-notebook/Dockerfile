@@ -142,6 +142,7 @@ RUN mamba install --yes \
 
 RUN pip install \
     agno \
+    apache-airflow-client \
     fastembed \
     feature-engine \
     jupyter-ai \

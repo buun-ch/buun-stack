@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airflow-dags-pvc
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple pods can read/write
+  storageClassName: longhorn  # Explicitly use Longhorn which supports RWX
+  resources:
+    requests:
+      storage: 10Gi

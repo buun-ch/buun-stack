@@ -47,6 +47,16 @@ postgresql:
 data:
   metadataSecretName: airflow-metadata-connection
 
+# DAG persistence configuration
+dags:
+  persistence:
+    enabled: {{ .Env.AIRFLOW_DAGS_PERSISTENCE_ENABLED | default "true" }}
+    {{- if eq (.Env.AIRFLOW_DAGS_STORAGE_TYPE | default "default") "nfs" }}
+    existingClaim: airflow-dags-nfs-pvc
+    {{- else }}
+    existingClaim: airflow-dags-pvc
+    {{- end }}
+
 ingress:
   apiServer:
     enabled: true
@@ -58,3 +68,12 @@ ingress:
       - name: {{ .Env.AIRFLOW_HOST }}
         tls:
           enabled: true
+
+# Security contexts for shared file system access
+securityContexts:
+  pod:
+    runAsUser: 1000
+    runAsGroup: 0
+    fsGroup: 100
+  container:
+    allowPrivilegeEscalation: false

@@ -18,11 +18,13 @@ hub:
         #!/bin/bash
         pip install --no-cache-dir hvac==2.3.0
         exec jupyterhub --config /usr/local/etc/jupyterhub/jupyterhub_config.py --upgrade-db
+    {{- if .Env.USER_POLICY_HCL }}
     user_policy.hcl:
       mountPath: /srv/jupyterhub/user_policy.hcl
       mode: 0644
       stringData: |
 {{ .Env.USER_POLICY_HCL | strings.Indent 8 }}
+    {{- end }}
     pre_spawn_hook.py:
       mountPath: /srv/jupyterhub/pre_spawn_hook.py
       mode: 0644
@@ -151,6 +153,34 @@ singleuser:
     VAULT_ADDR: "{{ .Env.VAULT_ADDR }}"
     NOTEBOOK_VAULT_TOKEN_TTL: "{{ .Env.NOTEBOOK_VAULT_TOKEN_TTL }}"
     NOTEBOOK_VAULT_TOKEN_MAX_TTL: "{{ .Env.NOTEBOOK_VAULT_TOKEN_MAX_TTL }}"
+
+  storage:
+    {{ if env.Getenv "PVC_NAME" -}}
+    type: static
+    static:
+      pvcName: {{ .Env.PVC_NAME }}
+    {{ else -}}
+    type: dynamic
+    dynamic:
+      {{ if env.Getenv "JUPYTERHUB_STORAGE_CLASS" -}}
+      storageClass: {{ .Env.JUPYTERHUB_STORAGE_CLASS }}
+      {{ end -}}
+      storageAccessModes:
+        - ReadWriteOnce
+    {{ end -}}
+    capacity: 10Gi
+    {{- if eq .Env.JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED "true" }}
+    # Mount Airflow DAGs when both are in the same namespace (jupyter)
+    extraVolumes:
+      - name: airflow-dags
+        persistentVolumeClaim:
+          claimName: airflow-dags-pvc
+          optional: true  # Don't fail if PVC doesn't exist yet
+    extraVolumeMounts:
+      - name: airflow-dags
+        mountPath: /opt/airflow-dags
+        readOnly: false
+    {{- end }}
 
   networkPolicy:
     egress:

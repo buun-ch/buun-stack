@@ -8,4 +8,9 @@ spec:
   resources:
     requests:
       storage: 10Gi
+  storageClassName: jupyter-nfs-static
+  selector:
+    matchLabels:
+      type: jupyter-nfs
+      app: jupyterhub
   volumeName: jupyter-nfs-pv

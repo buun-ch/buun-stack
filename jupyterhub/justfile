@@ -8,7 +8,8 @@ export JUPYTERHUB_OIDC_CLIENT_SESSION_MAX := env("JUPYTERHUB_OIDC_CLIENT_SESSION
 export JUPYTERHUB_NFS_PV_ENABLED := env("JUPYTERHUB_NFS_PV_ENABLED", "")
 export JUPYTERHUB_STORAGE_CLASS := env("JUPYTERHUB_STORAGE_CLASS", "")
 export JUPYTERHUB_VAULT_INTEGRATION_ENABLED := env("JUPYTERHUB_VAULT_INTEGRATION_ENABLED", "")
-export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-34")
+export JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED := env("JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED", "")
+export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-36")
 export KERNEL_IMAGE_BUUN_STACK_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_REPOSITORY", "buun-stack-notebook")
 export KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY", "buun-stack-cuda-notebook")
 export JUPYTER_PROFILE_MINIMAL_ENABLED := env("JUPYTER_PROFILE_MINIMAL_ENABLED", "false")
@@ -28,6 +29,7 @@ export JUPYTER_BUUNSTACK_LOG_LEVEL := env("JUPYTER_BUUNSTACK_LOG_LEVEL", "warnin
 export IMAGE_REGISTRY := env("IMAGE_REGISTRY", "localhost:30500")
 export SPARK_DOWNLOAD_URL := env("SPARK_DOWNLOAD_URL", "https://dlcdn.apache.org/spark/")
 export SPARK_VERSION := env("SPARK_VERSION", "4.0.1")
+export AIRFLOW_DAGS_STORAGE_SIZE := env("AIRFLOW_DAGS_STORAGE_SIZE", "10Gi")
 export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export VAULT_HOST := env("VAULT_HOST", "")
@@ -114,10 +116,31 @@ install root_token='':
             )
         done
         PVC_NAME=jupyter-nfs-pvc
+        # Create StorageClass for NFS static provisioning
+        if ! kubectl get storageclass jupyter-nfs-static &>/dev/null; then
+            kubectl apply -f jupyter-nfs-storage-class.yaml
+        fi
         if ! kubectl get pv jupyter-nfs-pv &>/dev/null; then
             gomplate -f nfs-pv.gomplate.yaml | kubectl apply -f -
         fi
         kubectl apply -n ${JUPYTERHUB_NAMESPACE} -f nfs-pvc.yaml
+    fi
+
+    # Setup Airflow DAG storage sharing (same namespace)
+    if [ -z "${JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED}" ]; then
+        if gum confirm "Enable Airflow DAG storage mounting (requires Airflow in same namespace)?"; then
+            JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED="true"
+        else
+            JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED="false"
+        fi
+    fi
+    if [ "${JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED}" = "true" ]; then
+        echo "✅ Airflow DAG mounting enabled"
+        echo "   Note: Airflow must be installed in the same namespace (jupyter)"
+        echo "   PVC: airflow-dags-pvc will be mounted at /opt/airflow-dags"
+        echo ""
+        echo "   ⚠️  If you install Airflow AFTER JupyterHub, restart user pods to mount DAGs:"
+        echo "      kubectl delete pods -n jupyter -l app.kubernetes.io/component=singleuser-server"
     fi
 
     # Setup Vault Agent for automatic token management
@@ -174,7 +197,7 @@ uninstall:
         kubectl patch pv jupyter-nfs-pv -p '{"spec":{"claimRef":null}}'
     fi
 
-# Delete JupyterHub PV
+# Delete JupyterHub PV and StorageClass
 delete-pv:
     #!/bin/bash
     set -euo pipefail
@@ -182,6 +205,7 @@ delete-pv:
         kubectl patch pv jupyter-nfs-pv -p '{"spec":{"claimRef":null}}'
         kubectl delete pv jupyter-nfs-pv
     fi
+    kubectl delete storageclass jupyter-nfs-static --ignore-not-found
 
 # Build Jupyter notebook kernel images
 build-kernel-images:
