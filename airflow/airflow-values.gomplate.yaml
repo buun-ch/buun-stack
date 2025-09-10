@@ -1,0 +1,60 @@
+useStandardNaming: true
+
+webserverSecretKey: {{ .Env.AIRFLOW_WEBSERVER_SECRET_KEY }}
+
+executor: CeleryExecutor
+
+apiServer:
+  replicas: 1
+  apiServerConfigConfigMapName: airflow-api-server-config
+  env:
+    - name: AIRFLOW_OAUTH_CLIENT_ID
+      valueFrom:
+        secretKeyRef:
+          name: airflow-oauth-secret
+          key: client_id
+    - name: AIRFLOW_OAUTH_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: airflow-oauth-secret
+          key: client_secret
+    - name: KEYCLOAK_HOST
+      value: "{{ .Env.KEYCLOAK_HOST }}"
+    - name: KEYCLOAK_REALM
+      value: "{{ .Env.KEYCLOAK_REALM }}"
+
+webserver:
+  enabled: true
+  replicas: 1
+
+createUserJob:
+  useHelmHooks: false
+  applyCustomEnv: false
+
+migrateDatabaseJob:
+  useHelmHooks: false
+  applyCustomEnv: false
+
+images:
+  migrationsWaitTimeout: 180
+
+flower:
+  enabled: false
+
+postgresql:
+  enabled: false
+
+data:
+  metadataSecretName: airflow-metadata-connection
+
+ingress:
+  apiServer:
+    enabled: true
+    annotations:
+      kubernetes.io/ingress.class: traefik
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    ingressClassName: traefik
+    hosts:
+      - name: {{ .Env.AIRFLOW_HOST }}
+        tls:
+          enabled: true

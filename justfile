@@ -6,6 +6,7 @@ export PATH := "./node_modules/.bin:" + env_var('PATH')
 default:
     @just --list --unsorted --list-submodules
 
+mod airflow
 mod clickhouse
 mod datahub
 mod env
