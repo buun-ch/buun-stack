@@ -201,6 +201,30 @@ user-exists username='':
         exit 1
     fi
 
+# Change user password
+change-password username='' password='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME=${USERNAME:-"{{ username }}"}
+    PASSWORD=${PASSWORD:-"{{ password }}"}
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    if ! just user-exists ${USERNAME} &>/dev/null; then
+        echo "User ${USERNAME} does not exist." >&2
+        exit 1
+    fi
+    if [ -z "${PASSWORD}" ]; then
+        PASSWORD=$(gum input --prompt="New password: " --password --width=100 \
+            --placeholder="Empty to generate a random password")
+    fi
+    if [ -z "${PASSWORD}" ]; then
+        PASSWORD=$(just utils::random-password)
+        echo "Generated random password: ${PASSWORD}"
+    fi
+    just psql -c "\"ALTER USER ${USERNAME} WITH PASSWORD '${PASSWORD}';\""
+    echo "Password changed for user ${USERNAME}."
+
 # Grant all privileges on database to user
 grant db_name='' username='':
     #!/bin/bash
