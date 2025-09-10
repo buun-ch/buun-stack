@@ -1,0 +1,143 @@
+set fallback := true
+
+export BYTEBASE_NAMESPACE := env("BYTEBASE_NAMESPACE", "bytebase")
+export BYTEBASE_CHART_VERSION := env("BYTEBASE_CHART_VERSION", "1.1.1")
+export BYTEBASE_VERSION := env("BYTEBASE_VERSION", "3.9.2")
+export BYTEBASE_HOST := env("BYTEBASE_HOST", "")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add bytebase-repo https://bytebase.github.io/bytebase
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove bytebase-repo
+
+# Create Bytebase namespace
+create-namespace:
+    @kubectl get namespace ${BYTEBASE_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${BYTEBASE_NAMESPACE}
+
+# Delete Bytebase namespace
+delete-namespace:
+    @kubectl delete namespace ${BYTEBASE_NAMESPACE} --ignore-not-found
+
+# Setup database for Bytebase
+setup-database:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up Bytebase database..."
+
+    if just postgres::db-exists bytebase &>/dev/null; then
+        echo "Database 'bytebase' already exists."
+    else
+        echo "Creating new database 'bytebase'..."
+        just postgres::create-db bytebase
+    fi
+
+    # Generate password for user creation/update
+    if just postgres::user-exists bytebase &>/dev/null; then
+        echo "User 'bytebase' already exists."
+        # Check if we can get existing password from Vault/Secret
+        if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            # Try to get existing password from Vault
+            if DB_PASSWORD=$(just vault::get bytebase/database password 2>/dev/null); then
+                echo "Using existing password from Vault."
+            else
+                echo "Generating new password and updating Vault..."
+                DB_PASSWORD=$(just utils::random-password)
+                just postgres::change-password bytebase "$DB_PASSWORD"
+            fi
+        else
+            # For direct Secret approach, generate new password
+            echo "Generating new password for existing user..."
+            DB_PASSWORD=$(just utils::random-password)
+            just postgres::change-password bytebase "$DB_PASSWORD"
+        fi
+    else
+        echo "Creating new user 'bytebase'..."
+        DB_PASSWORD=$(just utils::random-password)
+        just postgres::create-user bytebase "$DB_PASSWORD"
+    fi
+
+    echo "Ensuring database permissions..."
+    just postgres::grant bytebase bytebase
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing credentials in Vault and creating ExternalSecret..."
+        just vault::put bytebase/database username=bytebase password="$DB_PASSWORD"
+        gomplate -f bytebase-database-external-secret.gomplate.yaml -o bytebase-database-external-secret.yaml
+        kubectl apply -f bytebase-database-external-secret.yaml
+        echo "Waiting for database secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/bytebase-database-external-secret \
+            -n ${BYTEBASE_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret bytebase-database-secret -n ${BYTEBASE_NAMESPACE} --ignore-not-found
+        kubectl create secret generic bytebase-database-secret -n ${BYTEBASE_NAMESPACE} \
+            --from-literal=username=bytebase \
+            --from-literal=password="$DB_PASSWORD"
+        echo "Database secret created directly in Kubernetes"
+    fi
+    echo "Database setup completed."
+
+# Delete database secret
+delete-database-secret:
+    @kubectl delete secret bytebase-database-secret -n ${BYTEBASE_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret bytebase-database-external-secret -n ${BYTEBASE_NAMESPACE} --ignore-not-found
+
+
+# Install Bytebase
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export BYTEBASE_HOST=${BYTEBASE_HOST:-}
+    while [ -z "${BYTEBASE_HOST}" ]; do
+        BYTEBASE_HOST=$(
+            gum input --prompt="Bytebase host (FQDN): " --width=100 \
+            --placeholder="e.g., bytebase.example.com"
+        )
+    done
+    echo "Installing Bytebase..."
+    just create-namespace
+    just setup-database
+    just add-helm-repo
+    gomplate -f bytebase-values.gomplate.yaml -o bytebase-values.yaml
+    helm upgrade --cleanup-on-fail --install bytebase bytebase-repo/bytebase \
+        --version ${BYTEBASE_CHART_VERSION} -n ${BYTEBASE_NAMESPACE} --wait -f bytebase-values.yaml
+    gomplate -f ingressroute.gomplate.yaml | kubectl apply -n ${BYTEBASE_NAMESPACE} -f -
+    echo "Bytebase installation completed"
+    echo "Access Bytebase at: https://${BYTEBASE_HOST}"
+
+# Uninstall Bytebase
+uninstall delete-db='true':
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling Bytebase..."
+    helm uninstall bytebase -n ${BYTEBASE_NAMESPACE} --ignore-not-found
+    just delete-database-secret
+    just delete-namespace
+    if [ "{{ delete-db }}" = "true" ]; then
+        just postgres::delete-db bytebase
+    fi
+    echo "Bytebase uninstalled"
+
+# Clean up database and secrets
+cleanup:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete the Bytebase database and all secrets."
+    if gum confirm "Are you sure you want to proceed?"; then
+        echo "Cleaning up Bytebase resources..."
+        just postgres::delete-db bytebase || true
+        just vault::delete bytebase/database || true
+        echo "Cleanup completed"
+    else
+        echo "Cleanup cancelled"
+    fi

@@ -1,0 +1,13 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: bytebase
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: "Host(`{{ .Env.BYTEBASE_HOST }}`)"
+      kind: Rule
+      services:
+        - name: bytebase-entrypoint
+          port: 80

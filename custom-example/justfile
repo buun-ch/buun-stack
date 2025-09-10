@@ -4,5 +4,6 @@ set fallback := true
 default:
     @just --list --unsorted --list-submodules
 
+mod bytebase 'bytebase/justfile'
 mod miniflux 'miniflux/justfile'
 mod reddit-rss 'reddit-rss/justfile'

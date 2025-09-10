@@ -1,0 +1,16 @@
+bytebase:
+  version: {{ .Env.BYTEBASE_VERSION }}
+
+  option:
+    external-url: https://{{ .Env.BYTEBASE_HOST }}
+
+    externalPg:
+      pgHost: "postgres-cluster-rw.postgres"
+      pgPort: "5432"
+      pgUsername: "bytebase"
+      pgDatabase: "bytebase"
+      existingPgPasswordSecret: "bytebase-database-secret"
+      existingPgPasswordSecretKey: "password"
+
+    persistence:
+      enabled: true
