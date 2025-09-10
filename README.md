@@ -6,17 +6,18 @@ A Kubernetes development stack for self-hosted environments, designed to run on 
 
 ## Features
 
-- **Kubernetes Distribution**: k3s lightweight Kubernetes
-- **Storage**: Longhorn distributed block storage
-- **Identity & Access**: Keycloak for OIDC authentication
-- **Secrets Management**: HashiCorp Vault with External Secrets Operator
-- **Database**: PostgreSQL cluster
-- **Object Storage**: MinIO S3-compatible storage
-- **Data Science**: JupyterHub for collaborative notebooks
-- **Analytics**: Metabase for business intelligence and data visualization
-- **Data Catalog**: DataHub for metadata management and data discovery
-- **Remote Access**: Cloudflare Tunnel for secure internet connectivity
-- **Automation**: Just task runner with templated configurations
+- **Kubernetes Distribution**: [k3s](https://k3s.io/) lightweight Kubernetes
+- **Storage**: [Longhorn](https://longhorn.io/) distributed block storage
+- **Identity & Access**: [Keycloak](https://www.keycloak.org/) for OIDC authentication
+- **Secrets Management**: [HashiCorp Vault](https://www.vaultproject.io/) with [External Secrets Operator](https://external-secrets.io/)
+- **Database**: [PostgreSQL](https://www.postgresql.org/) cluster
+- **Object Storage**: [MinIO](https://min.io/) S3-compatible storage
+- **Data Science**: [JupyterHub](https://jupyter.org/hub) for collaborative notebooks
+- **Analytics**: [Metabase](https://www.metabase.com/) for business intelligence and data visualization
+- **Data Catalog**: [DataHub](https://datahubproject.io/) for metadata management and data discovery
+- **Analytics Database**: [ClickHouse](https://clickhouse.com/) for high-performance analytics and data warehousing
+- **Remote Access**: [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) for secure internet connectivity
+- **Automation**: [Just](https://just.systems/) task runner with templated configurations
 
 ## Quick Start
 
@@ -88,6 +89,7 @@ Production-ready relational database for:
 
 - Keycloak data storage
 - Application databases
+- Vector similarity search with [pgvector](https://github.com/pgvector/pgvector) extension for AI/ML workloads
 
 ### External Secrets Operator
 
@@ -155,7 +157,28 @@ Installation:
 just datahub::install
 ```
 
+> **⚠️ Resource Requirements:** DataHub is resource-intensive, requiring approximately **4-5GB of RAM** and 1+ CPU cores across multiple components (Elasticsearch, Kafka, Zookeeper, and DataHub services). Deployment typically takes 15-20 minutes to complete. Ensure your cluster has sufficient resources before installation.
+
 Access DataHub at `https://datahub.yourdomain.com` and use "Sign in with SSO" to authenticate via Keycloak.
+
+### ClickHouse
+
+High-performance columnar OLAP database for analytics and data warehousing:
+
+- Columnar storage for fast analytical queries
+- Real-time data ingestion and processing
+- Horizontal scaling for large datasets
+- SQL interface with advanced analytics functions
+- Integration with External Secrets for secure credential management
+- Support for various data formats (CSV, JSON, Parquet, etc.)
+
+Installation:
+
+```bash
+just clickhouse::install
+```
+
+Access ClickHouse at `https://clickhouse.yourdomain.com` using the admin credentials stored in Vault.
 
 ## Common Operations
 
