@@ -434,3 +434,38 @@ update-realm-token-settings realm access_token_lifespan='3600' refresh_token_lif
     export ACCESS_TOKEN_LIFESPAN={{ access_token_lifespan }}
     export REFRESH_TOKEN_LIFESPAN={{ refresh_token_lifespan }}
     dotenvx run -q -f ../.env.local -- tsx ./scripts/update-realm-token-settings.ts
+
+# Create Keycloak client role
+create-client-role realm client_id role_name:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM={{ realm }}
+    export KEYCLOAK_CLIENT_ID={{ client_id }}
+    export KEYCLOAK_ROLE_NAME={{ role_name }}
+    dotenvx run -q -f ../.env.local -- tsx ./scripts/create-client-role.ts
+
+# Add user to client role
+add-user-to-client-role realm username client_id role_name:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM={{ realm }}
+    export USERNAME={{ username }}
+    export KEYCLOAK_CLIENT_ID={{ client_id }}
+    export KEYCLOAK_ROLE_NAME={{ role_name }}
+    dotenvx run -q -f ../.env.local -- tsx ./scripts/add-user-to-client-role.ts
+
+# Remove user from client role
+remove-user-from-client-role realm username client_id role_name:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM={{ realm }}
+    export USERNAME={{ username }}
+    export KEYCLOAK_CLIENT_ID={{ client_id }}
+    export KEYCLOAK_ROLE_NAME={{ role_name }}
+    dotenvx run -q -f ../.env.local -- tsx ./scripts/remove-user-from-client-role.ts
