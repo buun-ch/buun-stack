@@ -306,6 +306,94 @@ uninstall delete-db='true':
     just keycloak::delete-client ${KEYCLOAK_REALM} airflow || true
     echo "Airflow uninstalled"
 
+# Create API user for JupyterHub integration
+create-api-user username='' role='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="{{ username }}"
+    ROLE="{{ role }}"
+
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="API Username: " --width=100 --placeholder="e.g., john.doe")
+    done
+
+    # Interactive role selection if not provided
+    if [ -z "${ROLE}" ]; then
+        echo ""
+        echo "Airflow Roles:"
+        echo "   Admin  - Full administrative access (all permissions)"
+        echo "   Op     - Operator permissions (can trigger DAGs, manage runs)"
+        echo "   User   - Standard user permissions (recommended for most users)"
+        echo "   Viewer - Read-only access (can view DAGs and runs)"
+        echo "   Public - Minimal public permissions"
+        echo ""
+        ROLE=$(gum choose --header="Select user role:" \
+            "User" "Admin" "Op" "Viewer" "Public")
+    fi
+
+    echo "Creating Airflow API user: ${USERNAME} (role: ${ROLE})"
+    API_PASSWORD=$(just utils::random-password)
+    kubectl exec deployment/airflow-api-server -n ${AIRFLOW_NAMESPACE} -- \
+        airflow users create \
+            --username "${USERNAME}" \
+            --firstname "API" \
+            --lastname "User" \
+            --role "${ROLE}" \
+            --email "${USERNAME}@api.local" \
+            --password "${API_PASSWORD}"
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing credentials in Vault..."
+        just vault::put "jupyter/users/${USERNAME}/airflow-api" \
+            username="${USERNAME}" \
+            password="${API_PASSWORD}"
+        echo "API credentials stored in Vault"
+        echo "   Path: jupyter/users/${USERNAME}/airflow-api"
+        echo "   Ready for JupyterHub notebook access with SecretStore"
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret "airflow-user-${USERNAME}" -n jupyterhub --ignore-not-found
+        kubectl create secret generic "airflow-user-${USERNAME}" -n jupyterhub \
+            --from-literal=username="${USERNAME}" \
+            --from-literal=password="${API_PASSWORD}"
+        echo "API credentials stored in Kubernetes Secret"
+        echo "   Secret: airflow-user-${USERNAME} (namespace: jupyterhub)"
+    fi
+
+    echo "✅ API user created successfully: ${USERNAME}"
+    echo "   User has '${ROLE}' role permissions"
+
+# List API users
+list-api-users:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Airflow API Users:"
+    kubectl exec deployment/airflow-api-server -n ${AIRFLOW_NAMESPACE} -- \
+        airflow users list --output table
+
+# Delete API user
+delete-api-user username='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="{{ username }}"
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username to delete: " --width=100)
+    done
+    if gum confirm "Delete API user '${USERNAME}' and all associated credentials?"; then
+        echo "Deleting Airflow API user: ${USERNAME}"
+        kubectl exec deployment/airflow-api-server -n ${AIRFLOW_NAMESPACE} -- \
+            airflow users delete --username "${USERNAME}" || true
+        if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            just vault::delete "jupyter/users/${USERNAME}/airflow-api" || true
+            echo "✅ Vault credentials cleaned up"
+        fi
+        kubectl delete secret "airflow-user-${USERNAME}" -n jupyterhub --ignore-not-found
+        echo "✅ Kubernetes secret cleaned up"
+        echo "   API user deleted: ${USERNAME}"
+    else
+        echo "Deletion cancelled"
+    fi
+
 # Clean up database and secrets
 cleanup:
     #!/bin/bash
