@@ -178,12 +178,23 @@ singleuser:
           optional: true  # Don't fail if PVC doesn't exist yet
     extraVolumeMounts:
       - name: airflow-dags
-        mountPath: /opt/airflow-dags
+        mountPath: /home/jovyan/airflow-dags
         readOnly: false
     {{- end }}
 
   networkPolicy:
     egress:
+      {{- if eq .Env.JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED "true" }}
+      # Allow communication with Airflow API server in the same namespace
+      - to:
+          - podSelector:
+              matchLabels:
+                release: airflow
+                component: api-server
+        ports:
+          - port: 8080
+            protocol: TCP
+      {{- end }}
       - to:
           - namespaceSelector:
               matchLabels:

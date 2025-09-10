@@ -77,7 +77,6 @@ RUN pip uninstall -y \
 # 2. Find the pandas version in the file `dev/infra/Dockerfile`.
 RUN mamba install --yes \
     'aif360' \
-    'airflow' \
     'chromadb' \
     'clickhouse-connect' \
     'csvkit' \
@@ -142,6 +141,7 @@ RUN mamba install --yes \
 
 RUN pip install \
     agno \
+    apache-airflow \
     apache-airflow-client \
     fastembed \
     feature-engine \
