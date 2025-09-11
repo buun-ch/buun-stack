@@ -1,6 +1,6 @@
 set fallback := true
 
-export AIRFLOW_NAMESPACE := env("AIRFLOW_NAMESPACE", "jupyter")
+export AIRFLOW_NAMESPACE := env("AIRFLOW_NAMESPACE", "datastack")
 export AIRFLOW_CHART_VERSION := env("AIRFLOW_CHART_VERSION", "1.18.0")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
