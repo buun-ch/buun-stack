@@ -7,15 +7,16 @@ A Kubernetes development stack for self-hosted environments, designed to run on 
 ## Features
 
 - **Kubernetes Distribution**: [k3s](https://k3s.io/) lightweight Kubernetes
-- **Storage**: [Longhorn](https://longhorn.io/) distributed block storage
+- **Block Storage**: [Longhorn](https://longhorn.io/) distributed block storage
+- **Object Storage**: [MinIO](https://min.io/) S3-compatible storage
 - **Identity & Access**: [Keycloak](https://www.keycloak.org/) for OIDC authentication
 - **Secrets Management**: [HashiCorp Vault](https://www.vaultproject.io/) with [External Secrets Operator](https://external-secrets.io/)
-- **Database**: [PostgreSQL](https://www.postgresql.org/) cluster
-- **Object Storage**: [MinIO](https://min.io/) S3-compatible storage
-- **Data Science**: [JupyterHub](https://jupyter.org/hub) for collaborative notebooks
-- **Analytics**: [Metabase](https://www.metabase.com/) for business intelligence and data visualization
+- **Interactive Computing**: [JupyterHub](https://jupyter.org/hub) for collaborative notebooks
+- **Business Intelligence**: [Metabase](https://www.metabase.com/) for business intelligence and data visualization
 - **Data Catalog**: [DataHub](https://datahubproject.io/) for metadata management and data discovery
-- **Analytics Database**: [ClickHouse](https://clickhouse.com/) for high-performance analytics and data warehousing
+- **Database**: [PostgreSQL](https://www.postgresql.org/) cluster
+- **Analytics Engine/Database**: [ClickHouse](https://clickhouse.com/) for high-performance analytics and data warehousing
+- **Workflow Orchestration**: [Apache Airflow](https://airflow.apache.org/) for data pipeline automation and task scheduling
 - **Remote Access**: [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) for secure internet connectivity
 - **Automation**: [Just](https://just.systems/) task runner with templated configurations
 
@@ -180,6 +181,50 @@ just clickhouse::install
 
 Access ClickHouse at `https://clickhouse.yourdomain.com` using the admin credentials stored in Vault.
 
+### Apache Airflow
+
+Modern workflow orchestration platform for data pipelines and task automation:
+
+- Airflow 3 with modern SDK components and FastAPI integration
+- DAG Development: Integrated with JupyterHub for seamless workflow creation and editing
+- OIDC Authentication: Secure access through Keycloak integration
+- Shared Storage: DAG files shared between JupyterHub and Airflow for direct editing
+- Role-based Access Control: Multiple user roles (Admin, Operator, User, Viewer)
+- REST API: Ful API access for programmatic DAG management
+
+Installation:
+
+```bash
+just airflow::install
+```
+
+**JupyterHub Integration**: After installing both JupyterHub and Airflow, DAG files are automatically shared:
+
+- Edit DAG files directly in JupyterHub: `~/airflow-dags/*.py`
+- Changes appear in Airflow UI within 1-2 minutes
+- Full Python development environment with syntax checking
+- Template files available for quick DAG creation
+
+**User Management**:
+
+```bash
+# Assign roles to users
+just airflow::assign-role <username> <role>
+
+# Available roles: airflow_admin, airflow_op, airflow_user, airflow_viewer
+just airflow::assign-role myuser airflow_admin
+```
+
+**API Access**: Create API users for programmatic access:
+
+```bash
+just airflow::create-api-user <username> <role>
+```
+
+> **💡 Development Workflow**: Create DAGs in JupyterHub using `~/airflow-dags/dag_template.py` as a starting point. Use `.tmp` extension during development to avoid import errors, then rename to `.py` when ready.
+
+Access Airflow at `https://airflow.yourdomain.com` and authenticate via Keycloak.
+
 ## Common Operations
 
 ### User Management
@@ -245,6 +290,8 @@ kubectl --context yourpc-oidc get nodes
 # Vault: https://vault.yourdomain.com
 # Keycloak: https://auth.yourdomain.com
 # Metabase: https://metabase.yourdomain.com
+# Airflow: https://airflow.yourdomain.com
+# JupyterHub: https://jupyter.yourdomain.com
 ```
 
 ## Customization
