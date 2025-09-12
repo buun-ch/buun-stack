@@ -18,6 +18,7 @@ mod k8s
 mod longhorn
 mod metabase
 mod minio
+mod oauth2-proxy
 mod postgres
 mod utils
 mod vault

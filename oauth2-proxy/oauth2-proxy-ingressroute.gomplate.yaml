@@ -1,0 +1,36 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ .Env.APP_NAME }}-auth-headers
+  namespace: {{ .Env.APP_NAMESPACE }}
+spec:
+  headers:
+    sslRedirect: true
+    stsSeconds: 315360000
+    browserXssFilter: true
+    contentTypeNosniff: true
+    forceSTSHeader: true
+    sslHost: {{ .Env.APP_HOST }}
+    stsIncludeSubdomains: true
+    stsPreload: true
+    frameDeny: true
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: oauth2-proxy-{{ .Env.APP_NAME }}
+  namespace: {{ .Env.APP_NAMESPACE }}
+  labels:
+    app: {{ .Env.APP_NAME }}-oauth2-proxy
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: "Host(`{{ .Env.APP_HOST }}`)"
+      kind: Rule
+      services:
+        - name: oauth2-proxy-{{ .Env.APP_NAME }}
+          port: 80
+      middlewares:
+        - name: {{ .Env.APP_NAME }}-auth-headers

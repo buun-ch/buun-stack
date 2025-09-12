@@ -1,0 +1,130 @@
+set fallback := true
+
+export OAUTH2_PROXY_NAMESPACE := env("OAUTH2_PROXY_NAMESPACE", "default")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export OAUTH2_PROXY_HOST := env("OAUTH2_PROXY_HOST", "")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Setup OAuth2 Proxy for an application
+setup-for-app app_name app_host app_namespace="default" upstream_service="":
+    #!/bin/bash
+    set -euo pipefail
+
+    echo "Setting up OAuth2 Proxy for {{ app_name }}"
+
+    # Create Keycloak client
+    echo "Creating Keycloak client for {{ app_name }}..."
+    client_id="{{ app_name }}-oauth2-proxy"
+    redirect_url="https://{{ app_host }}/oauth2/callback"
+
+    # Generate client secret for confidential client
+    client_secret=$(just utils::random-password 32)
+
+    if ! just keycloak::create-client "${KEYCLOAK_REALM}" "${client_id}" "${redirect_url}" "${client_secret}"; then
+        echo "Failed to create Keycloak client"
+        exit 1
+    fi
+
+    # Add audience mapper to Keycloak client
+    echo "Adding audience mapper to Keycloak client..."
+    just keycloak::add-audience-mapper "${client_id}"
+
+    # Generate cookie secret
+    cookie_secret=$(just utils::random-password 32)
+
+    # Create namespace if it doesn't exist
+    kubectl get namespace {{ app_namespace }} &>/dev/null || \
+        kubectl create namespace {{ app_namespace }}
+
+    # Store secrets
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Storing credentials in Vault..."
+
+        just vault::put "oauth2-proxy/{{ app_name }}" \
+            client_id="${client_id}" \
+            client_secret="${client_secret}" \
+            cookie_secret="${cookie_secret}"
+
+        # Create ExternalSecret
+        export APP_NAME="{{ app_name }}"
+        export APP_HOST="{{ app_host }}"
+        export APP_NAMESPACE="{{ app_namespace }}"
+        gomplate -f oauth2-proxy-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/oauth2-proxy-{{ app_name }}-config \
+            -n {{ app_namespace }} --timeout=60s
+    else
+        echo "Creating Kubernetes secret directly..."
+        kubectl create secret generic oauth2-proxy-{{ app_name }}-config \
+            -n {{ app_namespace }} \
+            --from-literal=client_id="${client_id}" \
+            --from-literal=client_secret="${client_secret}" \
+            --from-literal=cookie_secret="${cookie_secret}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+    fi
+
+    # Set upstream service (default to static response if not provided)
+    if [ -z "{{ upstream_service }}" ]; then
+        upstream_service="static://202"
+    else
+        upstream_service="{{ upstream_service }}"
+    fi
+
+    # Deploy OAuth2 Proxy
+    export APP_NAME="{{ app_name }}"
+    export APP_HOST="{{ app_host }}"
+    export APP_NAMESPACE="{{ app_namespace }}"
+    export UPSTREAM_SERVICE="${upstream_service}"
+
+    gomplate -f oauth2-proxy-deployment.gomplate.yaml | kubectl apply -f -
+    gomplate -f oauth2-proxy-service.gomplate.yaml | kubectl apply -f -
+    gomplate -f oauth2-proxy-ingressroute.gomplate.yaml | kubectl apply -f -
+
+    echo "Waiting for OAuth2 Proxy to be ready..."
+    kubectl wait --for=condition=Available deployment/oauth2-proxy-{{ app_name }} \
+        -n {{ app_namespace }} --timeout=120s
+
+    echo "OAuth2 Proxy setup completed for {{ app_name }}"
+    echo "Access URL: https://{{ app_host }}/oauth2/sign_in"
+
+# Remove OAuth2 Proxy for an application
+remove-for-app app_name app_namespace="default":
+    #!/bin/bash
+    set -euo pipefail
+
+    echo "Removing OAuth2 Proxy for {{ app_name }}"
+
+    # Delete Kubernetes resources
+    kubectl delete ingressroute oauth2-proxy-{{ app_name }} -n {{ app_namespace }} --ignore-not-found
+    kubectl delete service oauth2-proxy-{{ app_name }} -n {{ app_namespace }} --ignore-not-found
+    kubectl delete deployment oauth2-proxy-{{ app_name }} -n {{ app_namespace }} --ignore-not-found
+    kubectl delete configmap oauth2-proxy-{{ app_name }}-config -n {{ app_namespace }} --ignore-not-found
+    kubectl delete secret oauth2-proxy-{{ app_name }}-config -n {{ app_namespace }} --ignore-not-found
+    kubectl delete externalsecret oauth2-proxy-{{ app_name }}-config -n {{ app_namespace }} --ignore-not-found
+
+    # Remove Vault secrets if External Secrets is available
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        just vault::delete "oauth2-proxy/{{ app_name }}"
+    fi
+
+    # Delete Keycloak client
+    client_id="{{ app_name }}-oauth2-proxy"
+    just keycloak::delete-client "${KEYCLOAK_REALM}" "${client_id}"
+
+    echo "OAuth2 Proxy removed for {{ app_name }}"
+
+# List OAuth2 Proxy deployments
+list:
+    @echo "OAuth2 Proxy deployments:"
+    @kubectl get deployments -A -l app.kubernetes.io/component=oauth2-proxy
+
+# Show OAuth2 Proxy status for an application
+status app_name app_namespace="default":
+    @echo "OAuth2 Proxy status for {{ app_name }}:"
+    @kubectl get deployment,service,ingressroute -n {{ app_namespace }} -l app={{ app_name }}-oauth2-proxy

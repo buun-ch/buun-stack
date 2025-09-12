@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth2-proxy-{{ .Env.APP_NAME }}
+  namespace: {{ .Env.APP_NAMESPACE }}
+  labels:
+    app: {{ .Env.APP_NAME }}-oauth2-proxy
+spec:
+  ports:
+  - port: 80
+    targetPort: 4180
+    protocol: TCP
+    name: http
+  selector:
+    app: {{ .Env.APP_NAME }}-oauth2-proxy
