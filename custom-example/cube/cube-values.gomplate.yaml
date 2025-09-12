@@ -1,0 +1,99 @@
+# Cube.dev Helm Chart Values
+# https://github.com/gadsme/charts/tree/main/charts/cube
+
+# Image configuration
+image:
+  repository: cubejs/cube
+  tag: v0.35.78
+
+# Replica count
+replicaCount: 1
+
+# Resources
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 4000
+
+# Environment variables for Cube.dev
+extraEnvVars:
+  # JWT Authentication
+  - name: CUBEJS_JWT_KEY
+    value: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid_connect/certs"
+  - name: CUBEJS_JWT_AUDIENCE
+    value: "{{ .Env.CUBE_OIDC_CLIENT_ID }}"
+  - name: CUBEJS_JWT_ISSUER
+    value: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}"
+
+  # Cubestore connection
+  - name: CUBEJS_CUBESTORE_HOST
+    value: cubestore-router.{{ .Env.CUBE_NAMESPACE }}.svc.cluster.local
+
+  # API settings (loaded from Secret)
+  - name: CUBEJS_API_SECRET
+    valueFrom:
+      secretKeyRef:
+        name: cube-api-secret
+        key: api-secret
+
+  - name: CUBEJS_WEB_SOCKETS
+    value: "true"
+  - name: CUBEJS_DEV_MODE
+    value: "true"
+
+# Override default log level
+config:
+  logLevel: "info"
+
+  # Database connection - minimal configuration for initial deployment
+  # Configure via Playground Setup Wizard after deployment: http://localhost:4000
+
+# Datasource configuration (required by Helm chart)
+datasources:
+  default:
+    type: postgres
+    host: postgres-cluster-rw.postgres.svc.cluster.local
+    port: 5432
+    name: cube
+    user: cube
+    passFromSecret:
+      name: postgres-cube-secret
+      key: password
+
+# Ingress configuration
+ingress:
+  enabled: false  # disabled for now
+  hostname: {{ .Env.CUBE_HOST | default "cube.local" }}
+  path: /
+  pathType: Prefix
+  ingressClassName: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  tls: {{ if .Env.CUBE_HOST }}true{{ else }}false{{ end }}
+
+# Persistence for schema files and configuration
+persistence:
+  enabled: true
+  size: {{ .Env.CUBE_STORAGE_SIZE | default "1Gi" }}
+  storageClass: longhorn
+  accessMode: ReadWriteOnce
+  # Mount path for Cube configuration and schema files
+  mountPath: /cube/conf
+
+# Custom schema mounting (if you have schema files)
+extraVolumes: []
+# - name: schema
+#   configMap:
+#     name: cube-schema
+
+extraVolumeMounts: []
+# - name: schema
+#   mountPath: /cube/conf/schema

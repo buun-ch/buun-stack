@@ -1,0 +1,237 @@
+set fallback := true
+
+export CUBE_NAMESPACE := env("CUBE_NAMESPACE", "cube")
+export CUBESTORE_CHART_VERSION := env("CUBESTORE_CHART_VERSION", "1.1.0")
+export CUBE_CHART_VERSION := env("CUBE_CHART_VERSION", "3.2.0")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export CUBE_OIDC_CLIENT_ID := env("CUBE_OIDC_CLIENT_ID", "cube-cli")
+export CUBE_OIDC_CALLBACK_PORT := env("CUBE_OIDC_CALLBACK_PORT", "9876")
+export CUBE_STORAGE_SIZE := env("CUBE_STORAGE_SIZE", "1Gi")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Create Cube namespace
+create-namespace:
+    @kubectl get namespace ${CUBE_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${CUBE_NAMESPACE}
+
+# Delete Cube namespace
+delete-namespace:
+    @kubectl delete namespace ${CUBE_NAMESPACE} --ignore-not-found
+
+# Install Cube.dev and Cubestore
+install:
+    #!/bin/bash
+    set -euo pipefail
+    just add-helm-repo
+    just create-credentials
+    just create-database
+    just install-cubestore
+    just install-cube
+    echo "Cube.dev and Cubestore installed successfully"
+    echo "Access Cube Playground: http://localhost:4000 (after port-forward)"
+    echo "Run: just cube::port-forward"
+
+# Add Helm repository
+add-helm-repo:
+    @echo "Adding gadsme Helm repository..."
+    helm repo add gadsme https://gadsme.github.io/charts
+    helm repo update
+
+# Install Cubestore cluster
+install-cubestore:
+    @echo "Installing Cubestore cluster..."
+    just create-namespace
+    helm upgrade --install cubestore gadsme/cubestore --namespace ${CUBE_NAMESPACE} \
+        --version ${CUBESTORE_CHART_VERSION} --values cubestore-values.yaml --wait --timeout=5m
+
+# Install Cube.dev
+install-cube:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Installing Cube.dev..."
+    export CUBE_HOST=${CUBE_HOST:-}
+    while [ -z "${CUBE_HOST}" ]; do
+        CUBE_HOST=$(
+            gum input --prompt="Cube host (FQDN): " --width=100 \
+            --placeholder="e.g., cube.example.com" \
+        )
+    done
+    gomplate -f cube-values.gomplate.yaml -o cube-values.yaml
+    helm upgrade --install cube gadsme/cube --namespace ${CUBE_NAMESPACE} \
+        --version ${CUBE_CHART_VERSION} --values cube-values.yaml --wait --timeout=5m
+
+# Create Cube database and user
+create-database:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Creating Cube database and user..."
+    password=$(just utils::random-password)
+    
+    # Create database if not exists
+    if ! just postgres::db-exists cube &>/dev/null; then
+        just postgres::create-db cube
+    else
+        echo "Database cube already exists"
+    fi
+    
+    # Handle existing user - update password instead of recreating
+    if just postgres::user-exists cube &>/dev/null; then
+        echo "User cube already exists, updating password..."
+        just postgres::change-password cube "${password}"
+    else
+        # Create new user
+        echo "Creating new user cube..."
+        just postgres::create-user cube "${password}"
+        just postgres::grant cube cube
+    fi
+
+    just create-namespace
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Creating ExternalSecret..."
+        just vault::put postgres/cube password="${password}"
+
+        kubectl delete secret postgres-cube-secret -n ${CUBE_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret postgres-cube-external-secret -n ${CUBE_NAMESPACE} \
+            --ignore-not-found
+
+        gomplate -f postgres-cube-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/postgres-cube-external-secret \
+            -n ${CUBE_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating secret directly..."
+        kubectl delete secret postgres-cube-secret -n ${CUBE_NAMESPACE} --ignore-not-found
+        kubectl create secret generic postgres-cube-secret -n ${CUBE_NAMESPACE} \
+            --from-literal=password="${password}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put postgres/cube password="${password}"
+        fi
+    fi
+
+    echo "Cube database and user created successfully"
+
+# Create Cube API secret
+create-credentials:
+    #!/bin/bash
+    set -euo pipefail
+    api_secret=$(just utils::random-password)
+    just create-namespace
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Creating ExternalSecret..."
+        just put-api-secret-to-vault "${api_secret}"
+
+        kubectl delete secret cube-api-secret -n ${CUBE_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret cube-api-external-secret -n ${CUBE_NAMESPACE} \
+            --ignore-not-found
+
+        gomplate -f cube-api-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/cube-api-external-secret \
+            -n ${CUBE_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating secret directly..."
+        if kubectl get secret cube-api-secret -n ${CUBE_NAMESPACE} &>/dev/null; then
+            kubectl delete --ignore-not-found secret cube-api-secret -n ${CUBE_NAMESPACE}
+        fi
+        kubectl create secret generic cube-api-secret -n ${CUBE_NAMESPACE} \
+            --from-literal=api-secret="${api_secret}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just put-api-secret-to-vault "${api_secret}"
+        fi
+    fi
+
+# Delete Cube API secret
+delete-credentials:
+    @kubectl delete secret cube-api-secret -n ${CUBE_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret cube-api-secret -n ${CUBE_NAMESPACE} --ignore-not-found
+
+# Create Keycloak client for Cube
+create-keycloak-client:
+    @just keycloak::create-client ${KEYCLOAK_REALM} ${CUBE_OIDC_CLIENT_ID} \
+        "http://localhost:${CUBE_OIDC_CALLBACK_PORT}/callback"
+
+# Get JWT token using oauth2c
+get-token:
+    #!/bin/bash
+    set -euo pipefail
+    TOKEN=$(oauth2c \
+        --issuer-url "https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}" \
+        --client-id ${CUBE_OIDC_CLIENT_ID} \
+        --redirect-url "http://localhost:${CUBE_OIDC_CALLBACK_PORT}/callback" \
+        --scopes "openid profile email" \
+        --response-types code \
+        --grant-type authorization_code \
+        --auth-method none \
+        --browser-timeout 300s \
+        --silent 2>/dev/null | jq -r '.access_token')
+    echo "${TOKEN}"
+
+# Show JWT token for Playground
+show-token:
+    @echo "JWT Token for Cube Playground:"
+    @echo "Copy this token to Playground > Add Security Context > Token tab:"
+    @echo
+    @just cube::get-token
+
+# Uninstall Cube.dev
+uninstall-cube:
+    @echo "Deleting Cube.dev..."
+    helm uninstall cube -n ${CUBE_NAMESPACE} --ignore-not-found
+
+# Uninstall Cubestore
+uninstall-cubestore:
+    @echo "Deleting Cubestore..."
+    helm uninstall cubestore -n ${CUBE_NAMESPACE} --ignore-not-found
+
+# Uninstall everything
+uninstall: uninstall-cube uninstall-cubestore delete-credentials delete-namespace
+
+# Test connection to Cube API
+test-api:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Testing Cube API connection..."
+    TOKEN=$(just cube::get-token)
+    if [ -n "${CUBE_HOST}" ]; then
+        API_URL="https://${CUBE_HOST}/cubejs-api/v1/meta"
+        echo "Testing via Ingress: ${API_URL}"
+    else
+        API_URL="http://localhost:4000/cubejs-api/v1/meta"
+        echo "Testing via port-forward: ${API_URL}"
+    fi
+    curl -s -H "Authorization: Bearer ${TOKEN}" \
+         -H "Content-Type: application/json" \
+         "${API_URL}" || echo "API test failed - check connection method"
+
+# Show configuration
+config:
+    @echo "Cube Configuration:"
+    @echo "Namespace: ${CUBE_NAMESPACE}"
+    @echo "Cube Host: ${CUBE_HOST}"
+    @echo "Keycloak Host: ${KEYCLOAK_HOST}"
+    @echo "Keycloak Realm: ${KEYCLOAK_REALM}"
+    @echo "Cube OIDC Client ID: ${CUBE_OIDC_CLIENT_ID}"
+    @echo "OIDC Callback Port: ${CUBE_OIDC_CALLBACK_PORT}"
+    @echo "Storage Size: ${CUBE_STORAGE_SIZE}"
+
+# Put API secret to Vault
+put-api-secret-to-vault secret:
+    @just vault::put cube/api api-secret={{ secret }}
+    @echo "API secret stored in Vault under 'cube/api'."
+
+# Delete API secret from Vault
+delete-api-secret-from-vault:
+    @just vault::delete cube/api
+    @echo "API secret deleted from Vault."

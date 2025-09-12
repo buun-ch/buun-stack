@@ -1,0 +1,66 @@
+# Cubestore Helm Chart Values
+# https://github.com/gadsme/charts/tree/main/charts/cubestore
+
+# Router configuration
+router:
+  replicaCount: 1
+  image:
+    repository: cubejs/cubestore
+    tag: v0.35.78
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Worker configuration
+workers:
+  replicaCount: 2
+  image:
+    repository: cubejs/cubestore
+    tag: v0.35.78
+  
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  # Persistent storage for workers
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: longhorn
+
+# Storage configuration
+storage:
+  # Use local storage for development
+  type: local
+  
+  # For production with S3:
+  # type: s3
+  # s3:
+  #   bucket: your-cubestore-bucket
+  #   region: us-east-1
+  #   accessKeyId: ""
+  #   secretAccessKey: ""
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 3030
+
+# Metrics configuration
+metrics:
+  enabled: false
+  statsd:
+    enabled: false
+
+# Disable statsd exporter
+exporter:
+  enabled: false
