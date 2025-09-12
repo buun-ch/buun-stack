@@ -22,6 +22,6 @@ check-connection host='' port='':
     done
     if ! nc -z -w 1 ${HOST} ${PORT} &>/dev/null; then
         echo "Connection to ${HOST}:${PORT} failed"
-        echo "Execute \`kubevpn connect\` if it is in a Kubernetes cluster"
+        echo "Execute \`telepresence connect\` if it is in a Kubernetes cluster"
         exit 1
     fi
