@@ -1,1 +1,2 @@
 clickhouse-credentials-external-secret.yaml
+clickhouse-ingress.yaml

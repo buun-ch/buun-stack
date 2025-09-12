@@ -1,6 +1,7 @@
 set fallback := true
 
 export CLICKHOUSE_NAMESPACE := env("CLICKHOUSE_NAMESPACE", "clickhouse")
+export CLICKHOUSE_HOST := env("CLICKHOUSE_HOST", "")
 export CLICKHOUSE_CHART_VERSION := env("CLICKHOUSE_CHART_VERSION", "0.25.3")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 
@@ -59,6 +60,16 @@ delete-credentials-secret:
 
 # Install ClickHouse
 install:
+    #!/bin/bash
+    set -euo pipefail
+    export CLICKHOUSE_HOST=${CLICKHOUSE_HOST:-}
+    while [ -z "${CLICKHOUSE_HOST}" ]; do
+        CLICKHOUSE_HOST=$(
+            gum input --prompt="ClickHouse host (FQDN): " --width=100 \
+            --placeholder="e.g., clickhouse.example.com"
+        )
+    done
+    echo "Installing ClickHouse..."
     just create-namespace
     just install-zookeeper
     just create-credentials
@@ -69,7 +80,19 @@ install:
     echo "Waiting for ClickHouse installation to be ready..."
     kubectl wait --for=jsonpath='{.status.status}'=Completed \
         clickhouseinstallation/clickhouse -n ${CLICKHOUSE_NAMESPACE} --timeout=600s
+    just setup-ingress ${CLICKHOUSE_HOST}
     echo "ClickHouse installation completed successfully"
+    echo "ClickHouse API at: https://${CLICKHOUSE_HOST}"
+
+# Setup ClickHouse Ingress
+setup-ingress host:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up ClickHouse Ingress for ${CLICKHOUSE_HOST}..."
+    export CLICKHOUSE_HOST="{{ host }}"
+    gomplate -f clickhouse-ingress.gomplate.yaml -o clickhouse-ingress.yaml
+    kubectl apply -n ${CLICKHOUSE_NAMESPACE} -f clickhouse-ingress.yaml
+    echo "ClickHouse Ingress configured successfully"
 
 # Uninstall ClickHouse
 uninstall:
@@ -95,31 +118,91 @@ uninstall:
     just delete-namespace
     echo "ClickHouse uninstalled successfully"
 
-# Print ClickHouse admin password
+# Get ClickHouse admin password
 admin-password:
     #!/bin/bash
     set -euo pipefail
-    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
-        echo "Getting password from Vault..."
-        just vault::get clickhouse/credentials admin
-    else
-        echo "Getting password from Kubernetes Secret..."
-        kubectl get secret clickhouse-credentials -n ${CLICKHOUSE_NAMESPACE} \
-            -o jsonpath='{.data.admin}' | base64 -d
-        echo
-    fi
+    kubectl get secret clickhouse-credentials -n ${CLICKHOUSE_NAMESPACE} \
+        -o jsonpath='{.data.admin}' 2>/dev/null | base64 -d | tr -d '\n\r'
+    echo
 
-# Connect to ClickHouse as admin
-connect-admin: check-env
+# Connect to ClickHouse as admin (interactive)
+connect-admin-interactive: check-env
     @just utils::check-connection clickhouse-clickhouse.clickhouse 9000
     @clickhouse client --host clickhouse-clickhouse.clickhouse --port 9000 \
         --user admin --password $(just clickhouse::admin-password)
 
-# Connect to ClickHouse
-connect user: check-env
+# Execute SQL as admin via kubectl exec
+connect-admin:
+    #!/bin/bash
+    set -euo pipefail
+    ADMIN_PASSWORD=$(just admin-password)
+    POD_NAME=$(just find-clickhouse-pod)
+    kubectl exec -n ${CLICKHOUSE_NAMESPACE} "${POD_NAME}" -c clickhouse -- \
+        clickhouse-client --user admin --password "${ADMIN_PASSWORD}"
+
+# Connect to ClickHouse (interactive)
+connect-interactive user: check-env
     @just utils::check-connection clickhouse-clickhouse.clickhouse 9000
     @clickhouse client --host clickhouse-clickhouse.clickhouse --port 9000 \
         --user {{ user }} --ask-password
+
+# Execute SQL as specific user via kubectl exec
+connect user password='':
+    #!/bin/bash
+    set -euo pipefail
+    USER="{{ user }}"
+    PASSWORD="{{ password }}"
+    if [ -z "${PASSWORD}" ]; then
+        PASSWORD=$(gum input --prompt="Password for ${USER}: " --password --width=100)
+    fi
+    POD_NAME=$(just find-clickhouse-pod)
+    kubectl exec -n ${CLICKHOUSE_NAMESPACE} "${POD_NAME}" -c clickhouse -- \
+        clickhouse-client --user "${USER}" --password "${PASSWORD}"
+
+# Find ClickHouse pod name
+[private]
+find-clickhouse-pod:
+    #!/bin/bash
+    set -euo pipefail
+    for SELECTOR in \
+        "app=clickhouse-clickhouse" \
+        "app.kubernetes.io/name=clickhouse" \
+        "clickhouse.altinity.com/chi=clickhouse" \
+        "app=clickhouse"; do
+
+        POD_NAME=$(kubectl get pods -n ${CLICKHOUSE_NAMESPACE} -l "${SELECTOR}" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+        if [ -n "${POD_NAME}" ]; then
+            echo "${POD_NAME}"
+            exit 0
+        fi
+    done
+    POD_NAME=$(kubectl get pods -n ${CLICKHOUSE_NAMESPACE} -o name | grep -i clickhouse | head -1 | cut -d'/' -f2 2>/dev/null || echo "")
+    if [ -n "${POD_NAME}" ]; then
+        echo "${POD_NAME}"
+        exit 0
+    fi
+    echo "No ClickHouse pods found in namespace ${CLICKHOUSE_NAMESPACE}" >&2
+    echo "Available pods:" >&2
+    kubectl get pods -n ${CLICKHOUSE_NAMESPACE} >&2
+    exit 1
+
+# Execute SQL command as admin
+exec-sql-admin sql='':
+    #!/bin/bash
+    set -euo pipefail
+    SQL="{{ sql }}"
+    ADMIN_PASSWORD=$(just admin-password)
+    POD_NAME=$(just find-clickhouse-pod)
+    if [ -n "${SQL}" ]; then
+        # Pass SQL via stdin to avoid quoting issues
+        echo "${SQL}" | kubectl exec -i -n ${CLICKHOUSE_NAMESPACE} "${POD_NAME}" -c clickhouse -- \
+            sh -c "export CLICKHOUSE_PASSWORD='${ADMIN_PASSWORD}' && clickhouse-client --user admin"
+    else
+        # Read from stdin
+        kubectl exec -i -n ${CLICKHOUSE_NAMESPACE} "${POD_NAME}" -c clickhouse -- \
+            sh -c "export CLICKHOUSE_PASSWORD='${ADMIN_PASSWORD}' && clickhouse-client --user admin"
+    fi
 
 # Create ClickHouse user
 create-user username='' password='':
@@ -143,10 +226,11 @@ create-user username='' password='':
         echo "Generated random password: ${PASSWORD}"
     fi
     echo "Creating ClickHouse user '${USERNAME}'..."
-    just connect-admin <<EOF
-    CREATE USER '${USERNAME}' IDENTIFIED BY '${PASSWORD}';
-    EOF
+    just exec-sql-admin "CREATE USER '${USERNAME}' IDENTIFIED BY '${PASSWORD}';"
     echo "User ${USERNAME} created."
+
+    # Wait a moment for ClickHouse to process the user creation
+    sleep 2
 
 # Create new user for ClickHouse (deprecated - use create-user instead)
 create-user-old username='' password='' database='':
@@ -171,9 +255,7 @@ create-user-old username='' password='' database='':
         fi
     fi
     echo "Creating ClickHouse user '${USERNAME}'..."
-    just connect-admin <<EOF
-    CREATE USER '${USERNAME}' IDENTIFIED BY '${PASSWORD}' DEFAULT DATABASE '${DATABASE}';
-    EOF
+    just exec-sql-admin "CREATE USER '${USERNAME}' IDENTIFIED BY '${PASSWORD}' DEFAULT DATABASE '${DATABASE}';"
 
 # Delete ClickHouse user
 delete-user username='':
@@ -188,9 +270,7 @@ delete-user username='':
         exit
     fi
     echo "Deleting ClickHouse user '${USERNAME}'..."
-    just connect-admin <<EOF
-    DROP USER '${USERNAME}';
-    EOF
+    just exec-sql-admin "DROP USER '${USERNAME}';"
     echo "User ${USERNAME} deleted."
 
 # Grant all privileges on database to user
@@ -214,9 +294,7 @@ grant db_name='' username='':
         exit 1
     fi
     echo "Granting all privileges on '${DB_NAME}' to ClickHouse user '${USERNAME}'..."
-    just connect-admin <<EOF
-    GRANT ALL ON ${DB_NAME}.* TO '${USERNAME}';
-    EOF
+    just exec-sql-admin "GRANT ALL ON ${DB_NAME}.* TO '${USERNAME}';"
     echo "Privileges granted."
 
 # Grant user access to ClickHouse database (deprecated - use grant instead)
@@ -232,9 +310,7 @@ grant-user username='' database='default':
         DATABASE=$(gum input --prompt="Database: " --width=100)
     done
     echo "Granting SELECT permission on '${DATABASE}' to ClickHouse user '${USERNAME}'..."
-    just connect-admin <<EOF
-    GRANT ALL ON ${DATABASE}.* TO '${USERNAME}';
-    EOF
+    just exec-sql-admin "GRANT ALL ON ${DATABASE}.* TO '${USERNAME}';"
 
 # Revoke all privileges on database from user
 revoke db_name='' username='':
@@ -257,9 +333,7 @@ revoke db_name='' username='':
         exit 1
     fi
     echo "Revoking all privileges on '${DB_NAME}' from ClickHouse user '${USERNAME}'..."
-    just connect-admin <<EOF
-    REVOKE ALL ON ${DB_NAME}.* FROM '${USERNAME}';
-    EOF
+    just exec-sql-admin "REVOKE ALL ON ${DB_NAME}.* FROM '${USERNAME}';"
     echo "Privileges revoked."
 
 # Create ClickHouse database and user
@@ -295,9 +369,7 @@ delete-user-and-db username='' db_name='':
 list-users:
     #!/bin/bash
     set -euo pipefail
-    just connect-admin <<EOF
-    SHOW USERS;
-    EOF
+    just exec-sql-admin "SHOW USERS;"
 
 # Check if user exists in ClickHouse
 [no-exit-message]
@@ -308,10 +380,10 @@ user-exists username='':
     while [ -z "${USERNAME}" ]; do
         USERNAME=$(gum input --prompt="Username: " --width=100)
     done
-    result=$(just connect-admin <<EOF
-    SELECT name FROM system.users WHERE name = '${USERNAME}';
-    EOF
-    )
+
+    # Use exec-sql-admin to check if user exists
+    result=$(just exec-sql-admin "SELECT name FROM system.users WHERE name = '${USERNAME}';" 2>/dev/null || echo "")
+
     if [[ -n "$result" && "$result" == *"$USERNAME"* ]]; then
         echo "User '$USERNAME' exists."
         exit 0
@@ -329,9 +401,7 @@ create-db database='default':
         DATABASE=$(gum input --prompt="Database: " --width=100)
     done
     echo "Creating ClickHouse database '${DATABASE}'..."
-    just connect-admin <<EOF
-    CREATE DATABASE IF NOT EXISTS ${DATABASE};
-    EOF
+    just exec-sql-admin "CREATE DATABASE IF NOT EXISTS ${DATABASE};"
 
 # Check if DB exists in ClickHouse
 [no-exit-message]
@@ -342,10 +412,8 @@ db-exists database='default':
     while [ -z "${DATABASE}" ]; do
         DATABASE=$(gum input --prompt="Database: " --width=100)
     done
-    result=$(just connect-admin <<EOF
-    SHOW DATABASES LIKE '${DATABASE}';
-    EOF
-    )
+    result=$(just exec-sql-admin "SHOW DATABASES LIKE '${DATABASE}';" 2>/dev/null || echo "")
+
     if [[ -n "$result" && "$result" == *"$DATABASE"* ]]; then
         echo "Database '$DATABASE' exists."
         exit 0
@@ -362,9 +430,57 @@ user-privilege username='':
     while [ -z "${USERNAME}" ]; do
         USERNAME=$(gum input --prompt="Username: " --width=100)
     done
-    just connect-admin <<EOF
-    SHOW GRANTS FOR '${USERNAME}';
-    EOF
+    just exec-sql-admin "SHOW GRANTS FOR '${USERNAME}';"
+
+# Change user password
+change-password username='' password='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="${USERNAME:-"{{ username }}"}"
+    PASSWORD="${PASSWORD:-"{{ password }}"}"
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    while [ -z "${PASSWORD}" ]; do
+        PASSWORD=$(gum input --prompt="New Password: " --password --width=100)
+    done
+    if ! just user-exists ${USERNAME} &>/dev/null; then
+        echo "User ${USERNAME} does not exist." >&2
+        exit 1
+    fi
+    echo "Changing password for user '${USERNAME}'..."
+    just exec-sql-admin "ALTER USER '${USERNAME}' IDENTIFIED BY '${PASSWORD}';"
+    echo "Password changed for user '${USERNAME}'"
+
+# Grant admin privileges to user
+grant-admin username='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="${USERNAME:-"{{ username }}"}"
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    for i in {1..5}; do
+        if just user-exists ${USERNAME} &>/dev/null; then
+            break
+        fi
+        if [ $i -lt 5 ]; then
+            echo "User ${USERNAME} not found, retrying in 1 second... (attempt $i/5)"
+            sleep 1
+        else
+            echo "User ${USERNAME} does not exist after 5 attempts." >&2
+            exit 1
+        fi
+    done
+    echo "Granting admin privileges to user '${USERNAME}'..."
+    just exec-sql-admin "
+        GRANT SOURCES ON *.* TO '${USERNAME}' WITH GRANT OPTION;
+        GRANT TABLE ENGINE ON * TO '${USERNAME}' WITH GRANT OPTION;
+        GRANT CHECK, SHOW, SELECT, INSERT, ALTER, CREATE, DROP, UNDROP TABLE, TRUNCATE, OPTIMIZE, BACKUP, KILL QUERY, KILL TRANSACTION, MOVE PARTITION BETWEEN SHARDS, ROLE ADMIN, CREATE ROW POLICY, ALTER ROW POLICY, DROP ROW POLICY, CREATE QUOTA, ALTER QUOTA, DROP QUOTA, CREATE SETTINGS PROFILE, ALTER SETTINGS PROFILE, DROP SETTINGS PROFILE, ALLOW SQL SECURITY NONE, SHOW ACCESS, SYSTEM, dictGet, displaySecretsInShowAndSelect, INTROSPECTION, CLUSTER, FILE, URL, REMOTE, MONGO, REDIS, MYSQL, POSTGRES, SQLITE, ODBC, JDBC, HDFS, S3, HIVE, AZURE, KAFKA, NATS, RABBITMQ, SOURCES ON *.* TO '${USERNAME}' WITH GRANT OPTION;
+        GRANT SET DEFINER ON * TO '${USERNAME}' WITH GRANT OPTION;
+        GRANT CREATE USER, ALTER USER, DROP USER, CREATE ROLE, ALTER ROLE, DROP ROLE ON * TO '${USERNAME}' WITH GRANT OPTION;
+    "
+    echo "Admin privileges granted to user '${USERNAME}'"
 
 # Install ZooKeeper
 install-zookeeper:

@@ -21,9 +21,13 @@ spec:
       admin/k8s_secret_password: clickhouse-credentials/admin
       admin/networks/ip: "::/0"
       admin/access_management: 1
+      # Disable default user
+      default/password: "disabled"
+      default/networks/ip: "127.0.0.1"
     profiles:
       default/max_memory_usage: 4000000000 # 4GB
       default/max_bytes_before_external_group_by: 2000000000 # 2GB
+      default/add_http_cors_header: 1
   templates:
     volumeClaimTemplates:
       - name: data-volume-template

@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: clickhouse-ingress
+  namespace: clickhouse
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: {{ .Env.CLICKHOUSE_HOST }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: clickhouse-clickhouse
+            port:
+              number: 8123
+  tls:
+  - hosts:
+    - {{ .Env.CLICKHOUSE_HOST }}
