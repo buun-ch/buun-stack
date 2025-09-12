@@ -2,6 +2,7 @@ set fallback := true
 
 export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
 export LONGHORN_VERSION := env("LONGHORN_VERSION", "1.9.1")
+export LONGHORN_HOST := env("LONGHORN_HOST", "")
 export LONGHORN_OIDC_CLIENT_ID := env("LONGHORN_OIDC_CLIENT_ID", "longhorn")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
 
@@ -60,38 +61,6 @@ uninstall:
     helm uninstall longhorn -n ${LONGHORN_NAMESPACE} --ignore-not-found --wait
     just delete-namespace
 
-# Install oauth2-proxy for Longhorn
-oauth2-proxy-install:
-    #!/bin/bash
-    set -euo pipefail
-    export KEYCLOAK_CLIENT_SECRET=$(just random-password)
-    just keycloak::delete-client ${KEYCLOAK_REALM} ${LONGHORN_OIDC_CLIENT_ID}
-    just keycloak::create-client ${KEYCLOAK_REALM} ${LONGHORN_OIDC_CLIENT_ID} \
-        "https://${LONGHORN_HOST}/oauth2/callback"
-    just keycloak::add-audience-mapper ${LONGHORN_OIDC_CLIENT_ID}
-    just create-namespace
-    KEYCLOAK_CLIENT_ID=${LONGHORN_OIDC_CLIENT_ID} \
-        KEYCLOAK_REALM=${KEYCLOAK_REALM} \
-        OAUTH2_PROXY_HOST=${LONGHORN_HOST} \
-        COOKIE_SECRET=$(just random-password) \
-        gomplate -f ../oauth2-proxy/configmap.gomplate.yaml | \
-        kubectl apply -n ${LONGHORN_NAMESPACE} -f -
-    kubectl apply -n ${LONGHORN_NAMESPACE} -f ../oauth2-proxy/deployment.yaml
-    kubectl apply -n ${LONGHORN_NAMESPACE} -f ../oauth2-proxy/service.yaml
-    OAUTH2_PROXY_HOST=${LONGHORN_HOST} \
-        gomplate -f ../oauth2-proxy/ingressroute.gomplate.yaml | \
-        kubectl apply -n ${LONGHORN_NAMESPACE} -f -
-
-# Uninstall oauth2-proxy for Longhorn
-oauth2-proxy-uninstall:
-    just keycloak::delete-client ${KEYCLOAK_REALM} ${LONGHORN_OIDC_CLIENT_ID}
-    OAUTH2_PROXY_HOST=${LONGHORN_HOST} \
-        gomplate -f ../oauth2-proxy/ingressroute.gomplate.yaml | \
-        kubectl delete -n ${LONGHORN_NAMESPACE} --ignore-not-found -f -
-    kubectl delete -n ${LONGHORN_NAMESPACE} --ignore-not-found service oauth2-proxy
-    kubectl delete -n ${LONGHORN_NAMESPACE} --ignore-not-found deployment oauth2-proxy
-    kubectl delete -n ${LONGHORN_NAMESPACE} --ignore-not-found configmap oauth2-proxy-config
-
 # Set Longhorn number of replicas
 set-replicas num='1':
     #!/bin/bash
@@ -113,16 +82,34 @@ set-replicas num='1':
     EOF
     )"
 
-# Create Longhorn IngressRoute
-create-ingress:
-    just oauth2-proxy-install
-    LONGHORN_NAMESPACE=${LONGHORN_NAMESPACE} \
-        gomplate -f ingressroute.gomplate.yaml | \
-        kubectl apply -n ${LONGHORN_NAMESPACE} -f -
+# Setup OAuth2-Proxy for Longhorn
+oauth2-proxy-install:
+    #!/bin/bash
+    set -euo pipefail
+    export LONGHORN_HOST=${LONGHORN_HOST:-}
+    while [ -z "${LONGHORN_HOST}" ]; do
+        LONGHORN_HOST=$(
+            gum input --prompt="Longhorn host (FQDN): " --width=100 \
+            --placeholder="e.g., longhorn.example.com"
+        )
+    done
+    echo "Setting up OAuth2-Proxy for Longhorn at https://${LONGHORN_HOST}..."
+    just oauth2-proxy::setup-for-app longhorn "${LONGHORN_HOST}" "${LONGHORN_NAMESPACE}" "longhorn-frontend:80"
+    echo "OAuth2-Proxy setup completed for Longhorn"
+    echo "Longhorn Web UI at: https://${LONGHORN_HOST}"
 
-# Delete Longhorn IngressRoute
-delete-ingress:
-    LONGHORN_NAMESPACE=${LONGHORN_NAMESPACE} \
-        gomplate -f ingressroute.gomplate.yaml | \
-        kubectl delete -n ${LONGHORN_NAMESPACE} --ignore-not-found -f -
+# Remove OAuth2-Proxy for Longhorn
+oauth2-proxy-uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Removing OAuth2-Proxy for Longhorn..."
+    just oauth2-proxy::cleanup-for-app longhorn "${LONGHORN_NAMESPACE}"
+    echo "OAuth2-Proxy removed from Longhorn"
+
+# Setup OAuth2-Proxy for Longhorn
+setup-oauth2-proxy:
+    just oauth2-proxy-install
+
+# Remove OAuth2-Proxy for Longhorn
+remove-oauth2-proxy:
     just oauth2-proxy-uninstall
