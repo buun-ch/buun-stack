@@ -120,15 +120,59 @@ install:
         --values ch-ui-values.yaml \
         --namespace ${CH_UI_NAMESPACE} \
         --wait
-    echo "CH-UI installation completed successfully"
-    echo "Access CH-UI at: https://${CH_UI_HOST}"
-    echo "ClickHouse API at: ${CLICKHOUSE_HOST}"
+    if gum confirm "Setup OAuth2 Proxy for Keycloak authentication?"; then
+        export CH_UI_HOST="${CH_UI_HOST}"
+        just setup-oauth2-proxy
+    else
+        echo "CH-UI installation completed successfully"
+        echo "Access CH-UI at: https://${CH_UI_HOST}"
+        echo "ClickHouse API at: ${CLICKHOUSE_HOST}"
+    fi
+
+# Setup OAuth2 Proxy for CH-UI
+setup-oauth2-proxy:
+    #!/bin/bash
+    set -euo pipefail
+    export CH_UI_HOST=${CH_UI_HOST:-}
+    while [ -z "${CH_UI_HOST}" ]; do
+        CH_UI_HOST=$(
+            gum input --prompt="CH-UI host (FQDN): " --width=100 \
+            --placeholder="e.g., ch-ui.example.com"
+        )
+    done
+    echo "Setting up OAuth2 Proxy for CH-UI..."
+    just oauth2-proxy::setup-for-app ch-ui "${CH_UI_HOST}" "${CH_UI_NAMESPACE}" "ch-ui:80"
+
+    echo "Disabling CH-UI Ingress to prevent authentication bypass..."
+    helm upgrade ch-ui ../charts/ch-ui \
+        --reuse-values \
+        --set ingress.enabled=false \
+        --namespace ${CH_UI_NAMESPACE} \
+        --wait
+    echo "OAuth2 Proxy setup for CH-UI completed"
+    echo "Access CH-UI with OAuth2 authentication at: https://${CH_UI_HOST}/oauth2/sign_in"
+
+# Remove OAuth2 Proxy from CH-UI
+remove-oauth2-proxy:
+    @echo "Removing OAuth2 Proxy for CH-UI..."
+    @just oauth2-proxy::remove-for-app ch-ui "${CH_UI_NAMESPACE}"
+    @echo "Re-enabling CH-UI Ingress..."
+    @helm upgrade ch-ui ../charts/ch-ui \
+        --reuse-values \
+        --set ingress.enabled=true \
+        --namespace ${CH_UI_NAMESPACE} \
+        --wait
+    @echo "OAuth2 Proxy removed from CH-UI"
 
 # Uninstall CH-UI
 uninstall:
     #!/bin/bash
     set -euo pipefail
     echo "Uninstalling CH-UI..."
+    if kubectl get deployment oauth2-proxy-ch-ui -n ${CH_UI_NAMESPACE} &>/dev/null; then
+        echo "Removing associated OAuth2 Proxy..."
+        just remove-oauth2-proxy
+    fi
     helm uninstall ch-ui -n ${CH_UI_NAMESPACE} --wait --ignore-not-found
     just delete-credentials-secret
     just delete-ch-ui-user
