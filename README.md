@@ -17,6 +17,7 @@ A Kubernetes development stack for self-hosted environments, designed to run on 
 - **Database**: [PostgreSQL](https://www.postgresql.org/) cluster
 - **Analytics Engine/Database**: [ClickHouse](https://clickhouse.com/) for high-performance analytics and data warehousing
 - **Workflow Orchestration**: [Apache Airflow](https://airflow.apache.org/) for data pipeline automation and task scheduling
+- **Authentication Proxy**: [OAuth2 Proxy](https://oauth2-proxy.github.io/oauth2-proxy/) for adding Keycloak authentication to any application
 - **Remote Access**: [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) for secure internet connectivity
 - **Automation**: [Just](https://just.systems/) task runner with templated configurations
 
@@ -181,6 +182,12 @@ just clickhouse::install
 
 Access ClickHouse at `https://clickhouse.yourdomain.com` using the admin credentials stored in Vault.
 
+**CH-UI Web Interface**: An optional web-based query interface for ClickHouse is available:
+
+```bash
+just ch-ui::install
+```
+
 ### Apache Airflow
 
 Modern workflow orchestration platform for data pipelines and task automation:
@@ -274,6 +281,41 @@ Retrieve secrets:
 ```bash
 just vault::get <path> <field>
 ```
+
+## Security & Authentication
+
+### OAuth2 Proxy Integration
+
+For applications that don't natively support Keycloak/OIDC authentication, buun-stack provides OAuth2 Proxy integration to add Keycloak authentication to any application:
+
+- **Universal Authentication**: Add Keycloak SSO to any web application
+- **Automatic Setup**: Configures Keycloak client, secrets, and proxy deployment
+- **Security**: Prevents unauthorized access by routing all traffic through authentication
+- **Easy Management**: Simple recipes for setup and removal
+
+**Setup OAuth2 authentication for any application**:
+
+```bash
+# For CH-UI (included in installation prompt)
+just ch-ui::setup-oauth2-proxy
+
+# For any custom application
+just oauth2-proxy::setup-for-app <app-name> <app-host> [namespace] [upstream-service]
+```
+
+**Remove OAuth2 authentication**:
+
+```bash
+just ch-ui::remove-oauth2-proxy
+just oauth2-proxy::remove-for-app <app-name> [namespace]
+```
+
+The OAuth2 Proxy automatically:
+
+- Creates a Keycloak client with proper audience mapping
+- Generates secure secrets and stores them in Vault
+- Deploys proxy with Traefik ingress routing
+- Disables direct application access to ensure security
 
 ## Remote Access
 
