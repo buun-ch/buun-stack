@@ -1,0 +1,135 @@
+set fallback := true
+
+export CH_UI_NAMESPACE := env("CH_UI_NAMESPACE", "clickhouse")
+export CH_UI_HOST := env("CH_UI_HOST", "")
+export CLICKHOUSE_NAMESPACE := env("CLICKHOUSE_NAMESPACE", "clickhouse")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Create CH-UI user in ClickHouse
+create-ch-ui-user:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Creating CH-UI dedicated user in ClickHouse..."
+    CH_UI_USERNAME="ch-ui"
+    if just clickhouse::user-exists ${CH_UI_USERNAME} &>/dev/null; then
+        echo "User '${CH_UI_USERNAME}' already exists."
+        if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            CH_PASSWORD=$(just vault::get ch-ui/credentials clickhouse-password 2>/dev/null || echo "")
+        else
+            CH_PASSWORD=$(kubectl get secret ch-ui-credentials -n ${CH_UI_NAMESPACE} \
+                -o jsonpath='{.data.clickhouse-password}' 2>/dev/null | base64 -d || echo "")
+        fi
+        if [ -z "${CH_PASSWORD}" ]; then
+            echo "Existing password not found. Generating new password..."
+            CH_PASSWORD=$(just utils::random-password)
+            # Update user password
+            just clickhouse::change-password ${CH_UI_USERNAME} ${CH_PASSWORD}
+        else
+            echo "Existing password found. Syncing password to ClickHouse..."
+            # Update user password in ClickHouse to match stored password
+            just clickhouse::change-password ${CH_UI_USERNAME} ${CH_PASSWORD}
+        fi
+    else
+        CH_PASSWORD=$(just utils::random-password)
+        just clickhouse::create-user ${CH_UI_USERNAME} ${CH_PASSWORD}
+        just clickhouse::grant-admin ${CH_UI_USERNAME}
+    fi
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Storing password in Vault..."
+        just vault::put ch-ui/credentials clickhouse-password="${CH_PASSWORD}"
+    else
+        echo "Storing password in Kubernetes Secret..."
+        kubectl delete secret ch-ui-credentials -n ${CH_UI_NAMESPACE} --ignore-not-found
+        kubectl create secret generic ch-ui-credentials -n ${CH_UI_NAMESPACE} \
+            --from-literal=clickhouse-password="${CH_PASSWORD}"
+    fi
+    echo "CH-UI user setup completed"
+
+# Create CH-UI credentials secret
+create-credentials:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up CH-UI credentials..."
+    just create-ch-ui-user
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Creating ExternalSecret for CH-UI credentials..."
+        gomplate -f ch-ui-credentials-external-secret.gomplate.yaml -o ch-ui-credentials-external-secret.yaml
+        kubectl apply -f ch-ui-credentials-external-secret.yaml
+        echo "Waiting for credentials secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/ch-ui-credentials-external-secret \
+            -n ${CH_UI_NAMESPACE} --timeout=60s
+    fi
+    echo "CH-UI credentials setup completed"
+
+# Delete CH-UI user from ClickHouse
+delete-ch-ui-user:
+    #!/bin/bash
+    set -euo pipefail
+    CH_UI_USERNAME="ch-ui"
+    if just clickhouse::user-exists ${CH_UI_USERNAME} &>/dev/null; then
+        echo "Deleting CH-UI user from ClickHouse..."
+        just clickhouse::delete-user ${CH_UI_USERNAME}
+        echo "CH-UI user deleted"
+    else
+        echo "CH-UI user does not exist"
+    fi
+
+# Delete CH-UI credentials secret
+delete-credentials-secret:
+    @kubectl delete secret ch-ui-credentials -n ${CH_UI_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret ch-ui-credentials-external-secret -n ${CH_UI_NAMESPACE} --ignore-not-found
+
+# Install CH-UI
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export CH_UI_HOST=${CH_UI_HOST:-}
+    while [ -z "${CH_UI_HOST}" ]; do
+        CH_UI_HOST=$(
+            gum input --prompt="CH-UI host (FQDN): " --width=100 \
+            --placeholder="e.g., ch-ui.example.com"
+        )
+    done
+    echo "Installing CH-UI..."
+    if ! kubectl get namespace ${CLICKHOUSE_NAMESPACE} &>/dev/null; then
+        echo "Error: ClickHouse namespace '${CLICKHOUSE_NAMESPACE}' does not exist."
+        echo "Please install ClickHouse first: just clickhouse::install"
+        exit 1
+    fi
+    if ! kubectl get clickhouseinstallation -n ${CLICKHOUSE_NAMESPACE} &>/dev/null; then
+        echo "Error: ClickHouse is not installed in namespace '${CLICKHOUSE_NAMESPACE}'."
+        echo "Please install ClickHouse first: just clickhouse::install"
+        exit 1
+    fi
+    CLICKHOUSE_HOST=$(kubectl get ingress -n ${CLICKHOUSE_NAMESPACE} clickhouse-ingress \
+        -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
+    if [ -z "${CLICKHOUSE_HOST}" ]; then
+        echo "Error: ClickHouse Ingress not found."
+        echo "Please ensure ClickHouse is properly installed with Ingress configuration."
+        echo "Run: just clickhouse::setup-ingress"
+        exit 1
+    fi
+    export CLICKHOUSE_HOST="https://${CLICKHOUSE_HOST}"
+    just create-credentials
+    gomplate -f ch-ui-values.gomplate.yaml -o ch-ui-values.yaml
+    helm upgrade --install ch-ui ../charts/ch-ui \
+        --values ch-ui-values.yaml \
+        --namespace ${CH_UI_NAMESPACE} \
+        --wait
+    echo "CH-UI installation completed successfully"
+    echo "Access CH-UI at: https://${CH_UI_HOST}"
+    echo "ClickHouse API at: ${CLICKHOUSE_HOST}"
+
+# Uninstall CH-UI
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling CH-UI..."
+    helm uninstall ch-ui -n ${CH_UI_NAMESPACE} --wait --ignore-not-found
+    just delete-credentials-secret
+    just delete-ch-ui-user
+    echo "CH-UI uninstalled successfully"

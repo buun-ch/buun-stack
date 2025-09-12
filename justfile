@@ -7,6 +7,7 @@ default:
     @just --list --unsorted --list-submodules
 
 mod airflow
+mod ch-ui
 mod clickhouse
 mod datahub
 mod env

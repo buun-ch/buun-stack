@@ -1,0 +1,71 @@
+# CH-UI Helm chart values
+replicaCount: 1
+
+image:
+  repository: ghcr.io/caioricciuti/ch-ui
+  pullPolicy: IfNotPresent
+  tag: ""
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 5521
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: {{ .Env.CH_UI_HOST }}
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - {{ .Env.CH_UI_HOST }}
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+clickhouse:
+  # ClickHouse server URL
+  url: {{ .Env.CLICKHOUSE_HOST }}
+
+  # Authentication configuration
+  auth:
+    # ClickHouse username
+    username: {{ env.Getenv "CH_UI_CLICKHOUSE_USERNAME" "ch-ui" }}
+    # Reference to existing secret
+    existingSecret: "ch-ui-credentials"
+    # Secret keys for authentication credentials
+    secretKeys:
+      password: "clickhouse-password"
+
+  # Advanced configuration
+  useAdvanced: {{ env.Getenv "CH_UI_USE_ADVANCED" "false" }}
+  requestTimeout: {{ env.Getenv "CH_UI_REQUEST_TIMEOUT" "30000" }}
+  basePath: {{ env.Getenv "CH_UI_BASE_PATH" "/" }}
+
+# Additional environment variables
+extraEnvVars: []
+
+# Environment variables from existing ConfigMaps or Secrets
+extraEnvVarsCM: ""
+extraEnvVarsSecret: ""
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
