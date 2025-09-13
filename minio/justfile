@@ -140,6 +140,89 @@ create-bucket bucket='':
         bash -c "mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD} && \
         mc mb --ignore-existing local/${bucket}"
 
+# Create MinIO user
+create-user user='' bucket='':
+    #!/bin/bash
+    set -euo pipefail
+    USER="{{ user }}"
+    BUCKET="{{ bucket }}"
+
+    while [ -z "${USER}" ]; do
+        USER=$(gum input --prompt="Username: " --width=100 --placeholder="e.g., airbyte")
+    done
+
+    if [ -z "${BUCKET}" ]; then
+        BUCKET="${USER}-storage"
+    fi
+
+    echo "Creating MinIO user and bucket for ${USER}..."
+
+    # Generate credentials
+    ACCESS_KEY="${USER}"
+    SECRET_KEY=$(just utils::random-password)
+
+    # Get root credentials
+    ROOT_USER=$(just root-username)
+    ROOT_PASSWORD=$(just root-password)
+
+    # Create bucket and user using mc (via existing MinIO pod)
+    echo "Setting up mc alias..."
+    kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
+        mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD}
+
+    echo "Creating bucket..."
+    kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
+        mc mb local/${BUCKET} --ignore-existing
+
+    echo "Creating user..."
+    kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
+        mc admin user add local ${ACCESS_KEY} ${SECRET_KEY}
+
+    echo "Attaching policy..."
+    kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
+        mc admin policy attach local readwrite --user=${ACCESS_KEY}
+
+    echo "Setting bucket policy..."
+    kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
+        mc anonymous set none local/${BUCKET}
+
+    # Store credentials in Vault if available
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Storing credentials in Vault..."
+        just vault::put ${USER}/minio \
+            access_key="${ACCESS_KEY}" \
+            secret_key="${SECRET_KEY}" \
+            bucket="${BUCKET}" \
+            endpoint="http://minio.${MINIO_NAMESPACE}.svc.cluster.local:9000"
+        echo "Credentials stored in Vault at: ${USER}/minio"
+    else
+        echo "MinIO credentials for ${USER}:"
+        echo "  Access Key: ${ACCESS_KEY}"
+        echo "  Secret Key: ${SECRET_KEY}"
+        echo "  Bucket: ${BUCKET}"
+        echo "  Endpoint: http://minio.${MINIO_NAMESPACE}.svc.cluster.local:9000"
+    fi
+
+    echo "✅ MinIO user and bucket created for ${USER}"
+
+# Get MinIO credentials from Vault
+get-user-credentials user='':
+    #!/bin/bash
+    set -euo pipefail
+    USER="{{ user }}"
+
+    while [ -z "${USER}" ]; do
+        USER=$(gum input --prompt="Username: " --width=100 --placeholder="e.g., airbyte")
+    done
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Getting MinIO credentials for ${USER} from Vault..."
+        just vault::get ${USER}/minio
+    else
+        echo "External Secrets not available. Please check the credentials manually."
+        exit 1
+    fi
+
 # Check if a bucket exists (returns exit code 0 if exists, 1 if not)
 [no-exit-message]
 bucket-exists bucket:
