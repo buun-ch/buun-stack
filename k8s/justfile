@@ -297,3 +297,79 @@ wait-deployments-ready *args:
         sleep 2
     done
     echo "ok"
+
+# Delete completed pods across all namespaces
+delete-completed-pods namespace='':
+    #!/bin/bash
+    set -euo pipefail
+    NAMESPACE="${NAMESPACE:-{{ namespace }}}"
+
+    if [ -n "${NAMESPACE}" ]; then
+        echo "Deleting completed pods in namespace '${NAMESPACE}'..."
+        SELECTOR="--namespace=${NAMESPACE}"
+    else
+        echo "Deleting completed pods in all namespaces..."
+        SELECTOR="--all-namespaces"
+    fi
+
+    # Find and delete pods with status.phase=Succeeded or status.phase=Failed
+    COMPLETED_PODS=$(kubectl get pods ${SELECTOR} -o json | \
+        jq -r '.items[] | select(.status.phase == "Succeeded" or .status.phase == "Failed") |
+        .metadata.namespace + "/" + .metadata.name')
+
+    if [ -z "${COMPLETED_PODS}" ]; then
+        echo "No completed pods found."
+        exit 0
+    fi
+
+    echo "Found completed pods:"
+    echo "${COMPLETED_PODS}"
+    echo ""
+
+    if gum confirm "Delete these pods?"; then
+        echo "${COMPLETED_PODS}" | while IFS='/' read -r ns pod; do
+            echo "Deleting pod ${pod} in namespace ${ns}..."
+            kubectl delete pod "${pod}" -n "${ns}" --ignore-not-found
+        done
+        echo "Completed pods deleted."
+    else
+        echo "Deletion cancelled."
+    fi
+
+# Delete completed jobs across all namespaces
+delete-completed-jobs namespace='':
+    #!/bin/bash
+    set -euo pipefail
+    NAMESPACE="${NAMESPACE:-{{ namespace }}}"
+
+    if [ -n "${NAMESPACE}" ]; then
+        echo "Deleting completed jobs in namespace '${NAMESPACE}'..."
+        SELECTOR="--namespace=${NAMESPACE}"
+    else
+        echo "Deleting completed jobs in all namespaces..."
+        SELECTOR="--all-namespaces"
+    fi
+
+    # Find and delete jobs with status.succeeded > 0 or status.failed > 0
+    COMPLETED_JOBS=$(kubectl get jobs ${SELECTOR} -o json | \
+        jq -r '.items[] | select((.status.succeeded // 0) > 0 or (.status.failed // 0) > 0) |
+        .metadata.namespace + "/" + .metadata.name')
+
+    if [ -z "${COMPLETED_JOBS}" ]; then
+        echo "No completed jobs found."
+        exit 0
+    fi
+
+    echo "Found completed jobs:"
+    echo "${COMPLETED_JOBS}"
+    echo ""
+
+    if gum confirm "Delete these jobs?"; then
+        echo "${COMPLETED_JOBS}" | while IFS='/' read -r ns job; do
+            echo "Deleting job ${job} in namespace ${ns}..."
+            kubectl delete job "${job}" -n "${ns}" --ignore-not-found --cascade=foreground
+        done
+        echo "Completed jobs deleted."
+    else
+        echo "Deletion cancelled."
+    fi
