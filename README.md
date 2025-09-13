@@ -261,13 +261,17 @@ just postgres::setup-cdc mydb airbyte_slot airbyte_pub etl_user
 ```
 
 **Storage Configuration**:
+
 - **MinIO**: S3-compatible object storage for scalable data staging
 - **Local**: Persistent volumes with automatic Longhorn RWX detection
 
 **Authentication**: Airbyte OSS uses OAuth2 Proxy for Keycloak integration:
+
 - During installation, optionally enable OAuth2 authentication
 - Access control through Keycloak groups and roles
-- Shared internal account for all authenticated users
+- **Note**: All authenticated users share the same internal Airbyte account (OSS limitation)
+
+> **⚠️ Multi-user Limitation**: Airbyte OSS does not support individual user accounts or role-based permissions within the application. All users authenticated through Keycloak will share the same internal workspace and have access to all connections and configurations. Use naming conventions and team coordination for shared usage.
 
 Access Airbyte at `https://airbyte.yourdomain.com` and authenticate via Keycloak (if OAuth2 is enabled).
 
