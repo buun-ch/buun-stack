@@ -1,0 +1,376 @@
+set fallback := true
+
+export AIRBYTE_NAMESPACE := env("AIRBYTE_NAMESPACE", "airbyte")
+export AIRBYTE_CHART_VERSION := env("AIRBYTE_CHART_VERSION", "1.8.2")
+export AIRBYTE_WEBAPP_IMAGE_TAG := env("AIRBYTE_WEBAPP_IMAGE_TAG", "1.7.4")
+export AIRBYTE_HOST := env("AIRBYTE_HOST", "")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export AIRBYTE_STORAGE_TYPE := env("AIRBYTE_STORAGE_TYPE", "")
+export AIRBYTE_STORAGE_BUCKET := env("AIRBYTE_STORAGE_BUCKET", "airbyte-storage")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add airbyte https://airbytehq.github.io/helm-charts
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove airbyte
+
+# Create Airbyte namespace
+create-namespace:
+    @kubectl get namespace ${AIRBYTE_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${AIRBYTE_NAMESPACE}
+
+# Delete Airbyte namespace
+delete-namespace:
+    @kubectl delete namespace ${AIRBYTE_NAMESPACE} --ignore-not-found
+
+# Setup database for Airbyte
+setup-database:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up Airbyte databases..."
+
+    # Airbyte requires multiple databases
+    DATABASES=("airbyte_db" "airbyte_configs" "airbyte_jobs" "temporal" "temporal_visibility")
+
+    for DB_NAME in "${DATABASES[@]}"; do
+        if just postgres::db-exists "$DB_NAME" &>/dev/null; then
+            echo "Database '$DB_NAME' already exists."
+        else
+            echo "Creating new database '$DB_NAME'..."
+            just postgres::create-db "$DB_NAME"
+        fi
+    done
+
+    # Generate password for user creation/update
+    if just postgres::user-exists airbyte &>/dev/null; then
+        echo "User 'airbyte' already exists."
+        # Check if we can get existing password from Vault/Secret
+        if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            # Try to get existing password from Vault
+            if DB_PASSWORD=$(just vault::get airbyte/database password 2>/dev/null); then
+                echo "Using existing password from Vault."
+            else
+                echo "Generating new password and updating Vault..."
+                DB_PASSWORD=$(just utils::random-password)
+                just postgres::change-password airbyte "$DB_PASSWORD"
+            fi
+        else
+            # For direct Secret approach, generate new password
+            echo "Generating new password for existing user..."
+            DB_PASSWORD=$(just utils::random-password)
+            just postgres::change-password airbyte "$DB_PASSWORD"
+        fi
+    else
+        echo "Creating new user 'airbyte'..."
+        DB_PASSWORD=$(just utils::random-password)
+        just postgres::create-user airbyte "$DB_PASSWORD"
+    fi
+
+    echo "Ensuring database permissions..."
+    for DB_NAME in "${DATABASES[@]}"; do
+        just postgres::grant "$DB_NAME" airbyte
+    done
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing credentials in Vault and creating ExternalSecret..."
+        just vault::put airbyte/database username=airbyte password="$DB_PASSWORD"
+        gomplate -f airbyte-database-external-secret.gomplate.yaml -o airbyte-database-external-secret.yaml
+        kubectl apply -f airbyte-database-external-secret.yaml
+        echo "Waiting for database secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/airbyte-database-external-secret \
+            -n ${AIRBYTE_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret airbyte-database-secret -n ${AIRBYTE_NAMESPACE} --ignore-not-found
+        kubectl create secret generic airbyte-database-secret -n ${AIRBYTE_NAMESPACE} \
+            --from-literal=username=airbyte \
+            --from-literal=password="$DB_PASSWORD"
+        echo "Database secret created directly in Kubernetes"
+    fi
+    echo "Database setup completed."
+
+# Delete database secret
+delete-database-secret:
+    @kubectl delete secret airbyte-database-secret -n ${AIRBYTE_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret airbyte-database-external-secret -n ${AIRBYTE_NAMESPACE} --ignore-not-found
+
+# Setup OAuth2 Proxy for Airbyte
+
+# Note: Airbyte OSS doesn't support direct OIDC integration, so we use OAuth2 Proxy
+setup-oauth2-proxy:
+    #!/bin/bash
+    set -euo pipefail
+    export AIRBYTE_HOST=${AIRBYTE_HOST:-}
+    while [ -z "${AIRBYTE_HOST}" ]; do
+        AIRBYTE_HOST=$(
+            gum input --prompt="Airbyte host (FQDN): " --width=100 \
+            --placeholder="e.g., airbyte.example.com"
+        )
+    done
+    echo "Setting up OAuth2 Proxy for Airbyte..."
+    just oauth2-proxy::setup-for-app airbyte "${AIRBYTE_HOST}" "${AIRBYTE_NAMESPACE}" "airbyte-airbyte-webapp-svc:80"
+    echo "Disabling Airbyte webapp Ingress to prevent authentication bypass..."
+    helm upgrade airbyte airbyte/airbyte \
+        --namespace ${AIRBYTE_NAMESPACE} \
+        --reuse-values \
+        --set webapp.ingress.enabled=false
+    echo "OAuth2 Proxy setup completed"
+    echo "Access Airbyte at: https://${AIRBYTE_HOST}"
+
+# Remove OAuth2 Proxy from Airbyte
+remove-oauth2-proxy:
+    @echo "Removing OAuth2 Proxy for Airbyte..."
+    @just oauth2-proxy::remove-for-app airbyte "${AIRBYTE_NAMESPACE}"
+    @echo "Re-enabling Airbyte webapp Ingress..."
+    @helm upgrade airbyte airbyte/airbyte \
+        --namespace ${AIRBYTE_NAMESPACE} \
+        --reuse-values \
+        --set webapp.ingress.enabled=true
+
+# Setup MinIO storage for Airbyte
+# Note: This creates airbyte user/bucket in MinIO and stores credentials in Vault.
+
+# The credentials are then synced to Kubernetes via ExternalSecret.
+setup-minio-storage:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up MinIO storage for Airbyte..."
+
+    # Check if MinIO is available
+    if ! kubectl get service minio -n minio &>/dev/null; then
+        echo "Error: MinIO is not installed. Please install MinIO first with 'just minio::install'"
+        exit 1
+    fi
+
+    # Create MinIO user and bucket for Airbyte
+    just minio::create-user airbyte "${AIRBYTE_STORAGE_BUCKET}"
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Creating ExternalSecret for MinIO credentials..."
+        # This ExternalSecret will merge MinIO access_key/secret_key into
+        # the Helm-managed airbyte-airbyte-secrets secret
+        gomplate -f airbyte-minio-external-secret.gomplate.yaml -o airbyte-minio-external-secret.yaml
+        kubectl apply -f airbyte-minio-external-secret.yaml
+        echo "Waiting for MinIO secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/airbyte-minio-external-secret \
+            -n ${AIRBYTE_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        # Get credentials from Vault (stored by minio::create-user)
+        ACCESS_KEY=airbyte
+        SECRET_KEY=$(just vault::get airbyte/minio secret_key 2>/dev/null || echo "")
+        if [ -z "$SECRET_KEY" ]; then
+            echo "Error: Could not retrieve MinIO credentials. Please check Vault."
+            exit 1
+        fi
+        kubectl delete secret airbyte-minio-secret -n ${AIRBYTE_NAMESPACE} --ignore-not-found
+        kubectl create secret generic airbyte-minio-secret -n ${AIRBYTE_NAMESPACE} \
+            --from-literal=access_key="$ACCESS_KEY" \
+            --from-literal=secret_key="$SECRET_KEY" \
+            --from-literal=bucket="${AIRBYTE_STORAGE_BUCKET}" \
+            --from-literal=endpoint="http://minio.minio.svc.cluster.local:9000"
+        echo "MinIO secret created directly in Kubernetes"
+    fi
+    echo "MinIO storage setup completed"
+
+# Delete MinIO storage secret
+# Note: This removes both the standalone MinIO secret and the ExternalSecret that
+
+# merges MinIO credentials into airbyte-airbyte-secrets (Helm-managed secret).
+delete-minio-secret:
+    @kubectl delete secret airbyte-minio-secret -n ${AIRBYTE_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret airbyte-minio-external-secret -n ${AIRBYTE_NAMESPACE} \
+        --ignore-not-found
+
+# Setup local storage for Airbyte
+setup-local-storage:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up local storage for Airbyte..."
+
+    # Detect if Longhorn is available
+    export LONGHORN_AVAILABLE="false"
+
+    if kubectl get storageclass longhorn &>/dev/null && \
+        kubectl get pods -n longhorn &>/dev/null | grep -q longhorn-manager; then
+        echo "Longhorn detected - using ReadWriteMany with longhorn storage class"
+        export LONGHORN_AVAILABLE="true"
+    else
+        echo "Longhorn not detected - using ReadWriteOnce with default storage class"
+        export LONGHORN_AVAILABLE="false"
+    fi
+
+    # Create PVC for local storage if it doesn't exist
+    if ! kubectl get pvc airbyte-storage-pvc -n ${AIRBYTE_NAMESPACE} &>/dev/null; then
+        echo "Creating PersistentVolumeClaim for Airbyte storage..."
+        gomplate -f airbyte-storage-pvc.gomplate.yaml -o airbyte-storage-pvc.yaml
+        kubectl apply -f airbyte-storage-pvc.yaml
+        echo "Waiting for PVC to be bound..."
+        # Wait for PVC to be bound (check status.phase instead of conditions)
+        for i in {1..90}; do
+            STATUS=$(kubectl get pvc airbyte-storage-pvc -n ${AIRBYTE_NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+            if [ "$STATUS" = "Bound" ]; then
+                echo "PVC successfully bound"
+                break
+            elif [ $i -eq 90 ]; then
+                echo "Timeout waiting for PVC to be bound after 3 minutes"
+                kubectl get pvc airbyte-storage-pvc -n ${AIRBYTE_NAMESPACE}
+                exit 1
+            fi
+            sleep 2
+        done
+        ACCESS_MODE=$(
+            kubectl get pvc airbyte-storage-pvc -n ${AIRBYTE_NAMESPACE} \
+            -o jsonpath='{.spec.accessModes[0]}'
+        )
+        STORAGE_CLASS=$(
+            kubectl get pvc airbyte-storage-pvc -n ${AIRBYTE_NAMESPACE} \
+            -o jsonpath='{.spec.storageClassName}'
+        )
+        echo "PVC created with access mode: $ACCESS_MODE, storage class: ${STORAGE_CLASS:-default}"
+    else
+        echo "PVC airbyte-storage-pvc already exists"
+    fi
+    echo "Local storage setup completed"
+
+# Delete local storage PVC
+delete-local-storage:
+    @kubectl delete pvc airbyte-storage-pvc -n ${AIRBYTE_NAMESPACE} --ignore-not-found
+
+# Install Airbyte (full setup)
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export AIRBYTE_HOST=${AIRBYTE_HOST:-}
+    while [ -z "${AIRBYTE_HOST}" ]; do
+        AIRBYTE_HOST=$(
+            gum input --prompt="Airbyte host (FQDN): " --width=100 \
+            --placeholder="e.g., airbyte.example.com"
+        )
+    done
+
+    # Ask for storage type if not set
+    if [ -z "${AIRBYTE_STORAGE_TYPE:-}" ]; then
+        AIRBYTE_STORAGE_TYPE=$(gum choose --header="Select storage type:" "local" "minio")
+    fi
+    echo "Selected storage type: ${AIRBYTE_STORAGE_TYPE}"
+
+    echo "Installing Airbyte..."
+    just create-namespace
+    just setup-database
+    just add-helm-repo
+
+    # Setup storage based on type
+    if [ "${AIRBYTE_STORAGE_TYPE}" = "minio" ]; then
+        just setup-minio-storage
+    else
+        just setup-local-storage
+    fi
+
+    # Generate values file from template
+    gomplate -f airbyte-values.gomplate.yaml -o airbyte-values.yaml
+
+    # Install Airbyte using Helm (without --wait to avoid ConfigError blocking)
+    helm upgrade --install airbyte airbyte/airbyte \
+        --namespace ${AIRBYTE_NAMESPACE} \
+        --version ${AIRBYTE_CHART_VERSION} \
+        -f airbyte-values.yaml \
+        --timeout=15m
+
+    # Post-install: Re-sync ExternalSecrets for idempotency
+    # Problem: Helm's pre-install hook recreates airbyte-airbyte-secrets,
+    # causing ExternalSecret to lose sync state and MinIO credentials to be missing.
+    # Solution: Force ExternalSecret re-creation after Helm install.
+    echo "DEBUG: AIRBYTE_STORAGE_TYPE=${AIRBYTE_STORAGE_TYPE}"
+    if [ "${AIRBYTE_STORAGE_TYPE}" = "minio" ]; then
+        echo "Re-syncing MinIO ExternalSecret after Helm installation..."
+        kubectl delete externalsecret airbyte-minio-external-secret -n ${AIRBYTE_NAMESPACE} --ignore-not-found
+        sleep 2
+        gomplate -f airbyte-minio-external-secret.gomplate.yaml -o airbyte-minio-external-secret.yaml
+        kubectl apply -f airbyte-minio-external-secret.yaml
+        echo "Waiting for MinIO ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/airbyte-minio-external-secret \
+            -n ${AIRBYTE_NAMESPACE} --timeout=60s
+        echo "MinIO credentials synchronized to airbyte-airbyte-secrets"
+
+        # Restart pods that failed due to ConfigError
+        echo "Restarting pods to pick up MinIO credentials..."
+        kubectl delete pod -n ${AIRBYTE_NAMESPACE} -l app.kubernetes.io/name=server --ignore-not-found
+        kubectl delete pod -n ${AIRBYTE_NAMESPACE} -l app.kubernetes.io/name=worker --ignore-not-found
+        kubectl delete pod -n ${AIRBYTE_NAMESPACE} -l app.kubernetes.io/name=workload-launcher --ignore-not-found
+    fi
+
+    # Wait for all deployments to be ready after secret synchronization
+    echo "Waiting for all Airbyte deployments to be ready..."
+    kubectl wait --for=condition=available deployment --all -n ${AIRBYTE_NAMESPACE} --timeout=10m
+
+    echo "Airbyte installation completed"
+    echo ""
+
+    # Prompt for OAuth2 Proxy setup
+    if gum confirm "Setup OAuth2 Proxy for Keycloak authentication?"; then
+        export AIRBYTE_HOST="${AIRBYTE_HOST}"
+        just setup-oauth2-proxy
+    else
+        echo "Access Airbyte at: https://${AIRBYTE_HOST}"
+        echo "Post-installation notes:"
+        echo "   • Default credentials: airbyte / password"
+        echo "   • Run 'just setup-oauth2-proxy' later to enable Keycloak authentication"
+        echo "   • Set up connectors from the UI"
+    fi
+
+# Uninstall Airbyte (complete removal)
+uninstall delete-db='true':
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling Airbyte..."
+    
+    # Remove OAuth2 Proxy if it exists
+    if kubectl get deployment oauth2-proxy-airbyte -n ${AIRBYTE_NAMESPACE} &>/dev/null; then
+        echo "Removing associated OAuth2 Proxy..."
+        just remove-oauth2-proxy
+    fi
+    
+    helm uninstall airbyte -n ${AIRBYTE_NAMESPACE} --ignore-not-found
+    just delete-database-secret
+    just delete-minio-secret
+    just delete-local-storage
+    just delete-namespace
+    if [ "{{ delete-db }}" = "true" ]; then
+        just postgres::delete-db airbyte_db || true
+        just postgres::delete-db airbyte_configs || true
+        just postgres::delete-db airbyte_jobs || true
+        just postgres::delete-db temporal || true
+        just postgres::delete-db temporal_visibility || true
+        just postgres::delete-user airbyte || true
+    fi
+    echo "Airbyte uninstalled"
+
+# Clean up database and secrets
+cleanup:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete the Airbyte databases and all secrets."
+    if gum confirm "Are you sure you want to proceed?"; then
+        echo "Cleaning up Airbyte resources..."
+        just postgres::delete-db airbyte_db || true
+        just postgres::delete-db airbyte_configs || true
+        just postgres::delete-db airbyte_jobs || true
+        just postgres::delete-db temporal || true
+        just postgres::delete-db temporal_visibility || true
+        just postgres::delete-user airbyte || true
+        just vault::delete airbyte/database || true
+        just vault::delete airbyte/minio || true
+        just vault::delete oauth2-proxy/airbyte || true
+        echo "Cleanup completed"
+    else
+        echo "Cleanup cancelled"
+    fi

@@ -1,0 +1,4 @@
+airbyte-values.yaml
+airbyte-database-external-secret.yaml
+airbyte-minio-external-secret.yaml
+airbyte-storage-pvc.yaml

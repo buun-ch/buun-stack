@@ -1,0 +1,221 @@
+# Airbyte Helm Chart Values
+# Configuration for Airbyte deployment
+
+global:
+  # Temporal database configuration
+  database:
+    type: external
+    secretName: airbyte-database-secret
+
+  # Storage configuration
+  storage:
+    {{- if eq (.Env.AIRBYTE_STORAGE_TYPE | default "minio") "minio" }}
+    type: s3
+    s3:
+      bucket: {{ .Env.AIRBYTE_STORAGE_BUCKET }}
+      region: us-east-1
+      authenticationType: credentials
+      accessKeyIdSecretKey: access_key
+      secretAccessKeySecretKey: secret_key
+      credentialsSecretName: airbyte-minio-secret
+      endpoint: http://minio.minio.svc.cluster.local:9000
+      pathStyleAccess: true
+    {{- else }}
+    type: local
+    local:
+      root: /airbyte
+    {{- end }}
+
+  # Database configuration
+  database:
+    type: postgres
+    host: postgres-cluster-rw.postgres.svc.cluster.local
+    port: 5432
+    database: airbyte_db
+    user: airbyte
+    secretName: airbyte-database-secret
+
+  # Deployment mode
+  deploymentMode: oss
+
+  # Security context
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+
+# Webapp configuration
+webapp:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    # https://hub.docker.com/r/airbyte/webapp/tags
+    repository: airbyte/webapp
+    tag: "{{ .Env.AIRBYTE_WEBAPP_IMAGE_TAG }}"
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  ingress:
+    enabled: true
+    className: traefik
+    annotations:
+      kubernetes.io/ingress.class: traefik
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    hosts:
+      - host: {{ .Env.AIRBYTE_HOST }}
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - hosts:
+          - {{ .Env.AIRBYTE_HOST }}
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+# Server configuration
+server:
+  enabled: true
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 8001
+
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+
+  # JVM settings
+  env:
+    - name: JAVA_OPTS
+      value: "-Xmx1g -Xms512m"
+
+# Worker configuration
+worker:
+  enabled: true
+  replicaCount: 2
+
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+
+  # JVM settings
+  env:
+    - name: JAVA_OPTS
+      value: "-Xmx1g -Xms512m"
+
+# Scheduler configuration
+scheduler:
+  enabled: true
+  replicaCount: 1
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+# Connector builder server
+connectorBuilderServer:
+  enabled: true
+  replicaCount: 1
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+# Airbyte bootloader (database initialization)
+airbyte-bootloader:
+  enabled: true
+
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+# Temporal configuration with external PostgreSQL
+# Note: These environment variables may cause Helm warnings about duplicates,
+# but they are necessary for external PostgreSQL configuration
+temporal:
+  enabled: true
+  replicaCount: 1
+  
+  extraEnv:
+    - name: DB
+      value: "postgres12"
+    - name: POSTGRES_SEEDS
+      value: "postgres-cluster-rw.postgres.svc.cluster.local"
+    - name: DATABASE_DB
+      value: "temporal"
+    - name: POSTGRES_USER
+      value: "airbyte"
+    - name: POSTGRES_PWD
+      valueFrom:
+        secretKeyRef:
+          name: airbyte-database-secret
+          key: DATABASE_PASSWORD
+    - name: SKIP_DB_CREATE
+      value: "true"
+
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+
+# Metrics configuration
+metrics:
+  enabled: true
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+# Pod labels
+podLabels:
+  app: airbyte
+
+# Pod annotations
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9090"
+
+# PostgreSQL (disabled - using external)
+postgresql:
+  enabled: false
+
+# MinIO (disabled - using external if configured)
+minio:
+  enabled: false
