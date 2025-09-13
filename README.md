@@ -16,6 +16,7 @@ A Kubernetes development stack for self-hosted environments, designed to run on 
 - **Data Catalog**: [DataHub](https://datahubproject.io/) for metadata management and data discovery
 - **Database**: [PostgreSQL](https://www.postgresql.org/) cluster
 - **Analytics Engine/Database**: [ClickHouse](https://clickhouse.com/) for high-performance analytics and data warehousing
+- **Data Integration**: [Airbyte](https://airbyte.com/) for ELT data pipelines and ingestion
 - **Workflow Orchestration**: [Apache Airflow](https://airflow.apache.org/) for data pipeline automation and task scheduling
 - **Authentication Proxy**: [OAuth2 Proxy](https://oauth2-proxy.github.io/oauth2-proxy/) for adding Keycloak authentication to any application
 - **Remote Access**: [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) for secure internet connectivity
@@ -231,6 +232,44 @@ just airflow::create-api-user <username> <role>
 > **💡 Development Workflow**: Create DAGs in JupyterHub using `~/airflow-dags/dag_template.py` as a starting point. Use `.tmp` extension during development to avoid import errors, then rename to `.py` when ready.
 
 Access Airflow at `https://airflow.yourdomain.com` and authenticate via Keycloak.
+
+### Airbyte
+
+Open-source data integration platform for building ELT pipelines:
+
+- **600+ Connectors**: Pre-built connectors for databases, APIs, files, and SaaS applications
+- **Change Data Capture (CDC)**: Real-time data replication with PostgreSQL logical replication
+- **Schema Management**: Automatic schema detection and evolution handling
+- **Incremental Sync**: Efficient data synchronization with deduplication
+- **Storage Options**: Flexible storage with MinIO (S3-compatible) or local persistent volumes
+- **OAuth2 Authentication**: Secure access through Keycloak via OAuth2 Proxy
+
+Installation:
+
+```bash
+just airbyte::install
+```
+
+**PostgreSQL CDC Setup**: Enable Change Data Capture for real-time data replication:
+
+```bash
+# Setup CDC with user tables only (recommended)
+just postgres::setup-cdc <database> <slot_name> <publication_name> <username>
+
+# Example for database 'mydb' with user 'etl_user'
+just postgres::setup-cdc mydb airbyte_slot airbyte_pub etl_user
+```
+
+**Storage Configuration**:
+- **MinIO**: S3-compatible object storage for scalable data staging
+- **Local**: Persistent volumes with automatic Longhorn RWX detection
+
+**Authentication**: Airbyte OSS uses OAuth2 Proxy for Keycloak integration:
+- During installation, optionally enable OAuth2 authentication
+- Access control through Keycloak groups and roles
+- Shared internal account for all authenticated users
+
+Access Airbyte at `https://airbyte.yourdomain.com` and authenticate via Keycloak (if OAuth2 is enabled).
 
 ## Common Operations
 
