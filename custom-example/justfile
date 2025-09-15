@@ -4,6 +4,7 @@ set fallback := true
 default:
     @just --list --unsorted --list-submodules
 
+mod airbyte 'airbyte/justfile'
 mod cube 'cube/justfile'
 mod bytebase 'bytebase/justfile'
 mod miniflux 'miniflux/justfile'

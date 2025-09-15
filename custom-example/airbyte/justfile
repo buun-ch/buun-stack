@@ -332,13 +332,13 @@ uninstall delete-db='true':
     #!/bin/bash
     set -euo pipefail
     echo "Uninstalling Airbyte..."
-    
+
     # Remove OAuth2 Proxy if it exists
     if kubectl get deployment oauth2-proxy-airbyte -n ${AIRBYTE_NAMESPACE} &>/dev/null; then
         echo "Removing associated OAuth2 Proxy..."
         just remove-oauth2-proxy
     fi
-    
+
     helm uninstall airbyte -n ${AIRBYTE_NAMESPACE} --ignore-not-found
     just delete-database-secret
     just delete-minio-secret
