@@ -619,3 +619,13 @@ cleanup:
     else
         echo "Cleanup cancelled"
     fi
+
+# Build custom container image
+[working-directory("image")]
+build-container-image:
+    @docker build -t "${DAGSTER_CONTAINER_IMAGE}:${DAGSTER_CONTAINER_TAG}" .
+
+# Push custom container image
+[working-directory("image")]
+push-container-image:
+    @docker push "${DAGSTER_CONTAINER_IMAGE}:${DAGSTER_CONTAINER_TAG}"

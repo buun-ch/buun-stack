@@ -86,8 +86,10 @@ runLauncher:
   type: K8sRunLauncher
   config:
     k8sRunLauncher:
-      image: "{{ .Env.DAGSTER_CONTAINER_IMAGE }}:{{ .Env.DAGSTER_CONTAINER_TAG }}"
-      imagePullPolicy: "{{ .Env.DAGSTER_CONTAINER_PULL_POLICY }}"
+      image:
+        repository: "{{ .Env.DAGSTER_CONTAINER_IMAGE }}"
+        tag: "{{ .Env.DAGSTER_CONTAINER_TAG }}"
+        pullPolicy: "{{ .Env.DAGSTER_CONTAINER_PULL_POLICY }}"
       jobNamespace: "{{ .Env.DAGSTER_NAMESPACE }}"
       loadInclusterConfig: true
       volumeMounts:
