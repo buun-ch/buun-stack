@@ -1,0 +1,6 @@
+dagster-values.yaml
+dagster-database-external-secret.yaml
+dagster-minio-external-secret.yaml
+dagster-oauth-external-secret.yaml
+dagster-storage-pvc.yaml
+dagster-user-code-pvc.yaml

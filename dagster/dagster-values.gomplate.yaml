@@ -1,0 +1,148 @@
+# Dagster Helm Chart Values
+# Configuration for Dagster deployment
+
+global:
+  serviceAccountName: "dagster"
+  postgresqlSecretName: "dagster-database-secret"
+
+# Disable automatic PostgreSQL secret generation
+generatePostgresqlPasswordSecret: false
+
+dagsterWebserver:
+  replicaCount: 1
+
+  image:
+    repository: "{{ .Env.DAGSTER_CONTAINER_IMAGE }}"
+    tag: "{{ .Env.DAGSTER_CONTAINER_TAG }}"
+    pullPolicy: "{{ .Env.DAGSTER_CONTAINER_PULL_POLICY }}"
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+  env:
+    - name: DAGSTER_HOME
+      value: /opt/dagster/dagster_home
+    - name: PYTHONPATH
+      value: /opt/dagster/user-code
+    - name: PIP_USER
+      value: "true"
+
+  volumeMounts:
+    - name: user-code
+      mountPath: /opt/dagster/user-code
+
+  volumes:
+    - name: user-code
+      persistentVolumeClaim:
+        claimName: dagster-user-code-pvc
+
+  workspace:
+    enabled: true
+    servers: []
+
+dagsterDaemon:
+  enabled: true
+
+  image:
+    repository: "{{ .Env.DAGSTER_CONTAINER_IMAGE }}"
+    tag: "{{ .Env.DAGSTER_CONTAINER_TAG }}"
+    pullPolicy: "{{ .Env.DAGSTER_CONTAINER_PULL_POLICY }}"
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+  volumeMounts:
+    - name: user-code
+      mountPath: /opt/dagster/user-code
+
+  volumes:
+    - name: user-code
+      persistentVolumeClaim:
+        claimName: dagster-user-code-pvc
+
+  env:
+    - name: DAGSTER_HOME
+      value: /opt/dagster/dagster_home
+    - name: PYTHONPATH
+      value: /opt/dagster/user-code
+    - name: PIP_USER
+      value: "true"
+
+runLauncher:
+  type: K8sRunLauncher
+  config:
+    k8sRunLauncher:
+      image: "{{ .Env.DAGSTER_CONTAINER_IMAGE }}:{{ .Env.DAGSTER_CONTAINER_TAG }}"
+      imagePullPolicy: "{{ .Env.DAGSTER_CONTAINER_PULL_POLICY }}"
+      jobNamespace: "{{ .Env.DAGSTER_NAMESPACE }}"
+      loadInclusterConfig: true
+      volumeMounts:
+        - name: user-code
+          mountPath: /opt/dagster/user-code
+      volumes:
+        - name: user-code
+          persistentVolumeClaim:
+            claimName: dagster-user-code-pvc
+      {{- if eq (.Env.DAGSTER_STORAGE_TYPE | default "local") "minio" }}
+      envSecrets:
+        - name: dagster-database-secret
+        - name: dagster-minio-secret
+      {{- else }}
+      envSecrets:
+        - name: dagster-database-secret
+      {{- end }}
+
+postgresql:
+  enabled: false
+  postgresqlHost: "postgres-cluster-rw.postgres.svc.cluster.local"
+  postgresqlUsername: "dagster"
+  postgresqlPassword: ""
+  postgresqlDatabase: "dagster"
+  service:
+    port: 5432
+
+userDeployments:
+  enabled: false
+
+dagster-user-deployments:
+  enabled: true
+  enableSubchart: false
+  deployments: []
+
+{{- if eq (.Env.DAGSTER_STORAGE_TYPE | default "local") "minio" }}
+computeLogManager:
+  type: S3ComputeLogManager
+  config:
+    s3ComputeLogManager:
+      bucket: "dagster-logs"
+      region: "us-east-1"
+      endpointUrl: "http://minio.{{ .Env.MINIO_NAMESPACE }}.svc.cluster.local:9000"
+      useSSL: false
+      secretName: "dagster-minio-secret"
+{{- else }}
+computeLogManager:
+  type: NoOpComputeLogManager
+{{- end }}
+
+dagsterHome: "/opt/dagster/dagster_home"
+
+serviceAccount:
+  create: true
+  name: "dagster"
+
+rbac:
+  create: true

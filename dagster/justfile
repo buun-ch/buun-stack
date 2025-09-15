@@ -1,0 +1,621 @@
+set fallback := true
+
+export DAGSTER_NAMESPACE := env("DAGSTER_NAMESPACE", "dagster")
+export DAGSTER_CHART_VERSION := env("DAGSTER_CHART_VERSION", "1.11.10")
+export DAGSTER_CONTAINER_IMAGE := env("DAGSTER_CONTAINER_IMAGE", "docker.io/dagster/dagster-k8s")
+export DAGSTER_CONTAINER_TAG := env("DAGSTER_CONTAINER_TAG", "1.11.10")
+export DAGSTER_CONTAINER_PULL_POLICY := env("DAGSTER_CONTAINER_PULL_POLICY", "IfNotPresent")
+export DAGSTER_HOST := env("DAGSTER_HOST", "")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export DAGSTER_STORAGE_SIZE := env("DAGSTER_STORAGE_SIZE", "20Gi")
+export DAGSTER_CODE_STORAGE_SIZE := env("DAGSTER_CODE_STORAGE_SIZE", "10Gi")
+export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
+export DAGSTER_STORAGE_TYPE := env("DAGSTER_STORAGE_TYPE", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add dagster https://dagster-io.github.io/helm
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove dagster
+
+# Create Dagster namespace
+create-namespace:
+    @kubectl get namespace ${DAGSTER_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${DAGSTER_NAMESPACE}
+
+# Delete Dagster namespace
+delete-namespace:
+    @kubectl delete namespace ${DAGSTER_NAMESPACE} --ignore-not-found
+
+# Setup database for Dagster
+setup-database:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up Dagster database..."
+
+    if just postgres::db-exists dagster &>/dev/null; then
+        echo "Database 'dagster' already exists. Dagster will handle schema migrations."
+    else
+        echo "Creating new database 'dagster'..."
+        just postgres::create-db dagster
+    fi
+
+    # Generate password for user creation/update
+    # For existing users, preserve existing password if possible
+    if just postgres::user-exists dagster &>/dev/null; then
+        echo "User 'dagster' already exists."
+        # Check if we can get existing password from Vault/Secret
+        if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            # Try to get existing password from Vault
+            if DB_PASSWORD=$(just vault::get dagster/database password 2>/dev/null); then
+                echo "Using existing password from Vault."
+            else
+                echo "Generating new password and updating Vault..."
+                DB_PASSWORD=$(just utils::random-password)
+                just postgres::psql -c "ALTER USER dagster WITH PASSWORD '$DB_PASSWORD';"
+            fi
+        else
+            # For direct Secret approach, generate new password
+            echo "Generating new password for existing user..."
+            DB_PASSWORD=$(just utils::random-password)
+            just postgres::psql -c "ALTER USER dagster WITH PASSWORD '$DB_PASSWORD';"
+        fi
+    else
+        echo "Creating new user 'dagster'..."
+        DB_PASSWORD=$(just utils::random-password)
+        just postgres::create-user dagster "$DB_PASSWORD"
+    fi
+
+    echo "Ensuring database permissions..."
+    just postgres::grant dagster dagster
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing credentials in Vault and creating ExternalSecret..."
+        just vault::put dagster/database username=dagster password="$DB_PASSWORD"
+        gomplate -f dagster-database-external-secret.gomplate.yaml -o dagster-database-external-secret.yaml
+        kubectl apply -f dagster-database-external-secret.yaml
+        echo "Waiting for database secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/dagster-database-external-secret \
+            -n ${DAGSTER_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret dagster-database-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+        kubectl create secret generic dagster-database-secret -n ${DAGSTER_NAMESPACE} \
+            --from-literal=username=dagster \
+            --from-literal=password="$DB_PASSWORD"
+        echo "Database secret created directly in Kubernetes"
+    fi
+    echo "Database setup completed. Dagster will handle schema initialization and migrations."
+
+# Delete database secret
+delete-database-secret:
+    @kubectl delete secret dagster-database-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+
+# Create OAuth client in Keycloak for Dagster authentication
+create-oauth-client:
+    #!/bin/bash
+    set -euo pipefail
+    if [ -z "${DAGSTER_HOST}" ]; then
+        echo "Error: DAGSTER_HOST environment variable is required"
+        exit 1
+    fi
+    echo "Creating Dagster OAuth client in Keycloak..."
+    # Delete existing client to ensure fresh creation
+    echo "Removing existing client if present..."
+    just keycloak::delete-client ${KEYCLOAK_REALM} dagster || true
+
+    # Create confidential client for oauth2-proxy
+    CLIENT_SECRET=$(just utils::random-password)
+    just keycloak::create-client \
+        ${KEYCLOAK_REALM} \
+        dagster \
+        "https://${DAGSTER_HOST}/oauth2/callback" \
+        "$CLIENT_SECRET"
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing credentials in Vault and recreating ExternalSecret..."
+        just vault::put dagster/oauth \
+            client_id=dagster \
+            client_secret="$CLIENT_SECRET"
+        # Delete existing ExternalSecret to force recreation and refresh
+        kubectl delete externalsecret dagster-oauth-external-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+        kubectl delete secret dagster-oauth-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+        gomplate -f dagster-oauth-external-secret.gomplate.yaml -o dagster-oauth-external-secret.yaml
+        kubectl apply -f dagster-oauth-external-secret.yaml
+        echo "Waiting for OAuth secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/dagster-oauth-external-secret \
+            -n ${DAGSTER_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret dagster-oauth-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+        kubectl create secret generic dagster-oauth-secret -n ${DAGSTER_NAMESPACE} \
+            --from-literal=client_id=dagster \
+            --from-literal=client_secret="$CLIENT_SECRET"
+        echo "OAuth secret created directly in Kubernetes"
+    fi
+    echo "OAuth client created successfully"
+
+# Delete OAuth secret
+delete-oauth-secret:
+    @kubectl delete secret dagster-oauth-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret dagster-oauth-external-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+
+# Setup MinIO storage for Dagster
+setup-minio-storage:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up MinIO storage for Dagster..."
+
+    # Check if MinIO is available
+    if ! kubectl get service minio -n minio &>/dev/null; then
+        echo "Error: MinIO is not installed. Please install MinIO first with 'just minio::install'"
+        exit 1
+    fi
+
+    # Create MinIO user and bucket for Dagster
+    # Default buckets: dagster-data (for data files), dagster-logs (for compute logs)
+    just minio::create-user dagster "dagster-data"
+    just minio::create-bucket dagster-logs
+    # Note: minio::create-user already grants readwrite policy to the user
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Creating ExternalSecret for MinIO credentials..."
+        gomplate -f dagster-minio-external-secret.gomplate.yaml -o dagster-minio-external-secret.yaml
+        kubectl apply -f dagster-minio-external-secret.yaml
+        echo "Waiting for MinIO secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/dagster-minio-external-secret \
+            -n ${DAGSTER_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        # Get credentials from Vault (stored by minio::create-user)
+        ACCESS_KEY=dagster
+        SECRET_KEY=$(just vault::get dagster/minio secret_key 2>/dev/null || echo "")
+        if [ -z "$SECRET_KEY" ]; then
+            echo "Error: Could not retrieve MinIO credentials. Please check Vault."
+            exit 1
+        fi
+        kubectl delete secret dagster-minio-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+        kubectl create secret generic dagster-minio-secret -n ${DAGSTER_NAMESPACE} \
+            --from-literal=access_key="$ACCESS_KEY" \
+            --from-literal=secret_key="$SECRET_KEY" \
+            --from-literal=data_bucket="dagster-data" \
+            --from-literal=logs_bucket="dagster-logs" \
+            --from-literal=endpoint="http://minio.minio.svc.cluster.local:9000"
+        echo "MinIO secret created directly in Kubernetes"
+    fi
+    echo "MinIO storage setup completed"
+
+# Delete MinIO secret
+delete-minio-secret:
+    @kubectl delete secret dagster-minio-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret dagster-minio-external-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+
+# Setup PVC storage for Dagster
+setup-pvc-storage:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up PVC storage for Dagster..."
+
+    # Detect storage class
+    export STORAGE_CLASS=""
+    if kubectl get storageclass longhorn &>/dev/null && \
+        kubectl get pods -n longhorn-system &>/dev/null | grep -q longhorn-manager; then
+        echo "Longhorn detected - using longhorn storage class"
+        export STORAGE_CLASS="longhorn"
+    else
+        echo "Using default storage class"
+    fi
+
+    # Create PVC for Dagster storage if it doesn't exist
+    if ! kubectl get pvc dagster-storage-pvc -n ${DAGSTER_NAMESPACE} &>/dev/null; then
+        echo "Creating PersistentVolumeClaim for Dagster storage..."
+        gomplate -f dagster-storage-pvc.gomplate.yaml -o dagster-storage-pvc.yaml
+        kubectl apply -f dagster-storage-pvc.yaml
+        echo "Waiting for PVC to be bound..."
+        # Wait for PVC to be bound
+        for i in {1..90}; do
+            STATUS=$(kubectl get pvc dagster-storage-pvc -n ${DAGSTER_NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+            if [ "$STATUS" = "Bound" ]; then
+                echo "PVC bound successfully"
+                break
+            elif [ $i -eq 90 ]; then
+                echo "Timeout waiting for PVC to bind"
+                exit 1
+            fi
+            echo "Waiting for PVC to bind... (${i}/90) Status: ${STATUS}"
+            sleep 2
+        done
+    else
+        echo "PVC already exists"
+    fi
+    echo "PVC storage setup completed"
+
+# Setup shared PVC for user code (supports ReadWriteMany with Longhorn)
+setup-user-code-pvc:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up shared PVC for user code..."
+
+    # Detect if Longhorn is available (same as Airbyte)
+    export LONGHORN_AVAILABLE="false"
+
+    if kubectl get storageclass longhorn &>/dev/null && \
+        kubectl get pods -n longhorn-system &>/dev/null | grep -q longhorn-manager; then
+        echo "Longhorn detected - using ReadWriteMany with longhorn storage class"
+        export LONGHORN_AVAILABLE="true"
+    else
+        echo "Longhorn not detected - using ReadWriteOnce"
+        export LONGHORN_AVAILABLE="false"
+    fi
+
+    # Create PVC for user code if it doesn't exist
+    if ! kubectl get pvc dagster-user-code-pvc -n ${DAGSTER_NAMESPACE} &>/dev/null; then
+        echo "Creating PersistentVolumeClaim for user code..."
+        gomplate -f dagster-user-code-pvc.gomplate.yaml -o dagster-user-code-pvc.yaml
+        kubectl apply -f dagster-user-code-pvc.yaml
+        echo "Waiting for user code PVC to be bound..."
+
+        # Wait for PVC to be bound
+        for i in {1..90}; do
+            STATUS=$(kubectl get pvc dagster-user-code-pvc -n ${DAGSTER_NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+            if [ "$STATUS" = "Bound" ]; then
+                echo "User code PVC bound successfully"
+                break
+            elif [ $i -eq 90 ]; then
+                echo "Timeout waiting for user code PVC to bind"
+                exit 1
+            fi
+            echo "Waiting for user code PVC to bind... (${i}/90) Status: ${STATUS}"
+            sleep 2
+        done
+
+        # Display PVC info
+        ACCESS_MODE=$(
+            kubectl get pvc dagster-user-code-pvc -n ${DAGSTER_NAMESPACE} \
+            -o jsonpath='{.spec.accessModes[0]}'
+        )
+        STORAGE_CLASS=$(
+            kubectl get pvc dagster-user-code-pvc -n ${DAGSTER_NAMESPACE} \
+            -o jsonpath='{.spec.storageClassName}'
+        )
+        echo "User code PVC created with access mode: $ACCESS_MODE, storage class: ${STORAGE_CLASS:-default}"
+    else
+        echo "User code PVC already exists"
+    fi
+    echo "User code PVC setup completed"
+
+# Delete PVC storage
+delete-pvc-storage:
+    @kubectl delete pvc dagster-storage-pvc -n ${DAGSTER_NAMESPACE} --ignore-not-found
+    @kubectl delete pvc dagster-user-code-pvc -n ${DAGSTER_NAMESPACE} --ignore-not-found
+
+# Add a Python module to workspace.yaml
+add-workspace-module module_name working_directory:
+    #!/bin/bash
+    set -euo pipefail
+    MODULE_NAME="{{ module_name }}"
+    WORKING_DIR="{{ working_directory }}"
+
+    echo "Adding module '${MODULE_NAME}' to workspace..."
+
+    # Get current workspace.yaml from ConfigMap
+    CURRENT_WORKSPACE=$(kubectl get configmap dagster-workspace-yaml -n ${DAGSTER_NAMESPACE} -o jsonpath='{.data.workspace\.yaml}')
+
+    # Create temporary file with current content
+    echo "$CURRENT_WORKSPACE" > /tmp/current_workspace.yaml
+
+    # Check if module already exists
+    if echo "$CURRENT_WORKSPACE" | grep -q "module_name: ${MODULE_NAME}"; then
+        echo "Module '${MODULE_NAME}' already exists in workspace - skipping workspace update"
+        echo "✓ Project files updated successfully"
+        exit 0
+    fi
+
+    # Create new workspace entry with proper escaping
+    cat > /tmp/new_entry.txt << EOF
+    - python_module:
+        module_name: ${MODULE_NAME}
+        working_directory: ${WORKING_DIR}
+    EOF
+
+    # Add to workspace
+    if echo "$CURRENT_WORKSPACE" | grep -q "load_from: \[\]"; then
+        # Replace empty array with new entry
+        NEW_WORKSPACE=$(echo "$CURRENT_WORKSPACE" | sed 's/load_from: \[\]/load_from:/')
+        NEW_WORKSPACE="${NEW_WORKSPACE}"$'\n'"$(cat /tmp/new_entry.txt)"
+    else
+        # Append to existing entries
+        NEW_WORKSPACE="${CURRENT_WORKSPACE}"$'\n'"$(cat /tmp/new_entry.txt)"
+    fi
+
+    # Update ConfigMap using jq with proper key escaping
+    PATCH_JSON=$(jq -n --arg workspace "$NEW_WORKSPACE" '{"data": {"workspace.yaml": $workspace}}')
+    kubectl patch configmap dagster-workspace-yaml -n ${DAGSTER_NAMESPACE} --patch "$PATCH_JSON"
+
+    echo "✓ Module '${MODULE_NAME}' added to workspace"
+    echo "Restarting Dagster to reload workspace..."
+    kubectl rollout restart deployment/dagster-dagster-webserver -n ${DAGSTER_NAMESPACE}
+    kubectl rollout restart deployment/dagster-daemon -n ${DAGSTER_NAMESPACE}
+
+# Note: add-workspace-file command has been removed due to sed parsing issues
+# Use add-workspace-module command instead for adding Python modules to workspace
+
+# Deploy a project to shared PVC
+[no-cd]
+deploy-project project_dir='':
+    #!/bin/bash
+    set -euo pipefail
+    PROJECT_DIR="{{ project_dir }}"
+
+    # Interactive input if not provided
+    while [ -z "${PROJECT_DIR}" ]; do
+        PROJECT_DIR=$(gum input --prompt="Project directory path: " --width=100 \
+            --placeholder="e.g., ./my_project or /path/to/project")
+    done
+
+    # Check if directory exists first
+    if [ ! -d "${PROJECT_DIR}" ]; then
+        echo "Error: Project directory '${PROJECT_DIR}' not found"
+        echo "Please provide a valid project directory path"
+        exit 1
+    fi
+
+    # Convert to absolute path
+    PROJECT_DIR=$(realpath "${PROJECT_DIR}")
+    PROJECT_NAME=$(basename "${PROJECT_DIR}")
+
+    # Validate project name - no hyphens allowed
+    if echo "${PROJECT_NAME}" | grep -q '-'; then
+        echo "Error: Project directory name '${PROJECT_NAME}' contains hyphens"
+        echo "Please rename the directory to use underscores instead of hyphens"
+        echo "Example: '${PROJECT_NAME}' -> '$(echo "${PROJECT_NAME}" | tr '-' '_')'"
+        exit 1
+    fi
+
+    # Project name is also the Python module name (no conversion needed)
+    PYTHON_MODULE_NAME="${PROJECT_NAME}"
+
+    echo "Using project directory: ${PROJECT_DIR}"
+    echo "Project name: ${PROJECT_NAME}"
+    echo "Python module name: ${PYTHON_MODULE_NAME}"
+
+    # Check if user code PVC exists
+    if ! kubectl get pvc dagster-user-code-pvc -n ${DAGSTER_NAMESPACE} &>/dev/null; then
+        echo "Error: User code PVC not found. Run 'just dagster::setup-user-code-pvc' first."
+        exit 1
+    fi
+
+    # Check if Longhorn is available for ReadWriteMany support
+    if kubectl get storageclass longhorn &>/dev/null; then
+        echo "Longhorn detected - PVC supports ReadWriteMany for sharing with other services"
+    else
+        echo "Longhorn not detected - PVC will use ReadWriteOnce (Dagster-only access)"
+    fi
+
+    echo "Deploying project '${PROJECT_NAME}'..."
+
+    # Find running Dagster webserver pod
+    DAGSTER_POD=$(kubectl get pods -n ${DAGSTER_NAMESPACE} -l component=dagster-webserver -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+
+    if [ -z "$DAGSTER_POD" ] || ! kubectl get pod "$DAGSTER_POD" -n ${DAGSTER_NAMESPACE} &>/dev/null; then
+        echo "Error: No running Dagster webserver pod found"
+        echo "Please ensure Dagster is installed and running first"
+        exit 1
+    fi
+
+    echo "Using Dagster webserver pod: $DAGSTER_POD"
+
+    # Create directory if it doesn't exist
+    kubectl exec "$DAGSTER_POD" -n ${DAGSTER_NAMESPACE} -- mkdir -p "/opt/dagster/user-code/${PROJECT_NAME}" 2>/dev/null || true
+
+    # Copy project files
+    echo "Copying project files to shared PVC..."
+    kubectl cp "${PROJECT_DIR}/." "${DAGSTER_NAMESPACE}/${DAGSTER_POD}:/opt/dagster/user-code/${PROJECT_NAME}/"
+
+    # Determine the correct working directory (check if src directory exists)
+    WORKING_DIR="/opt/dagster/user-code/${PROJECT_NAME}"
+    if kubectl exec "$DAGSTER_POD" -n ${DAGSTER_NAMESPACE} -- test -d "/opt/dagster/user-code/${PROJECT_NAME}/src" 2>/dev/null; then
+        WORKING_DIR="/opt/dagster/user-code/${PROJECT_NAME}/src"
+        echo "Found src directory, using: ${WORKING_DIR}"
+    else
+        echo "Using project root: ${WORKING_DIR}"
+    fi
+
+    # Add to workspace (use definitions submodule)
+    just dagster::add-workspace-module "${PYTHON_MODULE_NAME}.definitions" "${WORKING_DIR}"
+
+    echo "✓ Project '${PROJECT_NAME}' deployed successfully"
+    echo "Files location: /opt/dagster/user-code/${PROJECT_NAME}"
+
+# Remove a project from shared PVC
+[no-cd]
+remove-project project_name='':
+    #!/bin/bash
+    set -euo pipefail
+    PROJECT_NAME="{{ project_name }}"
+
+    # Interactive input if not provided
+    while [ -z "${PROJECT_NAME}" ]; do
+        PROJECT_NAME=$(gum input --prompt="Project name to remove: " --width=100 \
+            --placeholder="e.g., dagster-tutorial")
+    done
+
+    # Confirmation prompt
+    if ! gum confirm "Are you sure you want to remove project '${PROJECT_NAME}'?"; then
+        echo "Cancelled"
+        exit 0
+    fi
+
+    # Validate project name - no hyphens allowed
+    if echo "${PROJECT_NAME}" | grep -q '-'; then
+        echo "Error: Project name '${PROJECT_NAME}' contains hyphens"
+        echo "Project names with hyphens are not supported"
+        exit 1
+    fi
+
+    # Project name is also the Python module name
+    PYTHON_MODULE_NAME="${PROJECT_NAME}"
+
+    echo "Removing project '${PROJECT_NAME}' (module: ${PYTHON_MODULE_NAME})..."
+
+    # Find running Dagster webserver pod
+    DAGSTER_POD=$(kubectl get pods -n ${DAGSTER_NAMESPACE} -l component=dagster-webserver -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+
+    if [ -z "$DAGSTER_POD" ] || ! kubectl get pod "$DAGSTER_POD" -n ${DAGSTER_NAMESPACE} &>/dev/null; then
+        echo "Error: No running Dagster webserver pod found"
+        echo "Please ensure Dagster is installed and running first"
+        exit 1
+    fi
+
+    # Remove project files from PVC
+    echo "Removing project files from shared PVC..."
+    kubectl exec "$DAGSTER_POD" -n ${DAGSTER_NAMESPACE} -- rm -rf "/opt/dagster/user-code/${PROJECT_NAME}" 2>/dev/null || true
+
+    # Remove from workspace.yaml
+    echo "Removing module '${PYTHON_MODULE_NAME}' from workspace..."
+
+    # Get current workspace.yaml from ConfigMap
+    CURRENT_WORKSPACE=$(kubectl get configmap dagster-workspace-yaml -n ${DAGSTER_NAMESPACE} -o jsonpath='{.data.workspace\.yaml}')
+
+    # Check if module exists
+    if ! echo "$CURRENT_WORKSPACE" | grep -q "module_name: ${PYTHON_MODULE_NAME}"; then
+        echo "Module '${PYTHON_MODULE_NAME}' not found in workspace - only removing files"
+    else
+        # Remove the module entry using sed (remove the python_module block)
+        NEW_WORKSPACE=$(echo "$CURRENT_WORKSPACE" | sed "/- python_module:/,/working_directory: .*/{/module_name: ${PYTHON_MODULE_NAME}/,/working_directory: .*/d;}")
+
+        # If no modules left, reset to empty array
+        if ! echo "$NEW_WORKSPACE" | grep -q "module_name:"; then
+            NEW_WORKSPACE="load_from: []"$'\n'
+        fi
+
+        # Update ConfigMap using jq
+        PATCH_JSON=$(jq -n --arg workspace "$NEW_WORKSPACE" '{"data": {"workspace.yaml": $workspace}}')
+        kubectl patch configmap dagster-workspace-yaml -n ${DAGSTER_NAMESPACE} --patch "$PATCH_JSON"
+
+        echo "✓ Module '${PYTHON_MODULE_NAME}' removed from workspace"
+    fi
+
+    # Restart Dagster to reload workspace
+    echo "Restarting Dagster to reload workspace..."
+    kubectl rollout restart deployment/dagster-dagster-webserver -n ${DAGSTER_NAMESPACE}
+    kubectl rollout restart deployment/dagster-daemon -n ${DAGSTER_NAMESPACE}
+
+    echo "✓ Project '${PROJECT_NAME}' removed successfully"
+
+# Setup OAuth2 Proxy for Dagster authentication
+setup-oauth2-proxy:
+    #!/bin/bash
+    set -euo pipefail
+    export DAGSTER_HOST=${DAGSTER_HOST:-}
+    while [ -z "${DAGSTER_HOST}" ]; do
+        DAGSTER_HOST=$(
+            gum input --prompt="Dagster host (FQDN): " --width=100 \
+            --placeholder="e.g., dagster.example.com"
+        )
+    done
+    echo "Setting up OAuth2 Proxy for Dagster..."
+    just oauth2-proxy::setup-for-app dagster "${DAGSTER_HOST}" "${DAGSTER_NAMESPACE}" "dagster-dagster-webserver:80"
+    echo "OAuth2 Proxy setup completed"
+
+# Install OAuth2 Proxy for Dagster authentication
+install-oauth2-proxy:
+    just setup-oauth2-proxy
+
+# Remove OAuth2 Proxy
+remove-oauth2-proxy:
+    just oauth2-proxy::remove-for-app dagster ${DAGSTER_NAMESPACE}
+
+# Install Dagster (full setup)
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export DAGSTER_HOST=${DAGSTER_HOST:-}
+    while [ -z "${DAGSTER_HOST}" ]; do
+        DAGSTER_HOST=$(
+            gum input --prompt="Dagster host (FQDN): " --width=100 \
+            --placeholder="e.g., dagster.example.com"
+        )
+    done
+    if [ -z "${DAGSTER_STORAGE_TYPE:-}" ]; then
+        DAGSTER_STORAGE_TYPE=$(gum choose --header="Select storage type:" "local" "minio")
+    fi
+    echo "Selected storage type: ${DAGSTER_STORAGE_TYPE}"
+    echo "Installing Dagster..."
+    just create-namespace
+    just setup-database
+    just create-oauth-client
+    if [ "${DAGSTER_STORAGE_TYPE}" = "minio" ]; then
+        if kubectl get namespace minio &>/dev/null; then
+            echo "MinIO detected. Setting up MinIO storage..."
+            just setup-minio-storage
+        else
+            echo "Error: MinIO namespace not found. Please install MinIO first."
+            exit 1
+        fi
+    else
+        echo "Setting up local PVC storage..."
+        just setup-pvc-storage
+    fi
+    just setup-user-code-pvc
+
+    just add-helm-repo
+    gomplate -f dagster-values.gomplate.yaml -o dagster-values.yaml
+    helm upgrade --install dagster dagster/dagster \
+        --namespace ${DAGSTER_NAMESPACE} \
+        --version ${DAGSTER_CHART_VERSION} \
+        -f dagster-values.yaml \
+        --wait --timeout=10m
+
+    if gum confirm "Set up Keycloak authentication with OAuth2 proxy?"; then
+        export DAGSTER_HOST="${DAGSTER_HOST}"
+        just setup-oauth2-proxy
+    else
+        echo "Access Dagster at: https://${DAGSTER_HOST}"
+        echo "Post-installation notes:"
+        echo "   • Run 'just setup-oauth2-proxy' later to enable Keycloak authentication"
+    fi
+
+# Uninstall Dagster (complete removal)
+uninstall delete-db='true':
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling Dagster..."
+    just remove-oauth2-proxy
+    helm uninstall dagster -n ${DAGSTER_NAMESPACE} --ignore-not-found
+    just delete-oauth-secret
+    just delete-database-secret
+    just delete-minio-secret
+    just delete-pvc-storage
+    just delete-namespace
+    if [ "{{ delete-db }}" = "true" ]; then
+        just postgres::delete-db dagster
+    fi
+    # Clean up Keycloak client
+    just keycloak::delete-client ${KEYCLOAK_REALM} dagster || true
+    echo "Dagster uninstalled"
+
+# Clean up database and secrets
+cleanup:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete the Dagster database and all secrets."
+    if gum confirm "Are you sure you want to proceed?"; then
+        echo "Cleaning up Dagster resources..."
+        just postgres::delete-db dagster || true
+        just vault::delete dagster/database || true
+        just vault::delete dagster/oauth || true
+        just vault::delete dagster/minio || true
+        just keycloak::delete-client ${KEYCLOAK_REALM} dagster || true
+        echo "Cleanup completed"
+    else
+        echo "Cleanup cancelled"
+    fi

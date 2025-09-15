@@ -10,6 +10,7 @@ mod airbyte
 mod airflow
 mod ch-ui
 mod clickhouse
+mod dagster
 mod datahub
 mod env
 mod external-secrets

@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dagster-user-code-pvc
+  namespace: {{ .Env.DAGSTER_NAMESPACE }}
+spec:
+  {{- if .Env.LONGHORN_AVAILABLE }}
+  accessModes:
+    - ReadWriteMany  # Longhorn supports RWX
+  {{- else }}
+  accessModes:
+    - ReadWriteOnce  # Fallback to RWO
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Env.DAGSTER_CODE_STORAGE_SIZE }}
+  {{- if .Env.LONGHORN_AVAILABLE }}
+  storageClassName: longhorn
+  {{- end }}
