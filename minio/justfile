@@ -223,6 +223,31 @@ get-user-credentials user='':
         exit 1
     fi
 
+# Grant policy to user for specific operations
+grant-policy user='' policy='readwrite':
+    #!/bin/bash
+    set -euo pipefail
+    USER="{{ user }}"
+    POLICY="{{ policy }}"
+
+    while [ -z "${USER}" ]; do
+        USER=$(gum input --prompt="Username: " --width=100 --placeholder="e.g., dagster")
+    done
+
+    echo "Granting ${POLICY} policy to user ${USER}..."
+
+    ROOT_USER=$(just root-username)
+    ROOT_PASSWORD=$(just root-password)
+
+    # Get the MinIO pod name dynamically
+    MINIO_POD=$(kubectl get pods -n ${MINIO_NAMESPACE} -l app.kubernetes.io/name=minio -o jsonpath='{.items[0].metadata.name}')
+
+    kubectl -n ${MINIO_NAMESPACE} exec ${MINIO_POD} -- \
+        bash -c "mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD} && \
+        mc admin policy attach local ${POLICY} --user=${USER}"
+
+    echo "✅ Policy ${POLICY} granted to user ${USER}"
+
 # Check if a bucket exists (returns exit code 0 if exists, 1 if not)
 [no-exit-message]
 bucket-exists bucket:
