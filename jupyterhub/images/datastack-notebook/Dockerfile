@@ -80,10 +80,10 @@ RUN mamba install --yes \
     'chromadb' \
     'clickhouse-connect' \
     'csvkit' \
+    'dagster' \
     'dalex' \
     'datafusion' \
     'dbt' \
-    'dlt' \
     'duckdb' \
     'faiss' \
     'gitpython' \
@@ -105,7 +105,6 @@ RUN mamba install --yes \
     'langchain-mistralai' \
     'langchain-mongodb' \
     'langchain-nomic' \
-    'langchain-openai' \
     'langchain-prompty' \
     'langchain-qdrant' \
     'langchain-robocorp' \
@@ -139,41 +138,38 @@ RUN mamba install --yes \
 # RUN pip install pyspark[connect,ml,mllib,pandas-on-spark,sql]==4.0.0.dev2
 # RUN pip install pyspark[connect,ml,mllib,pandas-on-spark,sql]==3.5.4
 
-RUN pip install \
+# URL to use for pip downloads
+ARG pip_repository_url="https://pypi.org/simple/"
+
+RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_repository_url}" \
     agno \
-    apache-airflow \
-    apache-airflow-client \
+    dagster-dlt \
     fastembed \
     feature-engine \
-    jupyter-ai \
-    jupyter-ai-magics[all] \
     kreuzberg \
     langfuse \
-    langchain-huggingface \
-    langchain-perplexity \
     pydantic-ai \
     ragas \
     smolagents \
     tavily-python \
     tweet-preprocessor
 
+RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_repository_url}" \
+    'dlt[clickhouse,databricks,deltalake,dremio,duckdb,filesystem,parquet,postgres,pyiceberg,qdrant,redshift,s3,snowflake,sql-database,sqlalchemy,workspace]'
+
 # Install PyTorch with pip (https://pytorch.org/get-started/locally/)
 # langchain-openai must be updated to avoid pydantic v2 error
 # https://github.com/run-llama/llama_index/issues/16540https://github.com/run-llama/llama_index/issues/16540
 # hadolint ignore=DL3013
-RUN pip install --no-cache-dir --index-url 'https://download.pytorch.org/whl/cpu' \
-    'torch' \
-    'torchaudio' \
-    'torchvision' && \
-    pip install --upgrade langchain-openai && \
-    fix-permissions "${CONDA_DIR}" && \
-    fix-permissions "/home/${NB_USER}"
+RUN pip install --no-cache-dir --index-url 'https://download.pytorch.org/whl/cpu' --upgrade \
+    langchain-openai \
+    torch \
+    torchaudio \
+    torchvision
 
 # Install buunstack package
 COPY *.whl /opt/
-RUN pip install /opt/*.whl && \
-    fix-permissions "${CONDA_DIR}" && \
-    fix-permissions "/home/${NB_USER}"
+RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_repository_url}" /opt/*.whl
 
 WORKDIR "${HOME}"
 EXPOSE 4040
