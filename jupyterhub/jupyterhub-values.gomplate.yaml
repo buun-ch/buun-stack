@@ -243,6 +243,15 @@ singleuser:
         ports:
           - port: 8080
             protocol: TCP
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: minio
+        ports:
+          - port: 9000
+            protocol: TCP
+          - port: 9001
+            protocol: TCP
       # Allow DNS resolution
       - to:
         - ipBlock:
