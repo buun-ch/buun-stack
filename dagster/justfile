@@ -148,6 +148,43 @@ delete-oauth-secret:
     @kubectl delete secret dagster-oauth-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
     @kubectl delete externalsecret dagster-oauth-external-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
 
+# Create environment variables secret example (customize as needed)
+create-env-secrets-example:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Creating Dagster environment secrets example..."
+    echo "This is an example - customize the environment variables as needed"
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Creating ExternalSecret using template..."
+        echo "Edit dagster-env-external-secret.gomplate.yaml to customize environment variables"
+        kubectl delete externalsecret dagster-env-external-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+        kubectl delete secret dagster-env-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+        gomplate -f dagster-env-external-secret.gomplate.yaml -o dagster-env-external-secret.yaml
+        kubectl apply -f dagster-env-external-secret.yaml
+        echo "Waiting for environment secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/dagster-env-external-secret \
+            -n ${DAGSTER_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        POSTGRES_USER="buun"
+        POSTGRES_PASSWORD="buunpass"
+        kubectl delete secret dagster-env-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+        kubectl create secret generic dagster-env-secret -n ${DAGSTER_NAMESPACE} \
+            --from-literal=POSTGRES_USER="$POSTGRES_USER" \
+            --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+        # Add more environment variables here:
+        # --from-literal=AWS_ACCESS_KEY_ID="your_value" \
+        # --from-literal=AWS_SECRET_ACCESS_KEY="your_value"
+        echo "Environment secret created directly in Kubernetes"
+    fi
+    echo "Example environment secrets created successfully"
+    echo "Customize the environment variables in this recipe as needed for your project"
+
+# Delete environment secrets
+delete-env-secrets:
+    @kubectl delete secret dagster-env-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret dagster-env-external-secret -n ${DAGSTER_NAMESPACE} --ignore-not-found
+
 # Setup MinIO storage for Dagster
 setup-minio-storage:
     #!/bin/bash
@@ -566,6 +603,15 @@ install:
         just setup-pvc-storage
     fi
     just setup-user-code-pvc
+
+    export DAGSTER_ENV_SECRETS_EXIST="false"
+    if kubectl get secret dagster-env-secret -n ${DAGSTER_NAMESPACE} &>/dev/null; then
+        echo "Environment secrets found - will include in deployment"
+        export DAGSTER_ENV_SECRETS_EXIST="true"
+    else
+        echo "No environment secrets found - use 'just dagster::create-env-secrets-example' to create them if needed"
+        export DAGSTER_ENV_SECRETS_EXIST="false"
+    fi
 
     just add-helm-repo
     gomplate -f dagster-values.gomplate.yaml -o dagster-values.yaml

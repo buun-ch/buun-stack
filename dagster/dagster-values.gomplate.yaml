@@ -45,6 +45,11 @@ dagsterWebserver:
       persistentVolumeClaim:
         claimName: dagster-user-code-pvc
 
+  {{- if eq (.Env.DAGSTER_ENV_SECRETS_EXIST | default "false") "true" }}
+  envSecrets:
+    - name: dagster-env-secret
+  {{- end }}
+
   workspace:
     enabled: true
     servers: []
@@ -74,6 +79,11 @@ dagsterDaemon:
       persistentVolumeClaim:
         claimName: dagster-user-code-pvc
 
+  {{- if eq (.Env.DAGSTER_ENV_SECRETS_EXIST | default "false") "true" }}
+  envSecrets:
+    - name: dagster-env-secret
+  {{- end }}
+
   env:
     - name: DAGSTER_HOME
       value: /opt/dagster/dagster_home
@@ -99,14 +109,14 @@ runLauncher:
         - name: user-code
           persistentVolumeClaim:
             claimName: dagster-user-code-pvc
-      {{- if eq (.Env.DAGSTER_STORAGE_TYPE | default "local") "minio" }}
       envSecrets:
         - name: dagster-database-secret
+        {{- if eq (.Env.DAGSTER_STORAGE_TYPE | default "local") "minio" }}
         - name: dagster-minio-secret
-      {{- else }}
-      envSecrets:
-        - name: dagster-database-secret
-      {{- end }}
+        {{- end }}
+        {{- if eq (.Env.DAGSTER_ENV_SECRETS_EXIST | default "false") "true" }}
+        - name: dagster-env-secret
+        {{- end }}
 
 postgresql:
   enabled: false
