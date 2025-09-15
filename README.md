@@ -16,7 +16,7 @@ A Kubernetes development stack for self-hosted environments, designed to run on 
 - **Data Catalog**: [DataHub](https://datahubproject.io/) for metadata management and data discovery
 - **Database**: [PostgreSQL](https://www.postgresql.org/) cluster
 - **Analytics Engine/Database**: [ClickHouse](https://clickhouse.com/) for high-performance analytics and data warehousing
-- **Data Integration**: [Airbyte](https://airbyte.com/) for ELT data pipelines and ingestion
+- **Data Orchestration**: [Dagster](https://dagster.io/) for modern data pipelines and asset management
 - **Workflow Orchestration**: [Apache Airflow](https://airflow.apache.org/) for data pipeline automation and task scheduling
 - **Authentication Proxy**: [OAuth2 Proxy](https://oauth2-proxy.github.io/oauth2-proxy/) for adding Keycloak authentication to any application
 - **Remote Access**: [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) for secure internet connectivity
@@ -233,47 +233,67 @@ just airflow::create-api-user <username> <role>
 
 Access Airflow at `https://airflow.yourdomain.com` and authenticate via Keycloak.
 
-### Airbyte
+### Dagster
 
-Open-source data integration platform for building ELT pipelines:
+Modern data orchestration platform for building data pipelines and managing data assets:
 
-- **600+ Connectors**: Pre-built connectors for databases, APIs, files, and SaaS applications
-- **Change Data Capture (CDC)**: Real-time data replication with PostgreSQL logical replication
-- **Schema Management**: Automatic schema detection and evolution handling
-- **Incremental Sync**: Efficient data synchronization with deduplication
-- **Storage Options**: Flexible storage with MinIO (S3-compatible) or local persistent volumes
+- **Asset-Centric Development**: Define data assets with clear lineage and dependencies
+- **Dynamic Pipeline Deployment**: Deploy projects directly from local development environments
+- **Integrated Development**: Shared storage with PVC-based project deployment
 - **OAuth2 Authentication**: Secure access through Keycloak via OAuth2 Proxy
+- **Python-First**: Native Python development with comprehensive SDK
 
 Installation:
 
 ```bash
-just airbyte::install
+just dagster::install
 ```
 
-**PostgreSQL CDC Setup**: Enable Change Data Capture for real-time data replication:
+**Project Development**: Deploy `dagster project scaffold` projects directly to Dagster:
 
 ```bash
-# Setup CDC with user tables only (recommended)
-just postgres::setup-cdc <database> <slot_name> <publication_name> <username>
+# Create a new project locally
+dagster project scaffold my-project
 
-# Example for database 'mydb' with user 'etl_user'
-just postgres::setup-cdc mydb airbyte_slot airbyte_pub etl_user
+# Deploy to Dagster cluster
+just dagster::deploy-project my-project
+
+# Remove project when done
+just dagster::remove-project my-project
 ```
 
 **Storage Configuration**:
 
-- **MinIO**: S3-compatible object storage for scalable data staging
-- **Local**: Persistent volumes with automatic Longhorn RWX detection
+- **MinIO**: S3-compatible object storage for compute logs and staging
+- **Local**: Persistent volumes with automatic Longhorn RWX detection for shared development
 
-**Authentication**: Airbyte OSS uses OAuth2 Proxy for Keycloak integration:
+**Custom Dependencies**: For projects requiring additional Python packages:
 
-- During installation, optionally enable OAuth2 authentication
+```bash
+# Build custom image with dependencies
+export DAGSTER_CONTAINER_IMAGE=myregistry/dagster-custom
+export DAGSTER_CONTAINER_TAG=latest
+just dagster::build-container-image
+just dagster::push-container-image
+just dagster::upgrade
+```
+
+**Project Structure**: Projects must follow naming conventions:
+
+- Directory names: Use underscores only (e.g., `my_project`, not `my-project`)
+- Python modules: Follow standard Python naming (snake_case)
+
+**Authentication**: Dagster uses OAuth2 Proxy for Keycloak integration:
+
+- During installation, OAuth2 authentication is automatically configured
 - Access control through Keycloak groups and roles
-- **Note**: All authenticated users share the same internal Airbyte account (OSS limitation)
+- **Note**: All authenticated users share the same Dagster instance and workspace
 
-> **⚠️ Multi-user Limitation**: Airbyte OSS does not support individual user accounts or role-based permissions within the application. All users authenticated through Keycloak will share the same internal workspace and have access to all connections and configurations. Use naming conventions and team coordination for shared usage.
+> **⚠️ Multi-user Limitation**: Dagster OSS does not support individual user workspaces or role-based permissions within the application. All users authenticated through Keycloak will share the same Dagster instance and have access to all assets, jobs, and configurations. Use naming conventions and team coordination for shared usage.
+>
+> **💡 Development Workflow**: Create projects locally with `dagster project scaffold`, develop with local dependencies, then deploy to the cluster for execution. The shared PVC allows immediate access to deployed code.
 
-Access Airbyte at `https://airbyte.yourdomain.com` and authenticate via Keycloak (if OAuth2 is enabled).
+Access Dagster at `https://dagster.yourdomain.com` and authenticate via Keycloak.
 
 ## Common Operations
 
