@@ -453,9 +453,23 @@ deploy-project project_dir='':
     # Create directory if it doesn't exist
     kubectl exec "$DAGSTER_POD" -n ${DAGSTER_NAMESPACE} -- mkdir -p "/opt/dagster/user-code/${PROJECT_NAME}" 2>/dev/null || true
 
-    # Copy project files
-    echo "Copying project files to shared PVC..."
-    kubectl cp "${PROJECT_DIR}/." "${DAGSTER_NAMESPACE}/${DAGSTER_POD}:/opt/dagster/user-code/${PROJECT_NAME}/"
+    # Copy project files (excluding .venv, __pycache__, and other unnecessary files)
+    echo "Copying project files to shared PVC (excluding .venv, __pycache__, etc.)..."
+
+    # Create a tar archive excluding unnecessary files and directories
+    tar -czf - \
+        -C "${PROJECT_DIR}" \
+        --exclude='.venv' \
+        --exclude='__pycache__' \
+        --exclude='*.pyc' \
+        --exclude='.pytest_cache' \
+        --exclude='.mypy_cache' \
+        --exclude='.ruff_cache' \
+        --exclude='*.egg-info' \
+        --exclude='.git' \
+        --exclude='dist' \
+        --exclude='build' \
+        . | kubectl exec -i "$DAGSTER_POD" -n ${DAGSTER_NAMESPACE} -- tar -xzf - -C "/opt/dagster/user-code/${PROJECT_NAME}/"
 
     # Determine the correct working directory (check if src directory exists)
     WORKING_DIR="/opt/dagster/user-code/${PROJECT_NAME}"
