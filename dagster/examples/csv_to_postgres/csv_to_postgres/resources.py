@@ -2,6 +2,7 @@ import os
 from typing import Any, Dict
 
 import dlt
+import duckdb
 from dagster import ConfigurableResource, get_dagster_logger
 from dlt.common.schema.typing import TWriteDispositionConfig
 from dlt.sources.filesystem import readers
@@ -62,11 +63,75 @@ class DltResource(ConfigurableResource):
 
         return csv_reader
 
+    def table_exists_and_has_data(self, table_name: str) -> bool:
+        """Check if table exists and has data using DuckDB PostgreSQL scanner."""
+        logger = get_dagster_logger()
+        conn: duckdb.DuckDBPyConnection | None = None
+
+        try:
+            # Get PostgreSQL connection details
+            postgres_url = os.getenv("POSTGRES_URL", "")
+
+            # Parse PostgreSQL URL to extract components
+            # Format: postgresql://user:password@host:port/database
+            url_parts = postgres_url.replace("postgresql://", "").split("/")
+            auth_host = url_parts[0]
+
+            if "@" in auth_host:
+                auth, host_port = auth_host.split("@")
+                if ":" in auth:
+                    user, password = auth.split(":", 1)
+                else:
+                    user, password = auth, ""
+            else:
+                host_port = auth_host
+                user, password = "", ""
+
+            if ":" in host_port:
+                host, port = host_port.rsplit(":", 1)
+            else:
+                host, port = host_port, "5432"
+
+            # Create DuckDB connection and install/load postgres scanner
+            conn = duckdb.connect()
+            conn.execute("INSTALL postgres_scanner")
+            conn.execute("LOAD postgres_scanner")
+
+            # Attach PostgreSQL database
+            attach_cmd = f"""
+            ATTACH 'host={host} port={port} dbname={self.dataset_name} user={user} password={password}' AS postgres_db (TYPE postgres)
+            """
+            conn.execute(attach_cmd)
+
+            # Check if table exists and has data
+            query = f"""
+            SELECT COUNT(*) as row_count
+            FROM postgres_db.{self.dataset_name}.{table_name}
+            LIMIT 1
+            """
+
+            result = conn.execute(query).fetchone()
+            row_count = result[0] if result else 0
+
+            logger.info(f"Table {table_name} has {row_count} rows")
+            return row_count > 0
+
+        except Exception as e:
+            logger.info(f"Table {table_name} does not exist or is empty: {e}")
+            return False
+        finally:
+            try:
+                if conn:
+                  conn.close()
+            except Exception:
+                pass
+
     def run_pipeline(
         self,
         resource_data,
         table_name: str,
         write_disposition: TWriteDispositionConfig = "replace",
+        primary_key: str = "",
     ) -> Dict[str, Any]:
         """Run dlt pipeline with given resource data."""
         logger = get_dagster_logger()

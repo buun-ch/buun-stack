@@ -11,14 +11,28 @@ def movies_pipeline(
 
     context.log.info("Starting movies pipeline...")
 
+    # Check if table already exists and has data
+    table_exists = dlt.table_exists_and_has_data("movies")
+    if table_exists:
+        context.log.info("Movies table already exists with data, skipping import")
+        return MaterializeResult(
+            metadata={
+                "status": MetadataValue.text("skipped"),
+                "reason": MetadataValue.text("table already exists with data"),
+            }
+        )
+
     # Read movies CSV using dlt filesystem readers
     context.log.info("Reading movies.csv from MinIO...")
     movies_data = dlt.read_csv_from_s3(bucket="movie-lens", file_glob="movies.csv")
 
-    # Run dlt pipeline
-    context.log.info("Loading data to PostgreSQL...")
+    # Set primary key for movies table
+    movies_data.apply_hints(primary_key="movieId")
+
     result = dlt.run_pipeline(
-        movies_data, table_name="movies", write_disposition="replace"
+        movies_data,
+        table_name="movies",
+        write_disposition="replace",
     )
 
     context.log.info(f"Movies pipeline completed: {result}")
@@ -44,10 +58,22 @@ def ratings_pipeline(
 ) -> MaterializeResult:
     """Load ratings CSV from MinIO to PostgreSQL using dlt."""
 
+    # Check if table already exists and has data
+    if dlt.table_exists_and_has_data("ratings"):
+        context.log.info("Ratings table already exists with data, skipping import")
+        return MaterializeResult(
+            metadata={
+                "status": MetadataValue.text("skipped"),
+                "reason": MetadataValue.text("table already exists with data"),
+            }
+        )
+
     # Read ratings CSV using dlt filesystem readers
     ratings_data = dlt.read_csv_from_s3(bucket="movie-lens", file_glob="ratings.csv")
 
-    # Run dlt pipeline
+    # Set composite primary key for ratings table
+    ratings_data.apply_hints(primary_key=["userId", "movieId"])
+
     result = dlt.run_pipeline(
         ratings_data, table_name="ratings", write_disposition="replace"
     )
@@ -75,10 +101,22 @@ def tags_pipeline(
 ) -> MaterializeResult:
     """Load tags CSV from MinIO to PostgreSQL using dlt."""
 
+    # Check if table already exists and has data
+    if dlt.table_exists_and_has_data("tags"):
+        context.log.info("Tags table already exists with data, skipping import")
+        return MaterializeResult(
+            metadata={
+                "status": MetadataValue.text("skipped"),
+                "reason": MetadataValue.text("table already exists with data"),
+            }
+        )
+
     # Read tags CSV using dlt filesystem readers
     tags_data = dlt.read_csv_from_s3(bucket="movie-lens", file_glob="tags.csv")
 
-    # Run dlt pipeline
+    # Set composite primary key for tags table
+    tags_data.apply_hints(primary_key=["userId", "movieId", "timestamp"])
+
     result = dlt.run_pipeline(tags_data, table_name="tags", write_disposition="replace")
 
     context.log.info(f"Tags pipeline completed: {result}")
