@@ -28,17 +28,18 @@ class DltResource(ConfigurableResource):
         # Enable detailed logging for dlt
         os.environ["DLT_LOG_LEVEL"] = "INFO"
 
-    def create_pipeline(self):
-        """Create dlt pipeline."""
-        import uuid
-
+    def create_pipeline(self, table_name: str):
+        """Create dlt pipeline with optional table-specific name."""
         self.setup_environment()
 
-        # Use a unique pipeline name to avoid conflicts
-        unique_pipeline_name = f"{self.pipeline_name}_{uuid.uuid4().hex[:8]}"
+        # Use table-specific pipeline name if provided, otherwise use base name
+        if table_name:
+            pipeline_name = f"{self.pipeline_name}_{table_name}"
+        else:
+            pipeline_name = self.pipeline_name
 
         return dlt.pipeline(
-            pipeline_name=unique_pipeline_name,
+            pipeline_name=pipeline_name,
             destination=self.destination,
             dataset_name=self.dataset_name,
         )
@@ -70,9 +71,12 @@ class DltResource(ConfigurableResource):
         """Run dlt pipeline with given resource data."""
         logger = get_dagster_logger()
 
-        pipeline = self.create_pipeline()
+        # Create pipeline with table-specific name
+        pipeline = self.create_pipeline(table_name=table_name)
 
-        logger.info(f"Running pipeline for table {table_name}")
+        logger.info(
+            f"Running pipeline '{pipeline.pipeline_name}' for table {table_name}"
+        )
 
         # Configure pipeline for progress tracking
         pipeline.config.progress = "log"  # Enables progress logging

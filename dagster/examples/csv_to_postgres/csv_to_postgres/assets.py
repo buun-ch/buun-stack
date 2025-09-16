@@ -104,25 +104,46 @@ def movielens_summary(
 ) -> MaterializeResult:
     """Generate summary of all loaded MovieLens data."""
 
-    # Get pipeline to access dlt info
-    pipeline = dlt.create_pipeline()
+    context.log.info("Generating summary of MovieLens dataset...")
 
-    # Get schema info
-    schema = pipeline.default_schema
-    tables = list(schema.tables.keys())
+    # Try to get schema from one of the existing pipelines
+    pipeline_names = ["movies", "ratings", "tags"]
+    schema_info = {}
+    tables_found = []
 
-    context.log.info(f"MovieLens dataset loaded with tables: {tables}")
+    for table_name in pipeline_names:
+        try:
+            # Create pipeline with the same name used in previous assets
+            pipeline = dlt.create_pipeline(table_name=table_name)
 
-    # Calculate basic metrics
-    table_count = len([t for t in tables if t in ["movies", "ratings", "tags"]])
+            # Try to get schema if it exists
+            if pipeline.default_schema_name in pipeline.schemas:
+                schema = pipeline.schemas[pipeline.default_schema_name]
+                context.log.info(
+                    f"Found schema for pipeline '{pipeline.pipeline_name}'"
+                )
+                schema_info[table_name] = {
+                    "pipeline": pipeline.pipeline_name,
+                    "schema_version": schema.version,
+                }
+                tables_found.extend(
+                    [t for t in schema.tables.keys() if t == table_name]
+                )
+        except Exception as e:
+            context.log.debug(f"Could not get schema for {table_name}: {e}")
+
+    context.log.info(
+        f"Summary: Found {len(tables_found)} tables from {len(schema_info)} pipelines"
+    )
 
     return MaterializeResult(
         metadata={
-            "pipeline_name": MetadataValue.text(dlt.pipeline_name),
+            "base_pipeline_name": MetadataValue.text(dlt.pipeline_name),
             "dataset_name": MetadataValue.text(dlt.dataset_name),
             "destination": MetadataValue.text(dlt.destination),
-            "schema_version": MetadataValue.int(schema.version if schema else 0),
-            "tables": MetadataValue.json(tables),
-            "movielens_tables": MetadataValue.int(table_count),
+            "pipelines_checked": MetadataValue.json(list(schema_info.keys())),
+            "tables_found": MetadataValue.json(tables_found),
+            "movielens_tables_count": MetadataValue.int(len(tables_found)),
+            "schema_info": MetadataValue.json(schema_info),
         }
     )
