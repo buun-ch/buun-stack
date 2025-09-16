@@ -9,6 +9,7 @@ export AIRFLOW_DAGS_STORAGE_TYPE := env("AIRFLOW_DAGS_STORAGE_TYPE", "")
 export AIRFLOW_NFS_IP := env("AIRFLOW_NFS_IP", "")
 export AIRFLOW_NFS_PATH := env("AIRFLOW_NFS_PATH", "")
 export AIRFLOW_DAGS_STORAGE_SIZE := env("AIRFLOW_DAGS_STORAGE_SIZE", "10Gi")
+export AIRFLOW_EXTRA_PACKAGES := env("AIRFLOW_EXTRA_PACKAGES", "dlt[duckdb,filesystem,postgres,s3]>=1.12.1")
 
 [private]
 default:
@@ -27,22 +28,6 @@ remove-helm-repo:
 create-namespace:
     @kubectl get namespace ${AIRFLOW_NAMESPACE} &>/dev/null || \
         kubectl create namespace ${AIRFLOW_NAMESPACE}
-
-# Delete Airflow namespace
-delete-namespace:
-    #!/bin/bash
-    set -euo pipefail
-    # First try normal deletion
-    kubectl delete namespace ${AIRFLOW_NAMESPACE} --ignore-not-found --timeout=30s || true
-
-    # If namespace still exists in Terminating state, force remove
-    if kubectl get namespace ${AIRFLOW_NAMESPACE} 2>/dev/null | grep -q Terminating; then
-        echo "Namespace stuck in Terminating, forcing deletion..."
-        # Remove finalizers
-        kubectl patch namespace ${AIRFLOW_NAMESPACE} -p '{"metadata":{"finalizers":[]}}' --type=merge || true
-        # Force delete the namespace
-        kubectl delete namespace ${AIRFLOW_NAMESPACE} --force --grace-period=0 || true
-    fi
 
 # Setup database for Airflow
 setup-database:
@@ -107,6 +92,44 @@ delete-database-secret:
     @kubectl delete secret airflow-metadata-connection -n ${AIRFLOW_NAMESPACE} --ignore-not-found
     @kubectl delete secret airflow-database-secret -n ${AIRFLOW_NAMESPACE} --ignore-not-found
     @kubectl delete externalsecret airflow-database-external-secret -n ${AIRFLOW_NAMESPACE} --ignore-not-found
+
+# Create environment variables secret example (customize as needed)
+create-env-secrets-example:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Creating Airflow environment secrets example..."
+    echo "This is an example - customize the environment variables as needed"
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Creating ExternalSecret using template..."
+        echo "Edit airflow-env-external-secret.gomplate.yaml to customize environment variables"
+        kubectl delete externalsecret airflow-env-external-secret -n ${AIRFLOW_NAMESPACE} --ignore-not-found
+        kubectl delete secret airflow-env-secret -n ${AIRFLOW_NAMESPACE} --ignore-not-found
+        gomplate -f airflow-env-external-secret.gomplate.yaml -o airflow-env-external-secret.yaml
+        kubectl apply -f airflow-env-external-secret.yaml
+        echo "Waiting for environment secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/airflow-env-external-secret \
+            -n ${AIRFLOW_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        # Example credentials - customize as needed
+        MINIO_ACCESS_KEY="minio"
+        MINIO_SECRET_KEY="minio123"
+        kubectl delete secret airflow-env-secret -n ${AIRFLOW_NAMESPACE} --ignore-not-found
+        kubectl create secret generic airflow-env-secret -n ${AIRFLOW_NAMESPACE} \
+            --from-literal=POSTGRES_USER="$POSTGRES_USER" \
+            --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+        # Add more environment variables here:
+        # --from-literal=AWS_ACCESS_KEY_ID="your_value" \
+        # --from-literal=AWS_SECRET_ACCESS_KEY="your_value"
+        echo "Environment secret created directly in Kubernetes"
+    fi
+    echo "Example environment secrets created successfully"
+    echo "Customize the environment variables in this recipe as needed for your project"
+
+# Delete environment secrets
+delete-env-secrets:
+    @kubectl delete secret airflow-env-secret -n ${AIRFLOW_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret airflow-env-external-secret -n ${AIRFLOW_NAMESPACE} --ignore-not-found
 
 # Create OAuth client in Keycloak for Airflow authentication
 create-oauth-client:
@@ -280,6 +303,15 @@ install:
     kubectl create configmap airflow-api-server-config -n ${AIRFLOW_NAMESPACE} \
         --from-file=webserver_config.py=webserver_config.py
 
+    export AIRFLOW_ENV_SECRETS_EXIST="false"
+    if kubectl get secret airflow-env-secret -n ${AIRFLOW_NAMESPACE} &>/dev/null; then
+        echo "Environment secrets found - will include in deployment"
+        export AIRFLOW_ENV_SECRETS_EXIST="true"
+    else
+        echo "No environment secrets found - use 'just airflow::create-env-secrets-example' to create them if needed"
+        export AIRFLOW_ENV_SECRETS_EXIST="false"
+    fi
+
     AIRFLOW_WEBSERVER_SECRET_KEY=$(just utils::random-password) \
         gomplate -f airflow-values.gomplate.yaml -o airflow-values.yaml
     helm upgrade --install airflow apache-airflow/airflow \
@@ -325,7 +357,6 @@ uninstall delete-db='true':
 
     just delete-database-secret
     just delete-oauth-secret
-    just delete-namespace
     if [ "{{ delete-db }}" = "true" ]; then
         just postgres::delete-db airflow
     fi
@@ -449,6 +480,96 @@ delete-dags-storage:
     echo "Deleting DAG storage resources..."
     kubectl delete pvc airflow-dags-pvc -n ${AIRFLOW_NAMESPACE} --ignore-not-found
     echo "✅ DAG storage deleted"
+
+# View DAG import error logs
+logs-dag-errors dag_file='':
+    #!/bin/bash
+    set -euo pipefail
+    DAG_PROCESSOR_POD=$(kubectl get pods -n ${AIRFLOW_NAMESPACE} -l component=dag-processor -o jsonpath='{.items[0].metadata.name}')
+    if [ -z "${DAG_PROCESSOR_POD}" ]; then
+        echo "❌ DAG processor pod not found"
+        exit 1
+    fi
+
+    LOG_DATE=$(date +%Y-%m-%d)
+    LOG_DIR="/opt/airflow/logs/dag_processor/${LOG_DATE}/dags-folder"
+
+    if [ -n "{{dag_file}}" ]; then
+        # Show specific DAG file errors
+        LOG_FILE="${LOG_DIR}/{{dag_file}}.log"
+        echo "📋 Showing errors for DAG file: {{dag_file}}"
+        echo "📂 Log file: ${LOG_FILE}"
+        echo ""
+        kubectl exec -n ${AIRFLOW_NAMESPACE} ${DAG_PROCESSOR_POD} -c dag-processor -- \
+            cat "${LOG_FILE}" 2>/dev/null | jq -r 'select(.level == "error") | .timestamp + " " + .event + ": " + .error_detail[0].exc_value' || \
+            echo "❌ No error log found for {{dag_file}} or file doesn't exist"
+    else
+        # List all DAG files with errors
+        echo "📋 Available DAG error logs:"
+        echo "📂 Log directory: ${LOG_DIR}"
+        echo ""
+        kubectl exec -n ${AIRFLOW_NAMESPACE} ${DAG_PROCESSOR_POD} -c dag-processor -- \
+            ls -la "${LOG_DIR}" 2>/dev/null || echo "❌ No DAG logs found for today"
+        echo ""
+        echo "💡 Usage: just airflow::logs-dag-errors <dag_file_name>"
+        echo "   Example: just airflow::logs-dag-errors csv_to_postgres_dag.py"
+    fi
+
+# View DAG processor real-time logs
+logs-dag-processor:
+    #!/bin/bash
+    set -euo pipefail
+    DAG_PROCESSOR_POD=$(kubectl get pods -n ${AIRFLOW_NAMESPACE} -l component=dag-processor -o jsonpath='{.items[0].metadata.name}')
+    if [ -z "${DAG_PROCESSOR_POD}" ]; then
+        echo "❌ DAG processor pod not found"
+        exit 1
+    fi
+    echo "📋 Following DAG processor logs..."
+    echo "🔍 Pod: ${DAG_PROCESSOR_POD}"
+    echo ""
+    kubectl logs -n ${AIRFLOW_NAMESPACE} ${DAG_PROCESSOR_POD} -c dag-processor -f
+
+# List all DAG import errors
+logs-import-errors:
+    #!/bin/bash
+    set -euo pipefail
+    DAG_PROCESSOR_POD=$(kubectl get pods -n ${AIRFLOW_NAMESPACE} -l component=dag-processor -o jsonpath='{.items[0].metadata.name}')
+    if [ -z "${DAG_PROCESSOR_POD}" ]; then
+        echo "❌ DAG processor pod not found"
+        exit 1
+    fi
+    echo "📋 Checking DAG import errors..."
+    echo ""
+    kubectl exec -n ${AIRFLOW_NAMESPACE} ${DAG_PROCESSOR_POD} -c dag-processor -- \
+        airflow dags list-import-errors || echo "❌ Failed to list import errors"
+
+# View DAG files in directory
+logs-dag-files:
+    #!/bin/bash
+    set -euo pipefail
+    DAG_PROCESSOR_POD=$(kubectl get pods -n ${AIRFLOW_NAMESPACE} -l component=dag-processor -o jsonpath='{.items[0].metadata.name}')
+    if [ -z "${DAG_PROCESSOR_POD}" ]; then
+        echo "❌ DAG processor pod not found"
+        exit 1
+    fi
+    echo "📋 DAG files in /opt/airflow/dags/:"
+    echo ""
+    kubectl exec -n ${AIRFLOW_NAMESPACE} ${DAG_PROCESSOR_POD} -c dag-processor -- \
+        ls -la /opt/airflow/dags/
+
+# Test DAG file import manually
+logs-test-import dag_file:
+    #!/bin/bash
+    set -euo pipefail
+    DAG_PROCESSOR_POD=$(kubectl get pods -n ${AIRFLOW_NAMESPACE} -l component=dag-processor -o jsonpath='{.items[0].metadata.name}')
+    if [ -z "${DAG_PROCESSOR_POD}" ]; then
+        echo "❌ DAG processor pod not found"
+        exit 1
+    fi
+    echo "🧪 Testing import of DAG file: {{dag_file}}"
+    echo ""
+    kubectl exec -n ${AIRFLOW_NAMESPACE} ${DAG_PROCESSOR_POD} -c dag-processor -- \
+        python /opt/airflow/dags/{{dag_file}}
 
 # Clean up database and secrets
 cleanup:

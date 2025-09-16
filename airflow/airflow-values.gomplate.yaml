@@ -2,7 +2,20 @@ useStandardNaming: true
 
 webserverSecretKey: {{ .Env.AIRFLOW_WEBSERVER_SECRET_KEY }}
 
+{{- if eq (.Env.AIRFLOW_ENV_SECRETS_EXIST | default "false") "true" }}
+# Extra envFrom for all Airflow containers
+extraEnvFrom: |
+  - secretRef:
+      name: airflow-env-secret
+{{- end }}
+
 executor: CeleryExecutor
+
+# Custom Airflow configuration
+config:
+  scheduler:
+    # Scan for new DAG files every 60 seconds instead of 300
+    dag_dir_list_interval: 60
 
 apiServer:
   replicas: 1
@@ -37,6 +50,73 @@ migrateDatabaseJob:
 
 images:
   migrationsWaitTimeout: 180
+
+# Install additional packages using init containers
+workers:
+  extraInitContainers:
+    - name: install-packages
+      image: apache/airflow:3.0.2
+      command:
+        - /bin/bash
+        - -c
+        - |
+          pip install --target /opt/airflow/site-packages "{{ .Env.AIRFLOW_EXTRA_PACKAGES }}"
+      volumeMounts:
+        - name: extra-packages
+          mountPath: /opt/airflow/site-packages
+  extraVolumes:
+    - name: extra-packages
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: extra-packages
+      mountPath: /opt/airflow/site-packages
+  env:
+    - name: PYTHONPATH
+      value: "/opt/airflow/site-packages:$PYTHONPATH"
+
+scheduler:
+  extraInitContainers:
+    - name: install-packages
+      image: apache/airflow:3.0.2
+      command:
+        - /bin/bash
+        - -c
+        - |
+          pip install --target /opt/airflow/site-packages "{{ .Env.AIRFLOW_EXTRA_PACKAGES }}"
+      volumeMounts:
+        - name: extra-packages
+          mountPath: /opt/airflow/site-packages
+  extraVolumes:
+    - name: extra-packages
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: extra-packages
+      mountPath: /opt/airflow/site-packages
+  env:
+    - name: PYTHONPATH
+      value: "/opt/airflow/site-packages:$PYTHONPATH"
+
+dagProcessor:
+  extraInitContainers:
+    - name: install-packages
+      image: apache/airflow:3.0.2
+      command:
+        - /bin/bash
+        - -c
+        - |
+          pip install --target /opt/airflow/site-packages "{{ .Env.AIRFLOW_EXTRA_PACKAGES }}"
+      volumeMounts:
+        - name: extra-packages
+          mountPath: /opt/airflow/site-packages
+  extraVolumes:
+    - name: extra-packages
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: extra-packages
+      mountPath: /opt/airflow/site-packages
+  env:
+    - name: PYTHONPATH
+      value: "/opt/airflow/site-packages:$PYTHONPATH"
 
 flower:
   enabled: false
