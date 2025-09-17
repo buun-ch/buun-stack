@@ -295,22 +295,9 @@ grant db_name='' username='':
     fi
     echo "Granting all privileges on '${DB_NAME}' to ClickHouse user '${USERNAME}'..."
     just exec-sql-admin "GRANT ALL ON ${DB_NAME}.* TO '${USERNAME}';"
+    # Also grant INFORMATION_SCHEMA access for tools like DLT
+    just exec-sql-admin "GRANT SELECT ON INFORMATION_SCHEMA.* TO '${USERNAME}';"
     echo "Privileges granted."
-
-# Grant user access to ClickHouse database (deprecated - use grant instead)
-grant-user username='' database='default':
-    #!/bin/bash
-    set -euo pipefail
-    USERNAME="{{ username }}"
-    while [ -z "${USERNAME}" ]; do
-        USERNAME=$(gum input --prompt="Username: " --width=100)
-    done
-    DATABASE="{{ database }}"
-    while [ -z "${DATABASE}" ]; do
-        DATABASE=$(gum input --prompt="Database: " --width=100)
-    done
-    echo "Granting SELECT permission on '${DATABASE}' to ClickHouse user '${USERNAME}'..."
-    just exec-sql-admin "GRANT ALL ON ${DATABASE}.* TO '${USERNAME}';"
 
 # Revoke all privileges on database from user
 revoke db_name='' username='':
