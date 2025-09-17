@@ -13,9 +13,16 @@ executor: CeleryExecutor
 
 # Custom Airflow configuration
 config:
+  logging:
+    # Enable debug logging for troubleshooting
+    # logging_level: DEBUG
   scheduler:
-    # Scan for new DAG files every 60 seconds instead of 300
-    dag_dir_list_interval: 60
+    # Process DAG files more frequently (30 seconds instead of default 30)
+    min_file_process_interval: 30
+    # Number of processes to parse DAGs in parallel
+    parsing_processes: 2
+    # Scan for new DAG files every 10 seconds instead of 300
+    dag_dir_list_interval: 10
 
 apiServer:
   replicas: 1
@@ -149,11 +156,11 @@ ingress:
         tls:
           enabled: true
 
-# Security contexts for shared file system access
+# Security contexts for shared file system access (compatible with JupyterHub)
 securityContexts:
   pod:
     runAsUser: 1000
     runAsGroup: 0
-    fsGroup: 100
+    fsGroup: 101
   container:
     allowPrivilegeEscalation: false
