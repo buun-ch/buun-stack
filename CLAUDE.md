@@ -190,16 +190,28 @@ When adding new services:
 ### Helm Chart Installation Guidelines
 
 1. **Helm Values Modification**:
-   - ALWAYS check official documentation and values.yaml definitions before modifying Helm values
-   - Understand the chart's structure and available configuration options
-   - Test changes in a safe environment when possible
+   - **MANDATORY**: Read the complete official values.yaml file BEFORE making any changes
+   - **MANDATORY**: Check template files to understand how configuration values are used
+   - **MANDATORY**: Look for existing working examples in the official documentation
+   - **MANDATORY**: Test each configuration change incrementally, not all at once
+   - When external database integration is needed, search for "external", "existing", "secret"
+patterns in values.yaml
+   - Never assume configuration structure - always verify against official sources
+   - If unsure about a configuration, ask the user to provide official documentation links
 
-2. **Resource Creation Consistency**:
+2. **Debugging Approach**:
+   - When Helm deployments fail, ALWAYS check the generated Secret/ConfigMap contents first
+   - Compare expected vs actual configuration values using kubectl describe/get
+   - Check pod logs and environment variables to understand what the application is actually
+receiving
+   - Test database connectivity separately before assuming chart configuration issues
+
+3. **Resource Creation Consistency**:
    - When creating Secret/ExternalSecret/ConfigMap resources, follow patterns from existing modules
    - Maintain consistent naming conventions and label structures
    - Use the same YAML formatting and organization as other modules
 
-3. **Core Component Protection**:
+4. **Core Component Protection**:
    - Keycloak, PostgreSQL, and Vault are core components
    - NEVER restart or reinstall these components without explicit user approval
    - These services are critical to the entire stack's operation
