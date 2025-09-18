@@ -1,0 +1,93 @@
+catalog:
+  image:
+    repository: quay.io/lakekeeper/catalog
+    tag: v0.9.3
+    pullPolicy: IfNotPresent
+
+  replicaCount: 1
+
+  # Configuration using the correct structure
+  config:
+    LAKEKEEPER__OPENID_PROVIDER_URI: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}"
+    LAKEKEEPER__OPENID_AUDIENCE: "lakekeeper"
+    LAKEKEEPER__UI__OPENID_CLIENT_ID: "lakekeeper"
+    LAKEKEEPER__UI__OPENID_SCOPE: "openid profile email"
+
+  # Secret management configuration
+  secrets:
+    backend: "postgres"
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 8080
+
+  # Health probes
+  probes:
+    liveness:
+      enabled: true
+      httpGet:
+        path: /health
+        port: http
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    readiness:
+      enabled: true
+      httpGet:
+        path: /health
+        port: http
+      initialDelaySeconds: 5
+      periodSeconds: 5
+
+  # Resource limits
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+
+  # Database migration configuration
+  dbMigrations:
+    enabled: true
+
+  # Ingress configuration
+  ingress:
+    enabled: true
+    annotations:
+      kubernetes.io/ingress.class: traefik
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    ingressClassName: traefik
+    host: {{ .Env.LAKEKEEPER_HOST }}
+    path: ""
+    tls:
+      enabled: true
+      secretName: lakekeeper-tls
+
+# Authentication configuration
+auth:
+  oauth2:
+    providerUri: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}"
+    audience: "lakekeeper"
+  authz:
+    backend: "allowall"
+
+# PostgreSQL subchart (disabled since we use external)
+postgresql:
+  enabled: false
+
+
+# External database configuration
+externalDatabase:
+  type: postgres
+  host_read: postgres-cluster-rw.postgres
+  host_write: postgres-cluster-rw.postgres
+  port: 5432
+  database: lakekeeper
+  user: lakekeeper
+  userSecret: lakekeeper-database-secret
+  userSecretKey: username
+  passwordSecret: lakekeeper-database-secret
+  passwordSecretKey: password

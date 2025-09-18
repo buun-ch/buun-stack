@@ -1,0 +1,212 @@
+set fallback := true
+
+export LAKEKEEPER_NAMESPACE := env("LAKEKEEPER_NAMESPACE", "lakekeeper")
+export LAKEKEEPER_CHART_VERSION := env("LAKEKEEPER_CHART_VERSION", "0.7.1")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add lakekeeper https://lakekeeper.github.io/lakekeeper-charts/
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove lakekeeper
+
+# Create namespace
+create-namespace:
+    @kubectl get namespace ${LAKEKEEPER_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${LAKEKEEPER_NAMESPACE}
+
+# Setup database for Lakekeeper
+setup-database:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up Lakekeeper database..."
+
+    if just postgres::db-exists lakekeeper &>/dev/null; then
+        echo "Database 'lakekeeper' already exists."
+    else
+        echo "Creating new database 'lakekeeper'..."
+        just postgres::create-db lakekeeper
+    fi
+
+    # Generate password for user creation/update
+    if just postgres::user-exists lakekeeper &>/dev/null; then
+        echo "User 'lakekeeper' already exists."
+        # Check if we can get existing password from Vault/Secret
+        if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            # Try to get existing password from Vault
+            if DB_PASSWORD=$(just vault::get lakekeeper/database password 2>/dev/null); then
+                echo "Using existing password from Vault."
+            else
+                echo "Generating new password and updating Vault..."
+                DB_PASSWORD=$(just utils::random-password)
+                just postgres::change-password lakekeeper "$DB_PASSWORD"
+            fi
+        else
+            # For direct Secret approach, generate new password
+            echo "Generating new password for existing user..."
+            DB_PASSWORD=$(just utils::random-password)
+            just postgres::change-password lakekeeper "$DB_PASSWORD"
+        fi
+    else
+        echo "Creating new user 'lakekeeper'..."
+        DB_PASSWORD=$(just utils::random-password)
+        just postgres::create-user lakekeeper "$DB_PASSWORD"
+    fi
+
+    echo "Ensuring database permissions..."
+    just postgres::grant lakekeeper lakekeeper
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing credentials in Vault and creating ExternalSecret..."
+        just vault::put lakekeeper/database \
+            username=lakekeeper \
+            password="$DB_PASSWORD" \
+            host=postgres-cluster-rw.postgres \
+            port=5432 \
+            database=lakekeeper
+        gomplate -f lakekeeper-database-external-secret.gomplate.yaml -o lakekeeper-database-external-secret.yaml
+        kubectl apply -f lakekeeper-database-external-secret.yaml
+        echo "Waiting for database secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/lakekeeper-database-external-secret \
+            -n ${LAKEKEEPER_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret lakekeeper-database-secret -n ${LAKEKEEPER_NAMESPACE} --ignore-not-found
+        kubectl create secret generic lakekeeper-database-secret -n ${LAKEKEEPER_NAMESPACE} \
+            --from-literal=username=lakekeeper \
+            --from-literal=password="$DB_PASSWORD" \
+            --from-literal=host=postgres-cluster-rw.postgres \
+            --from-literal=port=5432 \
+            --from-literal=database=lakekeeper
+        echo "Database secret created directly in Kubernetes"
+    fi
+    echo "Database setup completed."
+
+# Delete database secret
+delete-database-secret:
+    @kubectl delete secret lakekeeper-database-secret -n ${LAKEKEEPER_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret lakekeeper-database-external-secret -n ${LAKEKEEPER_NAMESPACE} --ignore-not-found
+
+# Create OIDC client in Keycloak for Lakekeeper authentication
+create-oidc-client:
+    #!/bin/bash
+    set -euo pipefail
+    if [ -z "${LAKEKEEPER_HOST:-}" ]; then
+        echo "Error: LAKEKEEPER_HOST environment variable is required"
+        exit 1
+    fi
+    echo "Creating Lakekeeper OAuth client in Keycloak..."
+
+    # Check if client already exists
+    if just keycloak::client-exists ${KEYCLOAK_REALM} lakekeeper &>/dev/null; then
+        echo "Client 'lakekeeper' already exists, skipping creation..."
+        echo "Existing client will preserve roles and mappers"
+    else
+        echo "Creating new public client for PKCE flow..."
+        # Create public client (no client secret) for PKCE flow
+        just keycloak::create-client \
+            ${KEYCLOAK_REALM} \
+            lakekeeper \
+            "https://${LAKEKEEPER_HOST}/ui/callback"
+    fi
+
+    # Add audience mapper to include 'lakekeeper' in JWT audience
+    echo "Adding audience mapper for JWT token..."
+    just keycloak::add-audience-mapper lakekeeper lakekeeper
+
+    echo "OAuth client configured successfully for PKCE authentication"
+
+# Delete OIDC client (for cleanup purposes)
+delete-oidc-client:
+    @just keycloak::delete-client ${KEYCLOAK_REALM} lakekeeper
+
+# Install Lakekeeper
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export LAKEKEEPER_HOST=${LAKEKEEPER_HOST:-}
+    while [ -z "${LAKEKEEPER_HOST}" ]; do
+        LAKEKEEPER_HOST=$(
+            gum input --prompt="Lakekeeper host (FQDN): " --width=100 \
+            --placeholder="e.g., lakekeeper.example.com"
+        )
+    done
+    echo "Installing Lakekeeper..."
+    just create-namespace
+    just setup-database
+    just create-oidc-client
+    just add-helm-repo
+
+    # Helm chart will automatically create the encryption key secret
+
+    gomplate -f lakekeeper-values.gomplate.yaml -o lakekeeper-values.yaml
+
+    # Use --wait=false to avoid circular dependency:
+    # Helm waits for post-install hooks (migration job) to complete,
+    # but migration job can't start until Helm deployment finishes
+    helm upgrade --install lakekeeper lakekeeper/lakekeeper \
+        --version ${LAKEKEEPER_CHART_VERSION} -n ${LAKEKEEPER_NAMESPACE} \
+        --timeout=10m --wait=false \
+        -f lakekeeper-values.yaml
+
+    echo "Waiting for database migration to complete..."
+    kubectl wait --for=condition=complete job/lakekeeper-db-migration-1 \
+        -n ${LAKEKEEPER_NAMESPACE} --timeout=300s
+
+    echo "Waiting for Lakekeeper deployment to be ready..."
+    kubectl wait --for=condition=available deployment/lakekeeper \
+        -n ${LAKEKEEPER_NAMESPACE} --timeout=300s
+
+    echo "Lakekeeper installation completed"
+    echo "Access Lakekeeper at: https://${LAKEKEEPER_HOST}"
+
+# Uninstall Lakekeeper
+uninstall delete-db='true':
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling Lakekeeper..."
+    helm uninstall lakekeeper -n ${LAKEKEEPER_NAMESPACE} --ignore-not-found
+
+    # Force delete stuck resources
+    echo "Checking for stuck resources..."
+    kubectl delete all --all -n ${LAKEKEEPER_NAMESPACE} --force --grace-period=0 2>/dev/null || true
+
+    # Delete PVCs
+    PVCS=$(kubectl get pvc -n ${LAKEKEEPER_NAMESPACE} -o name 2>/dev/null || true)
+    if [ -n "$PVCS" ]; then
+        echo "Deleting PersistentVolumeClaims..."
+        kubectl delete pvc --all -n ${LAKEKEEPER_NAMESPACE} --force --grace-period=0 2>/dev/null || true
+    fi
+
+    just delete-database-secret
+    just delete-oidc-client
+    if [ "{{ delete-db }}" = "true" ]; then
+        just postgres::delete-db lakekeeper
+    fi
+    # Clean up Keycloak client
+    just keycloak::delete-client ${KEYCLOAK_REALM} lakekeeper || true
+    echo "Lakekeeper uninstalled"
+
+# Clean up database and secrets
+cleanup:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete the Lakekeeper database and all secrets."
+    if gum confirm "Are you sure you want to proceed?"; then
+        echo "Cleaning up Lakekeeper resources..."
+        just postgres::delete-db lakekeeper || true
+        just vault::delete lakekeeper/database || true
+        just vault::delete lakekeeper/oauth || true
+        just keycloak::delete-client ${KEYCLOAK_REALM} lakekeeper || true
+        echo "Cleanup completed"
+    else
+        echo "Cleanup cancelled"
+    fi

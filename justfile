@@ -16,6 +16,7 @@ mod external-secrets
 mod keycloak
 mod jupyterhub
 mod k8s
+mod lakekeeper
 mod longhorn
 mod metabase
 mod minio
