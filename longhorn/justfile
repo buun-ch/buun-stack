@@ -103,7 +103,7 @@ oauth2-proxy-uninstall:
     #!/bin/bash
     set -euo pipefail
     echo "Removing OAuth2-Proxy for Longhorn..."
-    just oauth2-proxy::cleanup-for-app longhorn "${LONGHORN_NAMESPACE}"
+    just oauth2-proxy::remove-for-app longhorn "${LONGHORN_NAMESPACE}"
     echo "OAuth2-Proxy removed from Longhorn"
 
 # Setup OAuth2-Proxy for Longhorn
