@@ -9,7 +9,9 @@ export AIRFLOW_DAGS_STORAGE_TYPE := env("AIRFLOW_DAGS_STORAGE_TYPE", "")
 export AIRFLOW_NFS_IP := env("AIRFLOW_NFS_IP", "")
 export AIRFLOW_NFS_PATH := env("AIRFLOW_NFS_PATH", "")
 export AIRFLOW_DAGS_STORAGE_SIZE := env("AIRFLOW_DAGS_STORAGE_SIZE", "10Gi")
-export AIRFLOW_EXTRA_PACKAGES := env("AIRFLOW_EXTRA_PACKAGES", "dlt[duckdb,filesystem,postgres,s3]>=1.12.1")
+export AIRFLOW_EXTRA_PACKAGES := env("AIRFLOW_EXTRA_PACKAGES", "'PyJWT>=2.10' cryptography 'requests>=2.32' 'dlt[duckdb,filesystem,postgres,s3]'")
+
+# ↑ PyJWT, cryptography, and requests are needed for Keycloak OAuth
 
 [private]
 default:
@@ -599,6 +601,51 @@ logs-test-import dag_file:
     echo ""
     kubectl exec -n ${AIRFLOW_NAMESPACE} ${DAG_PROCESSOR_POD} -c dag-processor -- \
         python /opt/airflow/dags/{{ dag_file }}
+
+# Delete user from Airflow database (to force role resync)
+delete-user username='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="{{ username }}"
+
+    # Interactive input if not provided
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username to delete from Airflow: " --width=100)
+    done
+
+    echo "Deleting user '${USERNAME}' from Airflow database..."
+    if gum confirm "This will delete the user from Airflow database. The user will be recreated with current Keycloak roles on next login. Continue?"; then
+        # Get scheduler pod (which has airflow CLI access)
+        SCHEDULER_POD=$(kubectl get pods -n ${AIRFLOW_NAMESPACE} -l component=scheduler -o jsonpath='{.items[0].metadata.name}')
+
+        # Delete user using airflow CLI
+        kubectl exec -n ${AIRFLOW_NAMESPACE} ${SCHEDULER_POD} -- \
+            airflow users delete --username "${USERNAME}" || echo "User '${USERNAME}' not found in Airflow database"
+
+        echo "✅ User '${USERNAME}' deleted from Airflow. They will be recreated with current Keycloak roles on next login."
+    else
+        echo "User deletion cancelled"
+    fi
+
+# Force role sync for all users (delete all OAuth users)
+reset-oauth-users:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete ALL OAuth users from Airflow database."
+    echo "Users will be recreated with current Keycloak roles on next login."
+    if gum confirm "Are you sure you want to proceed?"; then
+        # Get scheduler pod (which has airflow CLI access)
+        SCHEDULER_POD=$(kubectl get pods -n ${AIRFLOW_NAMESPACE} -l component=scheduler -o jsonpath='{.items[0].metadata.name}')
+
+        # List and delete OAuth users (exclude admin users created manually)
+        echo "Deleting OAuth users from Airflow database..."
+        kubectl exec -n ${AIRFLOW_NAMESPACE} ${SCHEDULER_POD} -- \
+            airflow db shell -s "DELETE FROM ab_user WHERE email IS NOT NULL AND username != 'admin';" || true
+
+        echo "✅ All OAuth users deleted. They will be recreated with current Keycloak roles on next login."
+    else
+        echo "Reset cancelled"
+    fi
 
 # Clean up database and secrets
 cleanup:

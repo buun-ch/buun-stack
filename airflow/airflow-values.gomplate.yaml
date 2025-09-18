@@ -67,7 +67,7 @@ workers:
         - /bin/bash
         - -c
         - |
-          pip install --target /opt/airflow/site-packages "{{ .Env.AIRFLOW_EXTRA_PACKAGES }}"
+          pip install --target /opt/airflow/site-packages {{ .Env.AIRFLOW_EXTRA_PACKAGES }}
       volumeMounts:
         - name: extra-packages
           mountPath: /opt/airflow/site-packages
@@ -89,7 +89,7 @@ scheduler:
         - /bin/bash
         - -c
         - |
-          pip install --target /opt/airflow/site-packages "{{ .Env.AIRFLOW_EXTRA_PACKAGES }}"
+          pip install --target /opt/airflow/site-packages {{ .Env.AIRFLOW_EXTRA_PACKAGES }}
       volumeMounts:
         - name: extra-packages
           mountPath: /opt/airflow/site-packages
@@ -111,7 +111,7 @@ dagProcessor:
         - /bin/bash
         - -c
         - |
-          pip install --target /opt/airflow/site-packages "{{ .Env.AIRFLOW_EXTRA_PACKAGES }}"
+          pip install --target /opt/airflow/site-packages {{ .Env.AIRFLOW_EXTRA_PACKAGES }}
       volumeMounts:
         - name: extra-packages
           mountPath: /opt/airflow/site-packages
