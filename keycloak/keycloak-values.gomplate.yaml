@@ -1,3 +1,7 @@
+global:
+  security:
+    allowInsecureImages: true
+
 production: true
 
 # Enable HTTP for health checks in production mode
@@ -30,12 +34,15 @@ tls:
 # Keycloak pod may not start with the default memory limits
 resources:
   limits:
-    memory: 1.5Gi
+    memory: 2Gi
   requests:
-    memory: 1Gi
+    memory: 1.5Gi
 
-# image:
-#   debug: true
+image:
+  registry: docker.io
+  repository: bitnamilegacy/keycloak
+  # tag: 26.0.5-debian-12-r0
+  # debug: true
 
 # logging:
 #   level: DEBUG

@@ -1,5 +1,8 @@
 set fallback := true
 
+# Keycloak Helm chart info:
+# helm show chart oci://registry-1.docker.io/bitnamicharts/keycloak
+
 export KEYCLOAK_NAMESPACE := env("KEYCLOAK_NAMESPACE", "keycloak")
 export KEYCLOAK_CHART_VERSION := env("KEYCLOAK_CHART_VERSION", "25.0.2")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
