@@ -217,12 +217,11 @@ create-client realm client_id redirect_url client_secret='' session_idle='' sess
     dotenvx run -q -f ../.env.local -- tsx ./scripts/create-client.ts
 
 # Add audience mapper to existing client
-add-audience-mapper realm client_id audience:
+add-audience-mapper client_id audience:
     #!/bin/bash
     set -euo pipefail
     export KEYCLOAK_ADMIN_USER=$(just admin-username)
     export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
-    export KEYCLOAK_REALM={{ realm }}
     export KEYCLOAK_CLIENT_ID={{ client_id }}
     export KEYCLOAK_AUDIENCE={{ audience }}
     dotenvx run -q -f ../.env.local -- tsx ./scripts/add-audience-mapper.ts

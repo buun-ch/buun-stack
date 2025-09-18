@@ -17,6 +17,9 @@ const main = async () => {
   const clientId = process.env.KEYCLOAK_CLIENT_ID;
   invariant(clientId, "KEYCLOAK_CLIENT_ID environment variable is required");
 
+  const audience = process.env.KEYCLOAK_AUDIENCE;
+  invariant(audience, "KEYCLOAK_AUDIENCE environment variable is required");
+
   const kcAdminClient = new KcAdminClient({
     baseUrl: `https://${keycloakHost}`,
     realmName: "master",
@@ -40,14 +43,14 @@ const main = async () => {
     const client = clients[0];
     invariant(client.id, "Client ID is not set");
 
-    const mapperName = `aud-mapper-${clientId}`;
+    const mapperName = `aud-mapper-${audience}`;
     const audienceMapper = {
       name: mapperName,
       protocol: "openid-connect",
       protocolMapper: "oidc-audience-mapper",
       config: {
-        "included.client.audience": clientId,
-        "id.token.claim": "true",
+        "included.client.audience": audience,
+        "id.token.claim": "false",
         "access.token.claim": "true",
       },
     };

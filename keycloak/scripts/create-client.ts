@@ -50,24 +50,34 @@ const main = async () => {
       return;
     }
 
+    const isPublicClient = !clientSecret || clientSecret === '';
     const clientConfig: any = {
       clientId: clientId,
       secret: clientSecret,
       enabled: true,
       redirectUris: redirectUris,
-      publicClient: clientSecret && clientSecret !== '' ? false : true,
+      publicClient: isPublicClient,
       directAccessGrantsEnabled: directAccessGrants === 'true',
     };
 
+    // Only set PKCE for public clients
+    if (isPublicClient) {
+      clientConfig.attributes = {
+        'pkce.code.challenge.method': 'S256'
+      };
+      console.log('Setting PKCE Code Challenge Method to S256 for public client');
+    } else {
+      clientConfig.attributes = {};
+      console.log('Creating confidential client without PKCE');
+    }
+
     // Add session timeout settings if provided
     if (sessionIdle && sessionIdle !== '') {
-      clientConfig.attributes = clientConfig.attributes || {};
       clientConfig.attributes['client.session.idle.timeout'] = sessionIdle;
       console.log(`Setting Client Session Idle Timeout: ${sessionIdle}`);
     }
 
     if (sessionMax && sessionMax !== '') {
-      clientConfig.attributes = clientConfig.attributes || {};
       clientConfig.attributes['client.session.max.lifespan'] = sessionMax;
       console.log(`Setting Client Session Max Lifespan: ${sessionMax}`);
     }
