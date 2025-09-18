@@ -3,6 +3,7 @@ set fallback := true
 export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export MINIO_CHART_VERSION := env("MINIO_CHART_VERSION", "5.4.0")
 export MINIO_OIDC_CLIENT_ID := env("MINIO_OIDC_CLIENT_ID", "minio")
+export MINIO_STORAGE_SIZE := env("MINIO_STORAGE_SIZE", "50Gi")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
@@ -64,11 +65,18 @@ create-root-credentials:
 
 # Add Keycloak policy and mapper
 add-keycloak-minio-policy:
-    KEYCLOAK_ADMIN_USER=$(just keycloak::admin-username) \
-        KEYCLOAK_ADMIN_PASSWORD=$(just keycloak::admin-password) \
-        KEYCLOAK_REALM=${KEYCLOAK_REALM} \
-        MINIO_OIDC_CLIENT_ID=${MINIO_OIDC_CLIENT_ID} \
-        dotenvx run -f ../.env.local -- tsx ./scripts/add-minio-policy.ts
+    #!/bin/bash
+    set -euo pipefail
+    POLICY_VALUE="${MINIO_POLICY:-readwrite}"
+    echo "Setting MinIO policy attribute with default value: ${POLICY_VALUE}"
+    just keycloak::add-attribute-mapper \
+        "${MINIO_OIDC_CLIENT_ID}" \
+        "minioPolicy" \
+        "MinIO Policy" \
+        "minioPolicy" \
+        "readwrite,readonly,writeonly" \
+        "${POLICY_VALUE}" \
+        "MinIO Policy"
 
 # Install MinIO
 install:
@@ -139,6 +147,21 @@ create-bucket bucket='':
     kubectl -n ${MINIO_NAMESPACE} exec -it deploy/minio -- \
         bash -c "mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD} && \
         mc mb --ignore-existing local/${bucket}"
+
+# Check if a bucket exists (returns exit code 0 if exists, 1 if not)
+[no-exit-message]
+bucket-exists bucket:
+    #!/bin/bash
+    set -euo pipefail
+    ROOT_USER=$(just root-username)
+    ROOT_PASSWORD=$(just root-password)
+    if kubectl -n ${MINIO_NAMESPACE} exec -it deploy/minio -- \
+        bash -c "mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD} >/dev/null 2>&1 && \
+        mc ls local/{{ bucket }} >/dev/null 2>&1"; then
+        exit 0  # Bucket exists
+    else
+        exit 1  # Bucket does not exist
+    fi
 
 # Create MinIO user
 create-user user='' bucket='':
@@ -247,18 +270,3 @@ grant-policy user='' policy='readwrite':
         mc admin policy attach local ${POLICY} --user=${USER}"
 
     echo "✅ Policy ${POLICY} granted to user ${USER}"
-
-# Check if a bucket exists (returns exit code 0 if exists, 1 if not)
-[no-exit-message]
-bucket-exists bucket:
-    #!/bin/bash
-    set -euo pipefail
-    ROOT_USER=$(just root-username)
-    ROOT_PASSWORD=$(just root-password)
-    if kubectl -n ${MINIO_NAMESPACE} exec -it deploy/minio -- \
-        bash -c "mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD} >/dev/null 2>&1 && \
-        mc ls local/{{ bucket }} >/dev/null 2>&1"; then
-        exit 0  # Bucket exists
-    else
-        exit 1  # Bucket does not exist
-    fi

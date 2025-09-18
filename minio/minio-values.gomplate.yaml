@@ -15,7 +15,7 @@ oidc:
   displayName: "Login with Keycloak"
 
 persistence:
-  size: 50Gi
+  size: {{ .Env.MINIO_STORAGE_SIZE }}
 
 ingress:
   enabled: true
