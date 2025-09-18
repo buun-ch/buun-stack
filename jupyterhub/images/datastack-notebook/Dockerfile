@@ -77,6 +77,7 @@ RUN pip uninstall -y \
 # 2. Find the pandas version in the file `dev/infra/Dockerfile`.
 RUN mamba install --yes \
     'aif360' \
+    'avro' \
     'chromadb' \
     'clickhouse-connect' \
     'csvkit' \
