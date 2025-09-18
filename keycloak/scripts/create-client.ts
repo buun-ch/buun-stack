@@ -26,6 +26,7 @@ const main = async () => {
 
   const sessionIdle = process.env.KEYCLOAK_CLIENT_SESSION_IDLE;
   const sessionMax = process.env.KEYCLOAK_CLIENT_SESSION_MAX;
+  const directAccessGrants = process.env.KEYCLOAK_CLIENT_DIRECT_ACCESS_GRANTS;
 
   const kcAdminClient = new KcAdminClient({
     baseUrl: `https://${keycloakHost}`,
@@ -55,6 +56,7 @@ const main = async () => {
       enabled: true,
       redirectUris: redirectUris,
       publicClient: clientSecret && clientSecret !== '' ? false : true,
+      directAccessGrantsEnabled: directAccessGrants === 'true',
     };
 
     // Add session timeout settings if provided
@@ -68,6 +70,10 @@ const main = async () => {
       clientConfig.attributes = clientConfig.attributes || {};
       clientConfig.attributes['client.session.max.lifespan'] = sessionMax;
       console.log(`Setting Client Session Max Lifespan: ${sessionMax}`);
+    }
+
+    if (directAccessGrants === 'true') {
+      console.log('Enabling Direct Access Grants (Resource Owner Password Credentials)');
     }
 
     const createdClient = await kcAdminClient.clients.create(clientConfig);

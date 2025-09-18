@@ -202,7 +202,7 @@ client-exists realm client_id:
     dotenvx run -q -f ../.env.local -- tsx ./scripts/client-exists.ts
 
 # Create Keycloak client
-create-client realm client_id redirect_url client_secret='' session_idle='' session_max='':
+create-client realm client_id redirect_url client_secret='' session_idle='' session_max='' direct_access_grants='false':
     #!/bin/bash
     set -euo pipefail
     export KEYCLOAK_ADMIN_USER=$(just admin-username)
@@ -213,7 +213,19 @@ create-client realm client_id redirect_url client_secret='' session_idle='' sess
     export KEYCLOAK_REDIRECT_URL={{ redirect_url }}
     export KEYCLOAK_CLIENT_SESSION_IDLE={{ session_idle }}
     export KEYCLOAK_CLIENT_SESSION_MAX={{ session_max }}
+    export KEYCLOAK_CLIENT_DIRECT_ACCESS_GRANTS={{ direct_access_grants }}
     dotenvx run -q -f ../.env.local -- tsx ./scripts/create-client.ts
+
+# Add audience mapper to existing client
+add-audience-mapper realm client_id audience:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM={{ realm }}
+    export KEYCLOAK_CLIENT_ID={{ client_id }}
+    export KEYCLOAK_AUDIENCE={{ audience }}
+    dotenvx run -q -f ../.env.local -- tsx ./scripts/add-audience-mapper.ts
 
 # Delete Keycloak client
 delete-client realm client_id:
@@ -225,15 +237,6 @@ delete-client realm client_id:
     export KEYCLOAK_CLIENT_ID={{ client_id }}
     dotenvx run -q -f ../.env.local -- tsx ./scripts/delete-client.ts
 
-# Add Keycloak client audience mapper
-add-audience-mapper client_id:
-    #!/bin/bash
-    set -euo pipefail
-    export KEYCLOAK_ADMIN_USER=$(just admin-username)
-    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
-    export KEYCLOAK_REALM=${KEYCLOAK_REALM}
-    export KEYCLOAK_CLIENT_ID={{ client_id }}
-    dotenvx run -q -f ../.env.local -- tsx ./scripts/add-audience-mapper.ts
 
 # Add attribute mapper for Keycloak client
 add-attribute-mapper client_id attribute_name display_name='' claim_name='' options='' default_value='' mapper_name='' view_perms='admin,user' edit_perms='admin':
