@@ -1,6 +1,10 @@
 cluster:
   instances: 1
 
+  # Storage configuration
+  storage:
+    size: {{ .Env.POSTGRES_STORAGE_SIZE }}
+
   initdb:
     postInitTemplateSQL:
       - CREATE EXTENSION IF NOT EXISTS vector;
