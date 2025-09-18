@@ -32,7 +32,7 @@ setup-for-app app_name app_host app_namespace="default" upstream_service="":
 
     # Add audience mapper to Keycloak client
     echo "Adding audience mapper to Keycloak client..."
-    just keycloak::add-audience-mapper "${client_id}"
+    just keycloak::add-audience-mapper "${client_id}" "${client_id}"
 
     # Generate cookie secret
     cookie_secret=$(just utils::random-password 32)
