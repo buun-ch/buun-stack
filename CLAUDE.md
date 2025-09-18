@@ -16,6 +16,13 @@ just env::setup        # Interactive environment configuration
 just                   # Show all available commands
 ```
 
+### Just Task Runner Usage
+
+- **Module Structure**: Justfiles are organized by modules (e.g., `just keycloak::admin-password`)
+- **List All Recipes**: Run `just` to display all available recipes across modules
+- **Module-Specific Help**: Run `just <module>` (e.g., `just keycloak`) to show recipes for that module
+- **Execution Location**: ALWAYS run all recipes from the top directory (buun-stack root)
+
 ### Core Installation Sequence
 
 ```bash
