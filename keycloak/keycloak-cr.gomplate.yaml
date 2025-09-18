@@ -1,0 +1,96 @@
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: keycloak
+  namespace: {{ .Env.KEYCLOAK_NAMESPACE }}
+spec:
+  instances: 1
+  image: quay.io/keycloak/keycloak:26.3.4
+  startOptimized: false
+
+  # Database configuration for external PostgreSQL
+  db:
+    vendor: postgres
+    host: postgres-cluster-rw.postgres
+    port: 5432
+    database: keycloak
+    usernameSecret:
+      name: database-config
+      key: user
+    passwordSecret:
+      name: database-config
+      key: password
+
+  # Hostname configuration
+  hostname:
+    hostname: {{ .Env.KEYCLOAK_HOST }}
+    strict: false
+    strictBackchannel: false
+
+  # HTTP configuration
+  http:
+    httpEnabled: true
+    httpPort: 8080
+    httpsPort: 8443
+
+  # Proxy configuration for edge proxy
+  proxy:
+    headers: xforwarded
+
+  # Additional options and admin configuration
+  additionalOptions:
+    - name: http-enabled
+      value: "true"
+    - name: hostname-strict
+      value: "false"
+    - name: hostname-strict-https
+      value: "false"
+    - name: proxy
+      value: edge
+
+  # Bootstrap admin configuration
+  bootstrapAdmin:
+    user:
+      secret: keycloak-bootstrap-admin
+
+  # Resources
+  resources:
+    requests:
+      memory: "1.5Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+  # Ingress configuration (disabled - using separate Ingress resource)
+  ingress:
+    enabled: false
+
+---
+# Separate Ingress resource for custom configuration
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: keycloak-ingress
+  namespace: {{ .Env.KEYCLOAK_NAMESPACE }}
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - {{ .Env.KEYCLOAK_HOST }}
+      secretName: keycloak-tls
+  rules:
+    - host: {{ .Env.KEYCLOAK_HOST }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak-service
+                port:
+                  number: 8080
+
