@@ -27,15 +27,14 @@ This document covers Airflow installation, deployment, and debugging in the buun
    just airflow::install
    ```
 
-3. **Access Airflow Web UI**:
-   - Navigate to your Airflow instance (e.g., `https://airflow.buun.dev`)
-   - Login with your Keycloak credentials
-
-4. **Assign User Roles** (if needed):
+3. **Assign User Roles** (required for DAG execution):
 
    ```bash
    # Add user role for DAG execution permissions
-   just airflow::assign-role <username> airflow_user
+   just airflow::assign-role <username> airflow_op
+
+   # Check user's current roles
+   just airflow::list-user-roles <username>
 
    # Available roles:
    # - airflow_admin: Full administrative access
@@ -43,6 +42,12 @@ This document covers Airflow installation, deployment, and debugging in the buun
    # - airflow_user: User access (read/write access to DAGs)
    # - airflow_viewer: Viewer access (read-only)
    ```
+
+   **Note**: New users have only Viewer access by default and cannot execute DAGs without role assignment.
+
+4. **Access Airflow Web UI**:
+   - Navigate to your Airflow instance (e.g., `https://airflow.buun.dev`)
+   - Login with your Keycloak credentials
 
 ### Uninstalling
 

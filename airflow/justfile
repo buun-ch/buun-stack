@@ -140,16 +140,23 @@ create-oauth-client:
         exit 1
     fi
     echo "Creating Airflow OAuth client in Keycloak..."
-    # Delete existing client to ensure fresh creation
-    echo "Removing existing client if present..."
-    just keycloak::delete-client ${KEYCLOAK_REALM} airflow || true
 
-    CLIENT_SECRET=$(just utils::random-password)
-    just keycloak::create-client \
-        ${KEYCLOAK_REALM} \
-        airflow \
-        "https://${AIRFLOW_HOST}/auth/oauth-authorized/keycloak" \
-        "$CLIENT_SECRET"
+    # Check if client already exists
+    if just keycloak::client-exists ${KEYCLOAK_REALM} airflow &>/dev/null; then
+        echo "Client 'airflow' already exists, skipping creation..."
+        echo "Existing client will preserve roles and mappers"
+        # Get existing client secret for Vault/Secret synchronization
+        CLIENT_SECRET=$(just keycloak::get-client-secret ${KEYCLOAK_REALM} airflow | grep "Client 'airflow' secret:" | cut -d' ' -f4)
+        echo "Retrieved existing client secret for synchronization"
+    else
+        echo "Creating new client..."
+        CLIENT_SECRET=$(just utils::random-password)
+        just keycloak::create-client \
+            ${KEYCLOAK_REALM} \
+            airflow \
+            "https://${AIRFLOW_HOST}/auth/oauth-authorized/keycloak" \
+            "$CLIENT_SECRET"
+    fi
 
     if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
         echo "External Secrets available. Storing credentials in Vault and creating ExternalSecret..."
@@ -187,6 +194,14 @@ create-keycloak-roles:
         echo "Creating role: $role"
         just keycloak::create-client-role ${KEYCLOAK_REALM} airflow "$role" || true
     done
+
+    # Create client roles mapper to include roles in JWT tokens
+    echo "Creating client roles mapper..."
+    just keycloak::add-client-roles-mapper airflow "airflow_roles" "Airflow Roles Mapper"
+
+    # Add client roles mapper to profile scope for userinfo endpoint
+    echo "Adding client roles mapper to profile scope..."
+    just keycloak::add-client-roles-to-profile-scope ${KEYCLOAK_REALM} airflow "airflow_roles"
 
     echo "Keycloak roles created successfully"
     echo "Role mappings:"
@@ -237,6 +252,20 @@ assign-role username='' role='':
             echo "✅ ${USERNAME} now has Viewer access (read-only access)"
             ;;
     esac
+
+# List user's Airflow roles
+list-user-roles username='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="{{ username }}"
+
+    # Interactive input if not provided
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+
+    echo "Checking Airflow roles for user '${USERNAME}'..."
+    just keycloak::list-user-client-roles ${KEYCLOAK_REALM} "${USERNAME}" airflow
 
 # Remove Airflow role from user
 remove-role username='' role='':
@@ -298,7 +327,7 @@ install:
     fi
 
     KEYCLOAK_HOST=${KEYCLOAK_HOST} KEYCLOAK_REALM=${KEYCLOAK_REALM} \
-        gomplate -f webserver_config.py.gomplate -o webserver_config.py
+        gomplate -f webserver_config.gomplate.py -o webserver_config.py
     kubectl delete configmap airflow-api-server-config -n ${AIRFLOW_NAMESPACE} --ignore-not-found
     kubectl create configmap airflow-api-server-config -n ${AIRFLOW_NAMESPACE} \
         --from-file=webserver_config.py=webserver_config.py
@@ -494,15 +523,15 @@ logs-dag-errors dag_file='':
     LOG_DATE=$(date +%Y-%m-%d)
     LOG_DIR="/opt/airflow/logs/dag_processor/${LOG_DATE}/dags-folder"
 
-    if [ -n "{{dag_file}}" ]; then
+    if [ -n "{{ dag_file }}" ]; then
         # Show specific DAG file errors
-        LOG_FILE="${LOG_DIR}/{{dag_file}}.log"
-        echo "📋 Showing errors for DAG file: {{dag_file}}"
+        LOG_FILE="${LOG_DIR}/{{ dag_file }}.log"
+        echo "📋 Showing errors for DAG file: {{ dag_file }}"
         echo "📂 Log file: ${LOG_FILE}"
         echo ""
         kubectl exec -n ${AIRFLOW_NAMESPACE} ${DAG_PROCESSOR_POD} -c dag-processor -- \
             cat "${LOG_FILE}" 2>/dev/null | jq -r 'select(.level == "error") | .timestamp + " " + .event + ": " + .error_detail[0].exc_value' || \
-            echo "❌ No error log found for {{dag_file}} or file doesn't exist"
+            echo "❌ No error log found for {{ dag_file }} or file doesn't exist"
     else
         # List all DAG files with errors
         echo "📋 Available DAG error logs:"
@@ -566,10 +595,10 @@ logs-test-import dag_file:
         echo "❌ DAG processor pod not found"
         exit 1
     fi
-    echo "🧪 Testing import of DAG file: {{dag_file}}"
+    echo "🧪 Testing import of DAG file: {{ dag_file }}"
     echo ""
     kubectl exec -n ${AIRFLOW_NAMESPACE} ${DAG_PROCESSOR_POD} -c dag-processor -- \
-        python /opt/airflow/dags/{{dag_file}}
+        python /opt/airflow/dags/{{ dag_file }}
 
 # Clean up database and secrets
 cleanup:
