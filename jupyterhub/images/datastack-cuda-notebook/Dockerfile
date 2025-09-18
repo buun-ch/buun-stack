@@ -127,6 +127,7 @@ RUN mamba install --yes \
     'pyarrow' \
     'qdrant-client' \
     'rapidfuzz' \
+    'simple-salesforce' \
     'tensorflow' \
     'transformers' \
     'unstructured' \
