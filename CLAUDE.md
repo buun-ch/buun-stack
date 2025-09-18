@@ -180,6 +180,23 @@ When adding new services:
 4. Create Keycloak client if authentication required
 5. Import module in main justfile
 
+### Helm Chart Installation Guidelines
+
+1. **Helm Values Modification**:
+   - ALWAYS check official documentation and values.yaml definitions before modifying Helm values
+   - Understand the chart's structure and available configuration options
+   - Test changes in a safe environment when possible
+
+2. **Resource Creation Consistency**:
+   - When creating Secret/ExternalSecret/ConfigMap resources, follow patterns from existing modules
+   - Maintain consistent naming conventions and label structures
+   - Use the same YAML formatting and organization as other modules
+
+3. **Core Component Protection**:
+   - Keycloak, PostgreSQL, and Vault are core components
+   - NEVER restart or reinstall these components without explicit user approval
+   - These services are critical to the entire stack's operation
+
 ## Code Style
 
 - Indent lines with 4 spaces
