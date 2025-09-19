@@ -252,6 +252,13 @@ singleuser:
             protocol: TCP
           - port: 9001
             protocol: TCP
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: lakekeeper
+        ports:
+          - port: 8181
+            protocol: TCP
       # Allow DNS resolution
       - to:
         - ipBlock:
