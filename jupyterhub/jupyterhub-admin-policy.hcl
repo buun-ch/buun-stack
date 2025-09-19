@@ -34,13 +34,23 @@ path "auth/token/renew-self" {
   capabilities = ["update"]
 }
 
-# Create user-specific policies dynamically
+# Create user-specific policies dynamically (new API)
 path "sys/policies/acl/jupyter-user-*" {
   capabilities = ["create", "read", "update", "delete"]
 }
 
-# Read user policies to allow token creation with these policies
+# Create user-specific policies dynamically (old API for hvac compatibility)
+path "sys/policy/*" {
+  capabilities = ["create", "read", "update", "delete", "sudo"]
+}
+
+# Read user policies to allow token creation with these policies (new API)
 path "sys/policies/acl/*" {
+  capabilities = ["read", "list"]
+}
+
+# Read user policies to allow token creation with these policies (old API for hvac compatibility)
+path "sys/policy/*" {
   capabilities = ["read", "list"]
 }
 
