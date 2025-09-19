@@ -191,6 +191,15 @@ delete-realm realm:
     export KEYCLOAK_REALM_TO_DELETE={{ realm }}
     dotenvx run -q -f ../.env.local -- tsx ./scripts/delete-realm.ts
 
+# List all Keycloak clients in realm
+list-clients realm:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM={{ realm }}
+    dotenvx run -q -f ../.env.local -- tsx ./scripts/list-clients.ts
+
 # Check if Keycloak client exists
 client-exists realm client_id:
     #!/bin/bash
@@ -202,7 +211,7 @@ client-exists realm client_id:
     dotenvx run -q -f ../.env.local -- tsx ./scripts/client-exists.ts
 
 # Create Keycloak client
-create-client realm client_id redirect_url client_secret='' session_idle='' session_max='' direct_access_grants='false':
+create-client realm client_id redirect_url client_secret='' session_idle='' session_max='' direct_access_grants='false' pkce_method='':
     #!/bin/bash
     set -euo pipefail
     export KEYCLOAK_ADMIN_USER=$(just admin-username)
@@ -214,6 +223,7 @@ create-client realm client_id redirect_url client_secret='' session_idle='' sess
     export KEYCLOAK_CLIENT_SESSION_IDLE={{ session_idle }}
     export KEYCLOAK_CLIENT_SESSION_MAX={{ session_max }}
     export KEYCLOAK_CLIENT_DIRECT_ACCESS_GRANTS={{ direct_access_grants }}
+    export KEYCLOAK_CLIENT_PKCE_METHOD={{ pkce_method }}
     dotenvx run -q -f ../.env.local -- tsx ./scripts/create-client.ts
 
 # Add audience mapper to existing client

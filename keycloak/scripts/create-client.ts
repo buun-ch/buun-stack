@@ -27,6 +27,7 @@ const main = async () => {
   const sessionIdle = process.env.KEYCLOAK_CLIENT_SESSION_IDLE;
   const sessionMax = process.env.KEYCLOAK_CLIENT_SESSION_MAX;
   const directAccessGrants = process.env.KEYCLOAK_CLIENT_DIRECT_ACCESS_GRANTS;
+  const pkceMethod = process.env.KEYCLOAK_CLIENT_PKCE_METHOD;
 
   const kcAdminClient = new KcAdminClient({
     baseUrl: `https://${keycloakHost}`,
@@ -60,15 +61,18 @@ const main = async () => {
       directAccessGrantsEnabled: directAccessGrants === 'true',
     };
 
-    // Only set PKCE for public clients
-    if (isPublicClient) {
-      clientConfig.attributes = {
-        'pkce.code.challenge.method': 'S256'
-      };
-      console.log('Setting PKCE Code Challenge Method to S256 for public client');
+    // Configure PKCE based on environment variable
+    // KEYCLOAK_CLIENT_PKCE_METHOD can be: 'S256', 'plain', or unset/empty (no PKCE)
+    clientConfig.attributes = {};
+
+    if (pkceMethod && (pkceMethod === 'S256' || pkceMethod === 'plain')) {
+      clientConfig.attributes['pkce.code.challenge.method'] = pkceMethod;
+      console.log(`Setting PKCE Code Challenge Method to ${pkceMethod}`);
+    } else if (pkceMethod && pkceMethod !== '') {
+      console.warn(`Invalid PKCE method '${pkceMethod}'. Valid options: S256, plain, or empty for no PKCE`);
+      console.log('Creating client without PKCE');
     } else {
-      clientConfig.attributes = {};
-      console.log('Creating confidential client without PKCE');
+      console.log('Creating client without PKCE');
     }
 
     // Add session timeout settings if provided
