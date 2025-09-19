@@ -115,10 +115,10 @@ create-oauth-client:
     # Create confidential client for oauth2-proxy
     CLIENT_SECRET=$(just utils::random-password)
     just keycloak::create-client \
-        ${KEYCLOAK_REALM} \
-        dagster \
-        "https://${DAGSTER_HOST}/oauth2/callback" \
-        "$CLIENT_SECRET"
+        realm=${KEYCLOAK_REALM} \
+        client_id=dagster \
+        redirect_url="https://${DAGSTER_HOST}/oauth2/callback" \
+        client_secret="$CLIENT_SECRET"
 
     if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
         echo "External Secrets available. Storing credentials in Vault and recreating ExternalSecret..."

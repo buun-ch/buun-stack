@@ -159,8 +159,8 @@ delete-credentials:
 
 # Create Keycloak client for Cube
 create-keycloak-client:
-    @just keycloak::create-client ${KEYCLOAK_REALM} ${CUBE_OIDC_CLIENT_ID} \
-        "http://localhost:${CUBE_OIDC_CALLBACK_PORT}/callback"
+    @just keycloak::create-client realm=${KEYCLOAK_REALM} client_id=${CUBE_OIDC_CLIENT_ID} \
+        redirect_url="http://localhost:${CUBE_OIDC_CALLBACK_PORT}/callback"
 
 # Get JWT token using oauth2c
 get-token:

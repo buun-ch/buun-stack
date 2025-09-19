@@ -96,8 +96,8 @@ install:
             --placeholder="e.g., minio-console.example.com"
         )
     fi
-    just keycloak::create-client ${KEYCLOAK_REALM} ${MINIO_OIDC_CLIENT_ID} \
-        "https://${MINIO_HOST}/oauth_callback,https://${MINIO_CONSOLE_HOST}/oauth_callback"
+    just keycloak::create-client realm=${KEYCLOAK_REALM} client_id=${MINIO_OIDC_CLIENT_ID} \
+        redirect_url="https://${MINIO_HOST}/oauth_callback,https://${MINIO_CONSOLE_HOST}/oauth_callback"
     just add-keycloak-minio-policy
     just create-namespace
     just create-root-credentials

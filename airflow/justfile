@@ -154,10 +154,10 @@ create-oauth-client:
         echo "Creating new client..."
         CLIENT_SECRET=$(just utils::random-password)
         just keycloak::create-client \
-            ${KEYCLOAK_REALM} \
-            airflow \
-            "https://${AIRFLOW_HOST}/auth/oauth-authorized/keycloak" \
-            "$CLIENT_SECRET"
+            realm=${KEYCLOAK_REALM} \
+            client_id=airflow \
+            redirect_url="https://${AIRFLOW_HOST}/auth/oauth-authorized/keycloak" \
+            client_secret="$CLIENT_SECRET"
     fi
 
     if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then

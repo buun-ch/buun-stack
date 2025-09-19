@@ -25,7 +25,7 @@ setup-for-app app_name app_host app_namespace="default" upstream_service="":
     # Generate client secret for confidential client
     client_secret=$(just utils::random-password 32)
 
-    if ! just keycloak::create-client "${KEYCLOAK_REALM}" "${client_id}" "${redirect_url}" "${client_secret}"; then
+    if ! just keycloak::create-client realm="${KEYCLOAK_REALM}" client_id="${client_id}" redirect_url="${redirect_url}" client_secret="${client_secret}"; then
         echo "Failed to create Keycloak client"
         exit 1
     fi

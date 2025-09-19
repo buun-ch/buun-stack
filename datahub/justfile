@@ -109,10 +109,10 @@ create-oauth-client:
 
     CLIENT_SECRET=$(just utils::random-password)
     just keycloak::create-client \
-        ${KEYCLOAK_REALM} \
-        datahub \
-        "https://${DATAHUB_HOST}/callback/oidc" \
-        "$CLIENT_SECRET"
+        realm=${KEYCLOAK_REALM} \
+        client_id=datahub \
+        redirect_url="https://${DATAHUB_HOST}/callback/oidc" \
+        client_secret="$CLIENT_SECRET"
 
     if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
         echo "External Secrets available. Storing credentials in Vault and recreating ExternalSecret..."

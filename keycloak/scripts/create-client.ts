@@ -28,6 +28,7 @@ const main = async () => {
   const sessionMax = process.env.KEYCLOAK_CLIENT_SESSION_MAX;
   const directAccessGrants = process.env.KEYCLOAK_CLIENT_DIRECT_ACCESS_GRANTS;
   const pkceMethod = process.env.KEYCLOAK_CLIENT_PKCE_METHOD;
+  const postLogoutRedirectUris = process.env.KEYCLOAK_POST_LOGOUT_REDIRECT_URIS;
 
   const kcAdminClient = new KcAdminClient({
     baseUrl: `https://${keycloakHost}`,
@@ -84,6 +85,15 @@ const main = async () => {
     if (sessionMax && sessionMax !== '') {
       clientConfig.attributes['client.session.max.lifespan'] = sessionMax;
       console.log(`Setting Client Session Max Lifespan: ${sessionMax}`);
+    }
+
+    // Add post logout redirect URIs if provided
+    if (postLogoutRedirectUris && postLogoutRedirectUris !== '') {
+      // Split comma-separated URIs and set as array in attributes using ## separator (Keycloak format)
+      const postLogoutUris = postLogoutRedirectUris.split(',').map(uri => uri.trim());
+      clientConfig.attributes = clientConfig.attributes || {};
+      clientConfig.attributes['post.logout.redirect.uris'] = postLogoutUris.join('##');
+      console.log(`Setting Post Logout Redirect URIs: ${postLogoutUris.join(', ')}`);
     }
 
     if (directAccessGrants === 'true') {

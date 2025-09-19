@@ -165,7 +165,7 @@ create-realm create-client-for-k8s='true' access_token_lifespan='3600' refresh_t
 
 # Create Keycloak client for Kubernetes OIDC authentication
 create-k8s-client:
-    @just create-client ${KEYCLOAK_REALM} ${K8S_OIDC_CLIENT_ID} "http://localhost:8000,http://localhost:18000"
+    @just create-client realm=${KEYCLOAK_REALM} client_id=${K8S_OIDC_CLIENT_ID} redirect_url="http://localhost:8000,http://localhost:18000"
 
 # Delete Keycloak realm
 delete-realm realm:
@@ -200,6 +200,16 @@ list-clients realm:
     export KEYCLOAK_REALM={{ realm }}
     dotenvx run -q -f ../.env.local -- tsx ./scripts/list-clients.ts
 
+# Get detailed Keycloak client configuration
+get-client realm client_id:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM={{ realm }}
+    export KEYCLOAK_CLIENT_ID={{ client_id }}
+    dotenvx run -q -f ../.env.local -- tsx ./scripts/get-client.ts
+
 # Check if Keycloak client exists
 client-exists realm client_id:
     #!/bin/bash
@@ -211,19 +221,30 @@ client-exists realm client_id:
     dotenvx run -q -f ../.env.local -- tsx ./scripts/client-exists.ts
 
 # Create Keycloak client
-create-client realm client_id redirect_url client_secret='' session_idle='' session_max='' direct_access_grants='false' pkce_method='':
+[positional-arguments]
+create-client *args:
     #!/bin/bash
+    # realm: Keycloak realm name
+    # client_id: Keycloak client ID (required)
+    # redirect_url: Redirect URL for the client (required)
+    # client_secret: Keycloak client secret (empty for public clients)
+    # client_session_idle: Session idle timeout in seconds
+    # client_session_max: Session max lifespan in seconds
+    # client_direct_access_grants: Whether to enable direct access grants (true/false)
+    # client_pkce_method: PKCE method ('S256', 'plain' or empty)
+    # post_logout_redirect_uris: Post logout redirect URIs (comma-separated input, converted to Keycloak ## format)
     set -euo pipefail
     export KEYCLOAK_ADMIN_USER=$(just admin-username)
     export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
-    export KEYCLOAK_REALM={{ realm }}
-    export KEYCLOAK_CLIENT_ID={{ client_id }}
-    export KEYCLOAK_CLIENT_SECRET={{ client_secret }}
-    export KEYCLOAK_REDIRECT_URL={{ redirect_url }}
-    export KEYCLOAK_CLIENT_SESSION_IDLE={{ session_idle }}
-    export KEYCLOAK_CLIENT_SESSION_MAX={{ session_max }}
-    export KEYCLOAK_CLIENT_DIRECT_ACCESS_GRANTS={{ direct_access_grants }}
-    export KEYCLOAK_CLIENT_PKCE_METHOD={{ pkce_method }}
+    while (( "$#" )); do
+        key="KEYCLOAK_$(echo ${1%%=*} | awk '{print toupper($0)}')"
+        value=${1#*=}
+        export ${key}="${value}"
+        if [ "${KEYCLOAK_DEBUG:-}" = "true" ]; then
+            env | grep "${key}"
+        fi
+        shift
+    done
     dotenvx run -q -f ../.env.local -- tsx ./scripts/create-client.ts
 
 # Add audience mapper to existing client

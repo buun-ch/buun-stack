@@ -242,7 +242,7 @@ setup-oidc-auth:
     just keycloak::delete-client "${KEYCLOAK_REALM}" "vault" || true
     oidc_client_secret=$(just utils::random-password)
     redirect_urls="https://${VAULT_HOST}/ui/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback,http://localhost:8200/ui/vault/auth/oidc/oidc/callback"
-    just keycloak::create-client "${KEYCLOAK_REALM}" "vault" "${redirect_urls}" "${oidc_client_secret}"
+    just keycloak::create-client realm="${KEYCLOAK_REALM}" client_id="vault" redirect_url="${redirect_urls}" client_secret="${oidc_client_secret}"
     echo "Using client secret: ${oidc_client_secret}"
     just keycloak::add-audience-mapper "vault" "vault"
     just keycloak::add-groups-mapper "vault"

@@ -80,9 +80,9 @@ install root_token='':
 
     just create-namespace
     # just k8s::copy-regcred ${JUPYTERHUB_NAMESPACE}
-    just keycloak::create-client ${KEYCLOAK_REALM} ${JUPYTERHUB_OIDC_CLIENT_ID} \
-        "https://${JUPYTERHUB_HOST}/hub/oauth_callback" \
-        "" "${JUPYTERHUB_OIDC_CLIENT_SESSION_IDLE}" "${JUPYTERHUB_OIDC_CLIENT_SESSION_MAX}"
+    just keycloak::create-client realm=${KEYCLOAK_REALM} client_id=${JUPYTERHUB_OIDC_CLIENT_ID} \
+        redirect_url="https://${JUPYTERHUB_HOST}/hub/oauth_callback" \
+        client_secret="" client_session_idle="${JUPYTERHUB_OIDC_CLIENT_SESSION_IDLE}" client_session_max="${JUPYTERHUB_OIDC_CLIENT_SESSION_MAX}"
     just add-helm-repo
     export JUPYTERHUB_OIDC_CLIENT_ID=${JUPYTERHUB_OIDC_CLIENT_ID}
     export KEYCLOAK_REALM=${KEYCLOAK_REALM}
