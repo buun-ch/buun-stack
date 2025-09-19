@@ -29,6 +29,7 @@ const main = async () => {
   const directAccessGrants = process.env.KEYCLOAK_CLIENT_DIRECT_ACCESS_GRANTS;
   const pkceMethod = process.env.KEYCLOAK_CLIENT_PKCE_METHOD;
   const postLogoutRedirectUris = process.env.KEYCLOAK_POST_LOGOUT_REDIRECT_URIS;
+  const accessTokenLifespan = process.env.KEYCLOAK_ACCESS_TOKEN_LIFESPAN;
 
   const kcAdminClient = new KcAdminClient({
     baseUrl: `https://${keycloakHost}`,
@@ -94,6 +95,13 @@ const main = async () => {
       clientConfig.attributes = clientConfig.attributes || {};
       clientConfig.attributes['post.logout.redirect.uris'] = postLogoutUris.join('##');
       console.log(`Setting Post Logout Redirect URIs: ${postLogoutUris.join(', ')}`);
+    }
+
+    // Add access token lifespan if provided
+    if (accessTokenLifespan && accessTokenLifespan !== '') {
+      clientConfig.attributes = clientConfig.attributes || {};
+      clientConfig.attributes['access.token.lifespan'] = accessTokenLifespan;
+      console.log(`Setting Access Token Lifespan: ${accessTokenLifespan} seconds`);
     }
 
     if (directAccessGrants === 'true') {

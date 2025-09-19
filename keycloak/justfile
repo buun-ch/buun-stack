@@ -233,6 +233,7 @@ create-client *args:
     # client_direct_access_grants: Whether to enable direct access grants (true/false)
     # client_pkce_method: PKCE method ('S256', 'plain' or empty)
     # post_logout_redirect_uris: Post logout redirect URIs (comma-separated input, converted to Keycloak ## format)
+    # access_token_lifespan: Access token lifespan in seconds
     set -euo pipefail
     export KEYCLOAK_ADMIN_USER=$(just admin-username)
     export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
