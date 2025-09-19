@@ -11,7 +11,7 @@ catalog:
     LAKEKEEPER__OPENID_PROVIDER_URI: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}"
     LAKEKEEPER__OPENID_AUDIENCE: "lakekeeper"
     LAKEKEEPER__UI__OPENID_CLIENT_ID: "lakekeeper"
-    LAKEKEEPER__UI__OPENID_SCOPE: "openid profile email"
+    LAKEKEEPER__UI__OPENID_SCOPE: "openid profile lakekeeper"
 
   # Secret management configuration
   secrets:

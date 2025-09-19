@@ -116,7 +116,8 @@ create-oidc-client:
             realm=${KEYCLOAK_REALM} \
             client_id=lakekeeper \
             redirect_url="https://${LAKEKEEPER_HOST}/ui/callback" \
-            post_logout_redirect_uris="https://${LAKEKEEPER_HOST}/ui/logout,https://${LAKEKEEPER_HOST}/ui/,https://${LAKEKEEPER_HOST}/"
+            post_logout_redirect_uris="https://${LAKEKEEPER_HOST}/ui/logout,https://${LAKEKEEPER_HOST}/ui/,https://${LAKEKEEPER_HOST}/" \
+            access_token_lifespan="43200"
     fi
 
     # Add audience mapper to include 'lakekeeper' in JWT audience
