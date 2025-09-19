@@ -80,6 +80,13 @@ workers:
   env:
     - name: PYTHONPATH
       value: "/opt/airflow/site-packages:$PYTHONPATH"
+  # Override args to fix Celery worker hostname issue
+  # The HOSTNAME will be set automatically by Kubernetes for StatefulSet pods
+  args:
+    - bash
+    - -c
+    - |
+      exec airflow celery worker --celery-hostname=${HOSTNAME}
 
 scheduler:
   extraInitContainers:
