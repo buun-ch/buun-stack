@@ -44,10 +44,10 @@ extraEnv:
 # Resource limits
 resources:
   limits:
-    memory: 2Gi
-    cpu: 1000m
+    memory: 4Gi
+    cpu: 2000m
   requests:
-    memory: 1Gi
+    memory: 2Gi
     cpu: 500m
 
 # Security context
