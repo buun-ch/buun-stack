@@ -111,6 +111,7 @@ install:
 uninstall:
     helm uninstall minio -n ${MINIO_NAMESPACE} --wait --ignore-not-found
     kubectl delete namespace ${MINIO_NAMESPACE} --ignore-not-found
+    just keycloak::delete-client ${KEYCLOAK_REALM} ${MINIO_OIDC_CLIENT_ID}
 
 # List MinIO internal policies and users (for debugging)
 debug-info:
