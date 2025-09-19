@@ -105,6 +105,10 @@ create-oidc-client:
     fi
     echo "Creating Lakekeeper OAuth client in Keycloak..."
 
+    # Ensure lakekeeper scope exists
+    echo "Creating 'lakekeeper' client scope if it doesn't exist..."
+    just keycloak::create-client-scope ${KEYCLOAK_REALM} lakekeeper "Lakekeeper API scope"
+
     # Check if client already exists
     if just keycloak::client-exists ${KEYCLOAK_REALM} lakekeeper &>/dev/null; then
         echo "Client 'lakekeeper' already exists, skipping creation..."
@@ -117,8 +121,13 @@ create-oidc-client:
             client_id=lakekeeper \
             redirect_url="https://${LAKEKEEPER_HOST}/ui/callback" \
             post_logout_redirect_uris="https://${LAKEKEEPER_HOST}/ui/logout,https://${LAKEKEEPER_HOST}/ui/,https://${LAKEKEEPER_HOST}/" \
-            access_token_lifespan="43200"
+            access_token_lifespan="43200" \
+            scopes="openid,profile,lakekeeper"
     fi
+
+    # Ensure the lakekeeper scope is added to the client (for both existing and new clients)
+    echo "Adding 'lakekeeper' scope to client..."
+    just keycloak::add-scope-to-client ${KEYCLOAK_REALM} lakekeeper lakekeeper
 
     # Add audience mapper to include 'lakekeeper' in JWT audience
     echo "Adding audience mapper for JWT token..."
