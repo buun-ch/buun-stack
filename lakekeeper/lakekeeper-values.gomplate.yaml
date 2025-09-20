@@ -12,12 +12,6 @@ catalog:
     LAKEKEEPER__OPENID_AUDIENCE: "lakekeeper"
     LAKEKEEPER__UI__OPENID_CLIENT_ID: "lakekeeper"
     LAKEKEEPER__UI__OPENID_SCOPE: "openid profile lakekeeper"
-    {{- if .Env.LAKEKEEPER_TOKEN_TTL }}
-    LAKEKEEPER__TOKEN_TTL: "{{ .Env.LAKEKEEPER_TOKEN_TTL }}"
-    {{- end }}
-    {{- if .Env.LAKEKEEPER_API_TOKEN_EXPIRY }}
-    LAKEKEEPER__API_TOKEN_EXPIRY: "{{ .Env.LAKEKEEPER_API_TOKEN_EXPIRY }}"
-    {{- end }}
 
   # Secret management configuration
   secrets:
