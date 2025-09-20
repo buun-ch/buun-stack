@@ -132,6 +132,10 @@ hub:
   podSecurityContext:
     fsGroup: {{ .Env.JUPYTER_FSGID }}
 
+proxy:
+  service:
+    type: ClusterIP
+
 singleuser:
   storage:
     {{ if env.Getenv "PVC_NAME" -}}
@@ -153,6 +157,7 @@ singleuser:
     VAULT_ADDR: "{{ .Env.VAULT_ADDR }}"
     NOTEBOOK_VAULT_TOKEN_TTL: "{{ .Env.NOTEBOOK_VAULT_TOKEN_TTL }}"
     NOTEBOOK_VAULT_TOKEN_MAX_TTL: "{{ .Env.NOTEBOOK_VAULT_TOKEN_MAX_TTL }}"
+    # JUPYTERHUB_SINGLEUSER_EXTENSION: "0"
 
   storage:
     {{ if env.Getenv "PVC_NAME" -}}
@@ -361,8 +366,8 @@ cull:
   adminUsers: true   # Also cull admin users' server pods
   users: false       # Don't delete user accounts, only stop server pods
 
-imagePullSecrets:
-  - name: regcred
+# imagePullSecrets:
+#   - name: regcred
 
 ingress:
   enabled: true

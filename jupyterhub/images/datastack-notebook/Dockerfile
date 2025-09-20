@@ -91,6 +91,7 @@ RUN mamba install --yes \
     'grpcio-status' \
     'grpcio' \
     'hvac' \
+    'jupyter-collaboration' \
     'keras' \
     'langchain' \
     'langchain-ai21' \
@@ -158,6 +159,12 @@ RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_
 
 RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_repository_url}" \
     'dlt[clickhouse,databricks,deltalake,dremio,duckdb,filesystem,parquet,postgres,pyiceberg,qdrant,redshift,s3,snowflake,sql-database,sqlalchemy,workspace]'
+
+# https://jupyter-mcp-server.datalayer.tech/setup/jupyter/local_mcp/
+# RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip \
+#     pip install -i "${pip_repository_url}" 'jupyterlab==4.4.1' 'jupyter-collaboration==4.0.2' \
+#  && pip uninstall -y pycrdt datalayer_pycrdt \
+#  && pip install -i "${pip_repository_url}" 'datalayer_pycrdt==0.12.17'
 
 # Install PyTorch with pip (https://pytorch.org/get-started/locally/)
 # langchain-openai must be updated to avoid pydantic v2 error

@@ -9,7 +9,7 @@ export JUPYTERHUB_NFS_PV_ENABLED := env("JUPYTERHUB_NFS_PV_ENABLED", "")
 export JUPYTERHUB_STORAGE_CLASS := env("JUPYTERHUB_STORAGE_CLASS", "")
 export JUPYTERHUB_VAULT_INTEGRATION_ENABLED := env("JUPYTERHUB_VAULT_INTEGRATION_ENABLED", "")
 export JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED := env("JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED", "")
-export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-42")
+export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-49")
 export KERNEL_IMAGE_BUUN_STACK_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_REPOSITORY", "buun-stack-notebook")
 export KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY", "buun-stack-cuda-notebook")
 export JUPYTER_PROFILE_MINIMAL_ENABLED := env("JUPYTER_PROFILE_MINIMAL_ENABLED", "false")
@@ -357,6 +357,150 @@ create-jupyterhub-vault-token root_token='':
     echo "  - TTL: ${JUPYTERHUB_VAULT_TOKEN_TTL} (will expire without renewal)"
     echo "  - Max TTL: Unlimited (can be renewed forever)"
     echo "  - Vault Agent will renew at TTL/2 intervals (minimum 30s)"
-    echo "  - No more 30-day limitation!"
     echo ""
     echo "Token stored at: secret/jupyterhub/vault-token"
+
+# Get JupyterHub API token for a user
+get-api-token username:
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="{{ username }}"
+
+    if [ -z "${USERNAME}" ]; then
+        echo "Error: Username is required" >&2
+        echo "Usage: just jupyterhub::get-api-token <username>" >&2
+        exit 1
+    fi
+
+    # Get the pod name for the user
+    POD_NAME=$(kubectl get pods -n ${JUPYTERHUB_NAMESPACE} \
+        -l "app=jupyterhub,component=singleuser-server,hub.jupyter.org/username=${USERNAME}" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+
+    if [ -z "${POD_NAME}" ]; then
+        echo "Error: No running pod found for user '${USERNAME}'" >&2
+        echo "Make sure the user has an active Jupyter session" >&2
+        exit 1
+    fi
+
+    # Check if pod is ready
+    POD_STATUS=$(kubectl get pod -n ${JUPYTERHUB_NAMESPACE} ${POD_NAME} \
+        -o jsonpath='{.status.phase}' 2>/dev/null || true)
+
+    if [ "${POD_STATUS}" != "Running" ]; then
+        echo "Error: Pod ${POD_NAME} is not running (status: ${POD_STATUS})" >&2
+        exit 1
+    fi
+
+    # Get the API token from the pod's environment
+    API_TOKEN=$(kubectl exec -n ${JUPYTERHUB_NAMESPACE} ${POD_NAME} -- \
+        sh -c 'echo $JUPYTERHUB_API_TOKEN' 2>/dev/null || true)
+
+    if [ -z "${API_TOKEN}" ]; then
+        echo "Error: Could not retrieve API token from pod ${POD_NAME}" >&2
+        echo "The pod might not have JUPYTERHUB_API_TOKEN environment variable set" >&2
+        exit 1
+    fi
+
+    echo "${API_TOKEN}"
+
+# Setup MCP server configuration for Claude Code (has auth problems)
+setup-mcp-server username='' notebook='':
+    #!/bin/bash
+    set -euo pipefail
+
+    USERNAME="{{ username }}"
+    if [ -z "${USERNAME}" ]; then
+        USERNAME=$(gum input --prompt="JupyterHub username: " --width=100 --placeholder="e.g., buun")
+    fi
+
+    if [ -z "${USERNAME}" ]; then
+        echo "Error: Username is required" >&2
+        exit 1
+    fi
+
+    # Get the API token for the user
+    echo "Getting API token for user '${USERNAME}'..."
+    API_TOKEN=$(just jupyterhub::get-api-token ${USERNAME} 2>/dev/null || true)
+
+    if [ -z "${API_TOKEN}" ]; then
+        echo "Error: Could not get API token for user '${USERNAME}'" >&2
+        echo "Make sure the user has an active Jupyter session" >&2
+        exit 1
+    fi
+
+    # Get notebook path
+    NOTEBOOK="{{ notebook }}"
+    if [ -z "${NOTEBOOK}" ]; then
+        echo ""
+        echo "Available notebooks for user '${USERNAME}':"
+        kubectl exec -n ${JUPYTERHUB_NAMESPACE} jupyter-${USERNAME} -- \
+            curl -s -H "Authorization: token ${API_TOKEN}" \
+            "http://localhost:8888/user/${USERNAME}/api/contents" 2>/dev/null | \
+            jq -r '.content[]? | select(.type=="notebook") | .path' | head -20 || true
+        echo ""
+        NOTEBOOK=$(gum input --prompt="Notebook path (required): " --width=100 --placeholder="e.g., Untitled.ipynb or path/to/notebook.ipynb")
+
+        if [ -z "${NOTEBOOK}" ]; then
+            echo "Error: Notebook path is required for MCP server to function" >&2
+            exit 1
+        fi
+    fi
+
+    # Create .mcp.json configuration
+    MCP_CONFIG_FILE="../.mcp.json"
+
+    echo "Creating MCP server configuration..."
+    cat > "${MCP_CONFIG_FILE}" <<EOF
+    {
+        "mcpServers": {
+            "jupyter-${USERNAME}": {
+                "command": "docker",
+                "args": [
+                    "run",
+                    "-i",
+                    "--rm",
+                    "-e",
+                    "DOCUMENT_URL",
+                    "-e",
+                    "DOCUMENT_TOKEN",
+                    "-e",
+                    "RUNTIME_URL",
+                    "-e",
+                    "RUNTIME_TOKEN",
+                    "-e",
+                    "DOCUMENT_ID",
+                    "datalayer/jupyter-mcp-server:latest"
+                ],
+                "env": {
+                    "DOCUMENT_URL": "https://${JUPYTERHUB_HOST}/user/${USERNAME}",
+                    "DOCUMENT_TOKEN": "${API_TOKEN}",
+                    "DOCUMENT_ID": "${NOTEBOOK}",
+                    "RUNTIME_URL": "https://${JUPYTERHUB_HOST}/user/${USERNAME}",
+                    "RUNTIME_TOKEN": "${API_TOKEN}"
+                }
+            }
+        }
+    }
+    EOF
+
+    echo "✅ MCP server configuration created at: ${MCP_CONFIG_FILE}"
+    echo ""
+    echo "Configuration details:"
+    echo "  Server name: jupyter-${USERNAME}"
+    echo "  Jupyter URL: https://${JUPYTERHUB_HOST}/user/${USERNAME}"
+    echo "  Token: ${API_TOKEN:0:8}..."
+    echo ""
+    echo "To use this configuration:"
+    echo "1. Open Claude Code in this directory (${PWD})"
+    echo "2. The MCP server will be automatically loaded from .mcp.json"
+    echo "3. You can access Jupyter notebooks through the MCP server"
+    echo ""
+    if [ -n "${NOTEBOOK}" ]; then
+        echo "  Notebook: ${NOTEBOOK}"
+    else
+        echo ""
+        echo "Note: No specific notebook configured."
+        echo "To reconfigure with a specific notebook:"
+        echo "  just jupyterhub::setup-mcp-server ${USERNAME} <notebook-path>"
+    fi
