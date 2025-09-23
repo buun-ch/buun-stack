@@ -9,7 +9,7 @@ export AIRFLOW_DAGS_STORAGE_TYPE := env("AIRFLOW_DAGS_STORAGE_TYPE", "")
 export AIRFLOW_NFS_IP := env("AIRFLOW_NFS_IP", "")
 export AIRFLOW_NFS_PATH := env("AIRFLOW_NFS_PATH", "")
 export AIRFLOW_DAGS_STORAGE_SIZE := env("AIRFLOW_DAGS_STORAGE_SIZE", "10Gi")
-export AIRFLOW_EXTRA_PACKAGES := env("AIRFLOW_EXTRA_PACKAGES", "'PyJWT>=2.10' cryptography 'requests>=2.32' 'dlt[duckdb,filesystem,postgres,s3]'")
+export AIRFLOW_EXTRA_PACKAGES := env("AIRFLOW_EXTRA_PACKAGES", "'PyJWT>=2.10' cryptography 'requests>=2.32' 'dlt[duckdb,filesystem,postgres,s3]' pyarrow pyiceberg s3fs simple-salesforce")
 
 # ↑ PyJWT, cryptography, and requests are needed for Keycloak OAuth
 
@@ -348,6 +348,8 @@ install:
     helm upgrade --install airflow apache-airflow/airflow \
         --version ${AIRFLOW_CHART_VERSION} -n ${AIRFLOW_NAMESPACE} --wait \
         -f airflow-values.yaml
+    echo "Synchronizing Airflow permissions..."
+    kubectl exec deployment/airflow-scheduler -n ${AIRFLOW_NAMESPACE} -- airflow sync-perm
     echo "Airflow installation completed"
     echo "Access Airflow at: https://${AIRFLOW_HOST}"
     if [ "${AIRFLOW_NAMESPACE}" = "jupyter" ] && [ "${AIRFLOW_DAGS_PERSISTENCE_ENABLED}" = "true" ]; then
