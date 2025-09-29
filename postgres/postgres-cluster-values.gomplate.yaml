@@ -5,6 +5,11 @@ cluster:
   storage:
     size: {{ .Env.POSTGRES_STORAGE_SIZE }}
 
+  # PostgreSQL configuration
+  postgresql:
+    parameters:
+      max_connections: {{ .Env.POSTGRES_MAX_CONNECTIONS | quote }}
+
   initdb:
     postInitTemplateSQL:
       - CREATE EXTENSION IF NOT EXISTS vector;
