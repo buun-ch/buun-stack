@@ -41,7 +41,7 @@ create-root-credentials:
         echo "External Secrets Operator detected. Creating root credentials via ExternalSecret..."
         username="minioadmin"
         password=$(just utils::random-password)
-        just vault::put-root minio/admin username="${username}" password="${password}"
+        just vault::put minio/admin username="${username}" password="${password}"
 
         kubectl delete externalsecret minio -n ${MINIO_NAMESPACE} --ignore-not-found
         gomplate -f minio-root-external-secret.gomplate.yaml | kubectl apply -f -
@@ -59,7 +59,7 @@ create-root-credentials:
             --from-literal=rootPassword="${password}"
 
         if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
-            just vault::put-root minio/admin username="${username}" password="${password}"
+            just vault::put minio/admin username="${username}" password="${password}"
         fi
     fi
 
