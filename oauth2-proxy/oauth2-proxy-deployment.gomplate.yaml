@@ -11,6 +11,11 @@ data:
     redirect_url = "https://{{ .Env.APP_HOST }}/oauth2/callback"
     email_domains = "*"
     reverse_proxy = true
+    {{- if .Env.SKIP_AUTH_ROUTES }}
+    skip_auth_routes = [{{ range $i, $route := (split .Env.SKIP_AUTH_ROUTES ",") }}{{ if $i }},{{ end }}
+      "^{{ $route }}"{{ end }}
+    ]
+    {{- end }}
 
 ---
 apiVersion: apps/v1

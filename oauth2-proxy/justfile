@@ -11,7 +11,7 @@ default:
     @just --list --unsorted --list-submodules
 
 # Setup OAuth2 Proxy for an application
-setup-for-app app_name app_host app_namespace="default" upstream_service="":
+setup-for-app app_name app_host app_namespace="default" upstream_service="" skip_auth_routes="":
     #!/bin/bash
     set -euo pipefail
 
@@ -81,6 +81,7 @@ setup-for-app app_name app_host app_namespace="default" upstream_service="":
     export APP_HOST="{{ app_host }}"
     export APP_NAMESPACE="{{ app_namespace }}"
     export UPSTREAM_SERVICE="${upstream_service}"
+    export SKIP_AUTH_ROUTES="{{ skip_auth_routes }}"
 
     gomplate -f oauth2-proxy-deployment.gomplate.yaml | kubectl apply -f -
     gomplate -f oauth2-proxy-service.gomplate.yaml | kubectl apply -f -
