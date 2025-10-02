@@ -1,7 +1,7 @@
 set fallback := true
 
 export AIRBYTE_NAMESPACE := env("AIRBYTE_NAMESPACE", "airbyte")
-export AIRBYTE_CHART_VERSION := env("AIRBYTE_CHART_VERSION", "1.8.2")
+export AIRBYTE_CHART_VERSION := env("AIRBYTE_CHART_VERSION", "1.8.3")
 export AIRBYTE_WEBAPP_IMAGE_TAG := env("AIRBYTE_WEBAPP_IMAGE_TAG", "1.7.4")
 export AIRBYTE_HOST := env("AIRBYTE_HOST", "")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
@@ -12,6 +12,67 @@ export AIRBYTE_STORAGE_BUCKET := env("AIRBYTE_STORAGE_BUCKET", "airbyte-storage"
 [private]
 default:
     @just --list --unsorted --list-submodules
+
+# Get Salesforce refresh token for manual OAuth setup
+get-salesforce-refresh-token:
+    #!/bin/bash
+    set -euo pipefail
+    echo "=== Salesforce Refresh Token Generator ==="
+    echo ""
+
+    # Get Client ID
+    CLIENT_ID=$(gum input --prompt="Salesforce Client ID: " --width=100)
+
+    # Get Client Secret
+    CLIENT_SECRET=$(gum input --prompt="Salesforce Client Secret: " --width=100 --password)
+
+    # Generate authorization URL
+    AUTH_URL="https://login.salesforce.com/services/oauth2/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=https://login.salesforce.com/services/oauth2/success&scope=api%20refresh_token%20offline_access"
+
+    echo ""
+    echo "Step 1: Open the following URL in your browser:"
+    echo ""
+    echo "${AUTH_URL}"
+    echo ""
+    echo "Step 2: After authentication, you will be redirected to a URL like:"
+    echo "https://login.salesforce.com/services/oauth2/success?code=XXXXX"
+    echo ""
+
+    # Get authorization code
+    AUTH_CODE=$(gum input --prompt="Paste the 'code' parameter from the URL: " --width=100)
+
+    echo ""
+    echo "Exchanging authorization code for refresh token..."
+
+    # Exchange code for tokens
+    RESPONSE=$(curl -s -X POST https://login.salesforce.com/services/oauth2/token \
+        -d "grant_type=authorization_code" \
+        -d "client_id=${CLIENT_ID}" \
+        -d "client_secret=${CLIENT_SECRET}" \
+        -d "redirect_uri=https://login.salesforce.com/services/oauth2/success" \
+        -d "code=${AUTH_CODE}")
+
+    # Extract refresh token
+    REFRESH_TOKEN=$(echo "${RESPONSE}" | jq -r '.refresh_token // empty')
+
+    if [ -z "${REFRESH_TOKEN}" ]; then
+        echo ""
+        echo "Error: Failed to get refresh token"
+        echo "Response: ${RESPONSE}"
+        exit 1
+    fi
+
+    echo ""
+    echo "=== SUCCESS ==="
+    echo ""
+    echo "Client ID: ${CLIENT_ID}"
+    echo "Client Secret: ${CLIENT_SECRET}"
+    echo "Refresh Token: ${REFRESH_TOKEN}"
+    echo ""
+    echo "Use these values in Airbyte:"
+    echo "1. Click 'Authenticate your Salesforce account'"
+    echo "2. Click 'Set up manually'"
+    echo "3. Enter the above Client ID, Client Secret, and Refresh Token"
 
 # Add Helm repository
 add-helm-repo:
@@ -116,7 +177,11 @@ setup-oauth2-proxy:
         )
     done
     echo "Setting up OAuth2 Proxy for Airbyte..."
-    just oauth2-proxy::setup-for-app airbyte "${AIRBYTE_HOST}" "${AIRBYTE_NAMESPACE}" "airbyte-airbyte-webapp-svc:80"
+    just oauth2-proxy::setup-for-app \
+        airbyte \
+        "${AIRBYTE_HOST}" \
+        "${AIRBYTE_NAMESPACE}" \
+        "airbyte-airbyte-webapp-svc:80"
     echo "Disabling Airbyte webapp Ingress to prevent authentication bypass..."
     helm upgrade airbyte airbyte/airbyte \
         --namespace ${AIRBYTE_NAMESPACE} \
