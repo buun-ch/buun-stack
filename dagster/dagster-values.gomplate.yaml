@@ -28,6 +28,7 @@ dagsterWebserver:
       memory: "1Gi"
       cpu: "1000m"
 
+  {{- if .Env.DAGSTER_EXTRA_PACKAGES }}
   extraPrependedInitContainers:
     - name: install-packages
       image: "{{ .Env.DAGSTER_CONTAINER_IMAGE }}:{{ .Env.DAGSTER_CONTAINER_TAG }}"
@@ -39,27 +40,37 @@ dagsterWebserver:
       volumeMounts:
         - name: extra-packages
           mountPath: /opt/dagster/site-packages
+  {{- end }}
 
   env:
     - name: DAGSTER_HOME
       value: /opt/dagster/dagster_home
+    {{- if .Env.DAGSTER_EXTRA_PACKAGES }}
     - name: PYTHONPATH
       value: /opt/dagster/site-packages:/opt/dagster/user-code
+    {{- else }}
+    - name: PYTHONPATH
+      value: /opt/dagster/user-code
+    {{- end }}
     - name: PIP_USER
       value: "true"
 
   volumeMounts:
     - name: user-code
       mountPath: /opt/dagster/user-code
+    {{- if .Env.DAGSTER_EXTRA_PACKAGES }}
     - name: extra-packages
       mountPath: /opt/dagster/site-packages
+    {{- end }}
 
   volumes:
     - name: user-code
       persistentVolumeClaim:
         claimName: dagster-user-code-pvc
+    {{- if .Env.DAGSTER_EXTRA_PACKAGES }}
     - name: extra-packages
       emptyDir: {}
+    {{- end }}
 
   {{- if eq (.Env.DAGSTER_ENV_SECRETS_EXIST | default "false") "true" }}
   envSecrets:
@@ -86,6 +97,7 @@ dagsterDaemon:
       memory: "1Gi"
       cpu: "1000m"
 
+  {{- if .Env.DAGSTER_EXTRA_PACKAGES }}
   extraPrependedInitContainers:
     - name: install-packages
       image: "{{ .Env.DAGSTER_CONTAINER_IMAGE }}:{{ .Env.DAGSTER_CONTAINER_TAG }}"
@@ -97,19 +109,24 @@ dagsterDaemon:
       volumeMounts:
         - name: extra-packages
           mountPath: /opt/dagster/site-packages
+  {{- end }}
 
   volumeMounts:
     - name: user-code
       mountPath: /opt/dagster/user-code
+    {{- if .Env.DAGSTER_EXTRA_PACKAGES }}
     - name: extra-packages
       mountPath: /opt/dagster/site-packages
+    {{- end }}
 
   volumes:
     - name: user-code
       persistentVolumeClaim:
         claimName: dagster-user-code-pvc
+    {{- if .Env.DAGSTER_EXTRA_PACKAGES }}
     - name: extra-packages
       emptyDir: {}
+    {{- end }}
 
   {{- if eq (.Env.DAGSTER_ENV_SECRETS_EXIST | default "false") "true" }}
   envSecrets:
@@ -119,8 +136,13 @@ dagsterDaemon:
   env:
     - name: DAGSTER_HOME
       value: /opt/dagster/dagster_home
+    {{- if .Env.DAGSTER_EXTRA_PACKAGES }}
     - name: PYTHONPATH
       value: /opt/dagster/site-packages:/opt/dagster/user-code
+    {{- else }}
+    - name: PYTHONPATH
+      value: /opt/dagster/user-code
+    {{- end }}
     - name: PIP_USER
       value: "true"
 
@@ -137,16 +159,22 @@ runLauncher:
       volumeMounts:
         - name: user-code
           mountPath: /opt/dagster/user-code
+        {{- if .Env.DAGSTER_EXTRA_PACKAGES }}
         - name: extra-packages
           mountPath: /opt/dagster/site-packages
+        {{- end }}
       volumes:
         - name: user-code
           persistentVolumeClaim:
             claimName: dagster-user-code-pvc
+        {{- if .Env.DAGSTER_EXTRA_PACKAGES }}
         - name: extra-packages
           emptyDir: {}
+        {{- end }}
+      {{- if .Env.DAGSTER_EXTRA_PACKAGES }}
       envVars:
         - "PYTHONPATH=/opt/dagster/site-packages:/opt/dagster/user-code"
+      {{- end }}
       envSecrets:
         - name: dagster-database-secret
         {{- if eq (.Env.DAGSTER_STORAGE_TYPE | default "local") "minio" }}
@@ -155,6 +183,7 @@ runLauncher:
         {{- if eq (.Env.DAGSTER_ENV_SECRETS_EXIST | default "false") "true" }}
         - name: dagster-env-secret
         {{- end }}
+      {{- if .Env.DAGSTER_EXTRA_PACKAGES }}
       runK8sConfig:
         podSpecConfig:
           initContainers:
@@ -168,6 +197,7 @@ runLauncher:
               volumeMounts:
                 - name: extra-packages
                   mountPath: /opt/dagster/site-packages
+      {{- end }}
 
 postgresql:
   enabled: false

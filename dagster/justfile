@@ -12,7 +12,9 @@ export DAGSTER_STORAGE_SIZE := env("DAGSTER_STORAGE_SIZE", "20Gi")
 export DAGSTER_CODE_STORAGE_SIZE := env("DAGSTER_CODE_STORAGE_SIZE", "10Gi")
 export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export DAGSTER_STORAGE_TYPE := env("DAGSTER_STORAGE_TYPE", "")
-export DAGSTER_EXTRA_PACKAGES := env("DAGSTER_EXTRA_PACKAGES", "dlt[duckdb] pyarrow pyiceberg s3fs simple-salesforce")
+export DAGSTER_EXTRA_PACKAGES := env("DAGSTER_EXTRA_PACKAGES", "")
+
+# export DAGSTER_EXTRA_PACKAGES := env("DAGSTER_EXTRA_PACKAGES", "dlt[duckdb] pyarrow pyiceberg s3fs simple-salesforce")
 
 [private]
 default:
@@ -379,9 +381,15 @@ add-workspace-module module_name working_directory:
     kubectl patch configmap dagster-workspace-yaml -n ${DAGSTER_NAMESPACE} --patch "$PATCH_JSON"
 
     echo "✓ Module '${MODULE_NAME}' added to workspace"
-    echo "Restarting Dagster to reload workspace..."
+
+# Reload workspace configuration (restart webserver and daemon)
+reload-workspace:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Reloading Dagster workspace configuration..."
     kubectl rollout restart deployment/dagster-dagster-webserver -n ${DAGSTER_NAMESPACE}
     kubectl rollout restart deployment/dagster-daemon -n ${DAGSTER_NAMESPACE}
+    echo "✓ Workspace reload initiated"
 
 # Note: add-workspace-file command has been removed due to sed parsing issues
 # Use add-workspace-module command instead for adding Python modules to workspace
@@ -541,11 +549,6 @@ remove-project project_name='':
 
         echo "✓ Module '${PYTHON_MODULE_NAME}' removed from workspace"
     fi
-
-    # Restart Dagster to reload workspace
-    echo "Restarting Dagster to reload workspace..."
-    kubectl rollout restart deployment/dagster-dagster-webserver -n ${DAGSTER_NAMESPACE}
-    kubectl rollout restart deployment/dagster-daemon -n ${DAGSTER_NAMESPACE}
 
     echo "✓ Project '${PROJECT_NAME}' removed successfully"
 
