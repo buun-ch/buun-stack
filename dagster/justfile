@@ -3,7 +3,7 @@ set fallback := true
 export DAGSTER_NAMESPACE := env("DAGSTER_NAMESPACE", "dagster")
 export DAGSTER_CHART_VERSION := env("DAGSTER_CHART_VERSION", "1.11.10")
 export DAGSTER_CONTAINER_IMAGE := env("DAGSTER_CONTAINER_IMAGE", "docker.io/dagster/dagster-k8s")
-export DAGSTER_CONTAINER_TAG := env("DAGSTER_CONTAINER_TAG", "1.11.10")
+export DAGSTER_CONTAINER_TAG := env("DAGSTER_CONTAINER_TAG", "1.11.13")
 export DAGSTER_CONTAINER_PULL_POLICY := env("DAGSTER_CONTAINER_PULL_POLICY", "IfNotPresent")
 export DAGSTER_HOST := env("DAGSTER_HOST", "")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
@@ -12,6 +12,7 @@ export DAGSTER_STORAGE_SIZE := env("DAGSTER_STORAGE_SIZE", "20Gi")
 export DAGSTER_CODE_STORAGE_SIZE := env("DAGSTER_CODE_STORAGE_SIZE", "10Gi")
 export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export DAGSTER_STORAGE_TYPE := env("DAGSTER_STORAGE_TYPE", "")
+export DAGSTER_EXTRA_PACKAGES := env("DAGSTER_EXTRA_PACKAGES", "dlt[duckdb] pyarrow pyiceberg s3fs simple-salesforce")
 
 [private]
 default:
@@ -347,10 +348,10 @@ add-workspace-module module_name working_directory:
     CURRENT_WORKSPACE=$(kubectl get configmap dagster-workspace-yaml -n ${DAGSTER_NAMESPACE} -o jsonpath='{.data.workspace\.yaml}')
 
     # Create temporary file with current content
-    echo "$CURRENT_WORKSPACE" > /tmp/current_workspace.yaml
+    echo "${CURRENT_WORKSPACE}" > /tmp/current_workspace.yaml
 
     # Check if module already exists
-    if echo "$CURRENT_WORKSPACE" | grep -q "module_name: ${MODULE_NAME}"; then
+    if echo "${CURRENT_WORKSPACE}" | grep -q "module_name: ${MODULE_NAME}"; then
         echo "Module '${MODULE_NAME}' already exists in workspace - skipping workspace update"
         echo "✓ Project files updated successfully"
         exit 0
@@ -364,9 +365,9 @@ add-workspace-module module_name working_directory:
     EOF
 
     # Add to workspace
-    if echo "$CURRENT_WORKSPACE" | grep -q "load_from: \[\]"; then
+    if echo "${CURRENT_WORKSPACE}" | grep -q "load_from: \[\]"; then
         # Replace empty array with new entry
-        NEW_WORKSPACE=$(echo "$CURRENT_WORKSPACE" | sed 's/load_from: \[\]/load_from:/')
+        NEW_WORKSPACE=$(echo "${CURRENT_WORKSPACE}" | sed 's/load_from: \[\]/load_from:/')
         NEW_WORKSPACE="${NEW_WORKSPACE}"$'\n'"$(cat /tmp/new_entry.txt)"
     else
         # Append to existing entries
@@ -374,7 +375,7 @@ add-workspace-module module_name working_directory:
     fi
 
     # Update ConfigMap using jq with proper key escaping
-    PATCH_JSON=$(jq -n --arg workspace "$NEW_WORKSPACE" '{"data": {"workspace.yaml": $workspace}}')
+    PATCH_JSON=$(jq -n --arg workspace "${NEW_WORKSPACE}" '{"data": {"workspace.yaml": $workspace}}')
     kubectl patch configmap dagster-workspace-yaml -n ${DAGSTER_NAMESPACE} --patch "$PATCH_JSON"
 
     echo "✓ Module '${MODULE_NAME}' added to workspace"
@@ -424,34 +425,19 @@ deploy-project project_dir='':
     echo "Project name: ${PROJECT_NAME}"
     echo "Python module name: ${PYTHON_MODULE_NAME}"
 
-    # Check if user code PVC exists
-    if ! kubectl get pvc dagster-user-code-pvc -n ${DAGSTER_NAMESPACE} &>/dev/null; then
-        echo "Error: User code PVC not found. Run 'just dagster::setup-user-code-pvc' first."
-        exit 1
-    fi
-
-    # Check if Longhorn is available for ReadWriteMany support
-    if kubectl get storageclass longhorn &>/dev/null; then
-        echo "Longhorn detected - PVC supports ReadWriteMany for sharing with other services"
-    else
-        echo "Longhorn not detected - PVC will use ReadWriteOnce (Dagster-only access)"
-    fi
-
-    echo "Deploying project '${PROJECT_NAME}'..."
-
     # Find running Dagster webserver pod
     DAGSTER_POD=$(kubectl get pods -n ${DAGSTER_NAMESPACE} -l component=dagster-webserver -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
 
-    if [ -z "$DAGSTER_POD" ] || ! kubectl get pod "$DAGSTER_POD" -n ${DAGSTER_NAMESPACE} &>/dev/null; then
+    if [ -z "${DAGSTER_POD}" ] || ! kubectl get pod "${DAGSTER_POD}" -n ${DAGSTER_NAMESPACE} &>/dev/null; then
         echo "Error: No running Dagster webserver pod found"
         echo "Please ensure Dagster is installed and running first"
         exit 1
     fi
 
-    echo "Using Dagster webserver pod: $DAGSTER_POD"
+    echo "Using Dagster webserver pod: ${DAGSTER_POD}"
 
     # Create directory if it doesn't exist
-    kubectl exec "$DAGSTER_POD" -n ${DAGSTER_NAMESPACE} -- mkdir -p "/opt/dagster/user-code/${PROJECT_NAME}" 2>/dev/null || true
+    kubectl exec "${DAGSTER_POD}" -n ${DAGSTER_NAMESPACE} -- mkdir -p "/opt/dagster/user-code/${PROJECT_NAME}" 2>/dev/null || true
 
     # Copy project files (excluding .venv, __pycache__, and other unnecessary files)
     echo "Copying project files to shared PVC (excluding .venv, __pycache__, etc.)..."
@@ -459,6 +445,7 @@ deploy-project project_dir='':
     # Create a tar archive excluding unnecessary files and directories
     tar -czf - \
         -C "${PROJECT_DIR}" \
+        --no-xattrs \
         --exclude='.venv' \
         --exclude='__pycache__' \
         --exclude='*.pyc' \
@@ -473,7 +460,7 @@ deploy-project project_dir='':
 
     # Determine the correct working directory (check if src directory exists)
     WORKING_DIR="/opt/dagster/user-code/${PROJECT_NAME}"
-    if kubectl exec "$DAGSTER_POD" -n ${DAGSTER_NAMESPACE} -- test -d "/opt/dagster/user-code/${PROJECT_NAME}/src" 2>/dev/null; then
+    if kubectl exec "${DAGSTER_POD}" -n ${DAGSTER_NAMESPACE} -- test -d "/opt/dagster/user-code/${PROJECT_NAME}/src" 2>/dev/null; then
         WORKING_DIR="/opt/dagster/user-code/${PROJECT_NAME}/src"
         echo "Found src directory, using: ${WORKING_DIR}"
     else
@@ -520,7 +507,7 @@ remove-project project_name='':
     # Find running Dagster webserver pod
     DAGSTER_POD=$(kubectl get pods -n ${DAGSTER_NAMESPACE} -l component=dagster-webserver -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
 
-    if [ -z "$DAGSTER_POD" ] || ! kubectl get pod "$DAGSTER_POD" -n ${DAGSTER_NAMESPACE} &>/dev/null; then
+    if [ -z "${DAGSTER_POD}" ] || ! kubectl get pod "${DAGSTER_POD}" -n ${DAGSTER_NAMESPACE} &>/dev/null; then
         echo "Error: No running Dagster webserver pod found"
         echo "Please ensure Dagster is installed and running first"
         exit 1
@@ -528,7 +515,7 @@ remove-project project_name='':
 
     # Remove project files from PVC
     echo "Removing project files from shared PVC..."
-    kubectl exec "$DAGSTER_POD" -n ${DAGSTER_NAMESPACE} -- rm -rf "/opt/dagster/user-code/${PROJECT_NAME}" 2>/dev/null || true
+    kubectl exec "${DAGSTER_POD}" -n ${DAGSTER_NAMESPACE} -- rm -rf "/opt/dagster/user-code/${PROJECT_NAME}" 2>/dev/null || true
 
     # Remove from workspace.yaml
     echo "Removing module '${PYTHON_MODULE_NAME}' from workspace..."
@@ -537,20 +524,20 @@ remove-project project_name='':
     CURRENT_WORKSPACE=$(kubectl get configmap dagster-workspace-yaml -n ${DAGSTER_NAMESPACE} -o jsonpath='{.data.workspace\.yaml}')
 
     # Check if module exists
-    if ! echo "$CURRENT_WORKSPACE" | grep -q "module_name: ${PYTHON_MODULE_NAME}"; then
+    if ! echo "${CURRENT_WORKSPACE}" | grep -q "module_name: ${PYTHON_MODULE_NAME}"; then
         echo "Module '${PYTHON_MODULE_NAME}' not found in workspace - only removing files"
     else
         # Remove the module entry using sed (remove the python_module block)
-        NEW_WORKSPACE=$(echo "$CURRENT_WORKSPACE" | sed "/- python_module:/,/working_directory: .*/{/module_name: ${PYTHON_MODULE_NAME}/,/working_directory: .*/d;}")
+        NEW_WORKSPACE=$(echo "${CURRENT_WORKSPACE}" | sed "/- python_module:/,/working_directory: .*/{/module_name: ${PYTHON_MODULE_NAME}/,/working_directory: .*/d;}")
 
         # If no modules left, reset to empty array
-        if ! echo "$NEW_WORKSPACE" | grep -q "module_name:"; then
+        if ! echo "${NEW_WORKSPACE}" | grep -q "module_name:"; then
             NEW_WORKSPACE="load_from: []"$'\n'
         fi
 
         # Update ConfigMap using jq
-        PATCH_JSON=$(jq -n --arg workspace "$NEW_WORKSPACE" '{"data": {"workspace.yaml": $workspace}}')
-        kubectl patch configmap dagster-workspace-yaml -n ${DAGSTER_NAMESPACE} --patch "$PATCH_JSON"
+        PATCH_JSON=$(jq -n --arg workspace "${NEW_WORKSPACE}" '{"data": {"workspace.yaml": $workspace}}')
+        kubectl patch configmap dagster-workspace-yaml -n ${DAGSTER_NAMESPACE} --patch "${PATCH_JSON}"
 
         echo "✓ Module '${PYTHON_MODULE_NAME}' removed from workspace"
     fi
