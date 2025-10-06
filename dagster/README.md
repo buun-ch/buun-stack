@@ -43,28 +43,75 @@ just dagster::uninstall true
 
 ## Project Deployment
 
+### Overview
+
+Dagster's official Helm chart only supports adding projects during installation. To work around this limitation, `just dagster::deploy-project` was implemented to dynamically add projects to a running Dagster instance.
+
+This solution:
+
+- Copies project files to a shared PVC (ReadWriteMany with Longhorn, or ReadWriteOnce fallback)
+- Updates the workspace ConfigMap to register the new project
+- Restarts Dagster components to load the updated workspace
+
 ### Deploy Projects to Shared PVC
 
-Dagster supports deploying Python projects to a shared PVC that allows ReadWriteMany access with Longhorn storage.
+#### 1. Prepare Project Directory
 
-1. **Prepare Project Directory**:
-   - Ensure your project has a `definitions.py` file in the main module
-   - Project name must not contain hyphens (use underscores instead)
+Requirements:
 
-2. **Deploy Project**:
+- Project must have a `definitions.py` file (typically in `src/<project_name>/definitions.py`)
+- Project directory name must use underscores, not hyphens (e.g., `my_project`, not `my-project`)
+- Project should follow standard Python package structure:
 
-   ```bash
-   # Deploy a local project directory
-   just dagster::deploy-project /path/to/your/project
+  ```
+  my_project/
+  ├── pyproject.toml          # Optional: for dependencies
+  ├── requirements.txt        # Optional: for dependencies
+  └── src/
+      └── my_project/
+          ├── __init__.py
+          ├── definitions.py  # Required: Dagster definitions entry point
+          └── defs/
+              └── assets/
+                  └── my_assets.py
+  ```
 
-   # Interactive deployment (will prompt for project path)
-   just dagster::deploy-project
+#### 2. Deploy Project
+
+```bash
+# Deploy a local project directory
+just dagster::deploy-project /path/to/your/project
+
+# Interactive deployment (will prompt for project path)
+just dagster::deploy-project
+```
+
+**What happens during deployment:**
+
+1. **File Copy**: Project files are copied to `/opt/dagster/user-code/<project_name>/` in the shared PVC
+   - Excludes: `.venv`, `__pycache__`, `.git`, and other build artifacts
+   - Uses tar with `--no-xattrs` to avoid macOS extended attributes issues
+
+2. **Workspace Update**: The `dagster-workspace-yaml` ConfigMap is updated to include:
+
+   ```yaml
+   load_from:
+     - python_module:
+         module_name: <project_name>.definitions
+         working_directory: /opt/dagster/user-code/<project_name>/src  # or project root if no src/
    ```
 
-3. **Verify Deployment**:
-   - Access Dagster Web UI
-   - Check that your assets appear in the Asset Catalog
-   - The project will be automatically added to the workspace configuration
+3. **Automatic Reload**: Dagster automatically detects the workspace.yaml changes and reloads within ~1 minute
+   - No manual restart required
+   - The new project will appear in the Deployment tab once loaded
+
+#### 3. Verify Deployment
+
+- Access Dagster Web UI
+- Navigate to "Deployment" tab to see registered code locations
+- Wait ~1 minute for automatic workspace reload
+- Click "Reload all" in the UI to refresh the view if needed
+- Check the Asset Catalog for your assets
 
 ### Remove Projects
 
@@ -75,6 +122,22 @@ just dagster::remove-project project_name
 # Interactive removal (will prompt for project name)
 just dagster::remove-project
 ```
+
+**What happens during removal:**
+
+1. Files are deleted from the shared PVC
+2. The project module is removed from `workspace.yaml`
+3. Dagster automatically detects the change and reloads within ~1 minute
+
+### Manual Workspace Reload
+
+If automatic reload doesn't work or you need immediate reload:
+
+```bash
+just dagster::reload-workspace
+```
+
+This command restarts both `dagster-webserver` and `dagster-daemon` to force an immediate workspace reload.
 
 ## Storage Configuration
 

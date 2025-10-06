@@ -381,6 +381,8 @@ add-workspace-module module_name working_directory:
     kubectl patch configmap dagster-workspace-yaml -n ${DAGSTER_NAMESPACE} --patch "$PATCH_JSON"
 
     echo "✓ Module '${MODULE_NAME}' added to workspace"
+    echo "Dagster will automatically reload the workspace within ~1 minute"
+    echo "If needed, manually reload with: just dagster::reload-workspace"
 
 # Reload workspace configuration (restart webserver and daemon)
 reload-workspace:
@@ -551,6 +553,8 @@ remove-project project_name='':
     fi
 
     echo "✓ Project '${PROJECT_NAME}' removed successfully"
+    echo "Dagster will automatically reload the workspace within ~1 minute"
+    echo "If needed, manually reload with: just dagster::reload-workspace"
 
 # Setup OAuth2 Proxy for Dagster authentication
 setup-oauth2-proxy:
