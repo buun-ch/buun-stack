@@ -1,27 +1,51 @@
 # buun-stack
 
-A Kubernetes development stack for self-hosted environments, designed to run on a Linux machine in your home or office that you can access from anywhere via the internet.
+A remotely accessible Kubernetes home lab with OIDC authentication. Build a modern development environment with integrated data analytics and AI capabilities. Includes a complete open data stack for data ingestion, transformation, serving, and orchestration—built on open-source components you can run locally and port to any cloud.
 
 - 📺 [Remote-Accessible Kubernetes Home Lab](https://www.youtube.com/playlist?list=PLbAvvJK22Y6vJPrUC6GrfNMXneYspckAo) (YouTube playlist)
 - 📝 [Building a Remote-Accessible Kubernetes Home Lab with k3s](https://dev.to/buun-ch/building-a-remote-accessible-kubernetes-home-lab-with-k3s-5g05) (Dev.to article)
 
-## Features
+## Architecture
 
-- **Kubernetes Distribution**: [k3s](https://k3s.io/) lightweight Kubernetes
+### Foundation
+
+- **Kubernetes**: [k3s](https://k3s.io/) lightweight distribution
+- **Automation**: [Just](https://just.systems/) task runner with templated configurations
+- **Remote Access**: [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) for secure internet connectivity
+
+### Core Components (Required)
+
+- **Database**: [PostgreSQL](https://www.postgresql.org/) cluster with pgvector extension
+- **Identity & Access**: [Keycloak](https://www.keycloak.org/) for OIDC authentication
+
+### Recommended Components
+
+- **Secrets Management**: [HashiCorp Vault](https://www.vaultproject.io/) with [External Secrets Operator](https://external-secrets.io/)
+    - Used by most stack modules for secure credential management
+    - Can be deployed without, but highly recommended
+
+### Storage (Optional)
+
 - **Block Storage**: [Longhorn](https://longhorn.io/) distributed block storage
 - **Object Storage**: [MinIO](https://min.io/) S3-compatible storage
-- **Identity & Access**: [Keycloak](https://www.keycloak.org/) for OIDC authentication
-- **Secrets Management**: [HashiCorp Vault](https://www.vaultproject.io/) with [External Secrets Operator](https://external-secrets.io/)
+
+### Data & Analytics (Optional)
+
 - **Interactive Computing**: [JupyterHub](https://jupyter.org/hub) for collaborative notebooks
-- **Business Intelligence**: [Metabase](https://www.metabase.com/) for business intelligence and data visualization
-- **Data Catalog**: [DataHub](https://datahubproject.io/) for metadata management and data discovery
-- **Database**: [PostgreSQL](https://www.postgresql.org/) cluster
-- **Analytics Engine/Database**: [ClickHouse](https://clickhouse.com/) for high-performance analytics and data warehousing
-- **Data Orchestration**: [Dagster](https://dagster.io/) for modern data pipelines and asset management
-- **Workflow Orchestration**: [Apache Airflow](https://airflow.apache.org/) for data pipeline automation and task scheduling
-- **Authentication Proxy**: [OAuth2 Proxy](https://oauth2-proxy.github.io/oauth2-proxy/) for adding Keycloak authentication to any application
-- **Remote Access**: [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) for secure internet connectivity
-- **Automation**: [Just](https://just.systems/) task runner with templated configurations
+- **Analytics Database**: [ClickHouse](https://clickhouse.com/) for high-performance analytics
+- **Vector Database**: [Qdrant](https://qdrant.tech/) for vector search and AI/ML applications
+- **Iceberg REST Catalog**: [Lakekeeper](https://lakekeeper.io/) for Apache Iceberg table management
+- **Business Intelligence**: [Metabase](https://www.metabase.com/) for data visualization
+- **Data Catalog**: [DataHub](https://datahubproject.io/) for metadata management
+
+### Orchestration (Optional)
+
+- **Data Orchestration**: [Dagster](https://dagster.io/) for modern data pipelines
+- **Workflow Orchestration**: [Apache Airflow](https://airflow.apache.org/) for task scheduling
+
+### Security (Optional)
+
+- **Authentication Proxy**: [OAuth2 Proxy](https://oauth2-proxy.github.io/oauth2-proxy/) for adding Keycloak authentication
 
 ## Quick Start
 
@@ -55,7 +79,7 @@ For detailed step-by-step instructions, see the [Installation Guide](./INSTALLAT
    just k8s::setup-oidc-auth
    ```
 
-## Core Components
+## Component Details
 
 ### k3s
 
@@ -114,187 +138,51 @@ S3-compatible object storage system providing:
 
 ### JupyterHub
 
-Multi-user platform for interactive computing:
+Multi-user platform for interactive computing with Keycloak authentication and persistent storage.
 
-- Collaborative Jupyter notebook environment
-- Integrated with Keycloak for OIDC authentication
-- Persistent storage for user workspaces
-- Support for multiple kernels and environments
-- Vault integration for secure secrets management
-
-See [JupyterHub Documentation](./docs/jupyterhub.md) for detailed setup and configuration.
+[📖 See JupyterHub Documentation](./jupyterhub/README.md)
 
 ### Metabase
 
-Business intelligence and data visualization platform:
+Business intelligence and data visualization platform with PostgreSQL integration.
 
-- Open-source analytics and dashboards
-- Interactive data exploration
-- PostgreSQL integration for data storage
-- Automated setup with Helm
-- Session management through Vault/External Secrets
-- Simplified deployment (no OIDC dependency)
-
-Installation:
-
-```bash
-just metabase::install
-```
-
-Access Metabase at `https://metabase.yourdomain.com` and complete the initial setup wizard to create an admin account.
+[📖 See Metabase Documentation](./metabase/README.md)
 
 ### DataHub
 
-Modern data catalog and metadata management platform:
+Modern data catalog and metadata management platform with OIDC integration.
 
-- Centralized data discovery and documentation
-- Data lineage tracking and impact analysis
-- Schema evolution monitoring
-- OIDC integration with Keycloak for secure access
-- Elasticsearch-powered search and indexing
-- Kafka-based real-time metadata streaming
-- PostgreSQL backend for metadata storage
-
-Installation:
-
-```bash
-just datahub::install
-```
-
-> **⚠️ Resource Requirements:** DataHub is resource-intensive, requiring approximately **4-5GB of RAM** and 1+ CPU cores across multiple components (Elasticsearch, Kafka, Zookeeper, and DataHub services). Deployment typically takes 15-20 minutes to complete. Ensure your cluster has sufficient resources before installation.
-
-Access DataHub at `https://datahub.yourdomain.com` and use "Sign in with SSO" to authenticate via Keycloak.
+[📖 See DataHub Documentation](./datahub/README.md)
 
 ### ClickHouse
 
-High-performance columnar OLAP database for analytics and data warehousing:
+High-performance columnar OLAP database for analytics and data warehousing.
 
-- Columnar storage for fast analytical queries
-- Real-time data ingestion and processing
-- Horizontal scaling for large datasets
-- SQL interface with advanced analytics functions
-- Integration with External Secrets for secure credential management
-- Support for various data formats (CSV, JSON, Parquet, etc.)
+[📖 See ClickHouse Documentation](./clickhouse/README.md)
 
-Installation:
+### Qdrant
 
-```bash
-just clickhouse::install
-```
+High-performance vector database for AI/ML applications with similarity search and rich filtering.
 
-Access ClickHouse at `https://clickhouse.yourdomain.com` using the admin credentials stored in Vault.
+[📖 See Qdrant Documentation](./qdrant/README.md)
 
-**CH-UI Web Interface**: An optional web-based query interface for ClickHouse is available:
+### Lakekeeper
 
-```bash
-just ch-ui::install
-```
+Apache Iceberg REST Catalog for managing data lake tables with OIDC authentication.
+
+[📖 See Lakekeeper Documentation](./lakekeeper/README.md)
 
 ### Apache Airflow
 
-Modern workflow orchestration platform for data pipelines and task automation:
+Modern workflow orchestration platform for data pipelines with JupyterHub integration.
 
-- Airflow 3 with modern SDK components and FastAPI integration
-- DAG Development: Integrated with JupyterHub for seamless workflow creation and editing
-- OIDC Authentication: Secure access through Keycloak integration
-- Shared Storage: DAG files shared between JupyterHub and Airflow for direct editing
-- Role-based Access Control: Multiple user roles (Admin, Operator, User, Viewer)
-- REST API: Ful API access for programmatic DAG management
-
-Installation:
-
-```bash
-just airflow::install
-```
-
-**JupyterHub Integration**: After installing both JupyterHub and Airflow, DAG files are automatically shared:
-
-- Edit DAG files directly in JupyterHub: `~/airflow-dags/*.py`
-- Changes appear in Airflow UI within 1-2 minutes
-- Full Python development environment with syntax checking
-- Template files available for quick DAG creation
-
-**User Management**:
-
-```bash
-# Assign roles to users
-just airflow::assign-role <username> <role>
-
-# Available roles: airflow_admin, airflow_op, airflow_user, airflow_viewer
-just airflow::assign-role myuser airflow_admin
-```
-
-**API Access**: Create API users for programmatic access:
-
-```bash
-just airflow::create-api-user <username> <role>
-```
-
-> **💡 Development Workflow**: Create DAGs in JupyterHub using `~/airflow-dags/dag_template.py` as a starting point. Use `.tmp` extension during development to avoid import errors, then rename to `.py` when ready.
-
-Access Airflow at `https://airflow.yourdomain.com` and authenticate via Keycloak.
+[📖 See Airflow Documentation](./airflow/README.md)
 
 ### Dagster
 
-Modern data orchestration platform for building data pipelines and managing data assets:
+Modern data orchestration platform for building data pipelines and managing data assets.
 
-- **Asset-Centric Development**: Define data assets with clear lineage and dependencies
-- **Dynamic Pipeline Deployment**: Deploy projects directly from local development environments
-- **Integrated Development**: Shared storage with PVC-based project deployment
-- **OAuth2 Authentication**: Secure access through Keycloak via OAuth2 Proxy
-- **Python-First**: Native Python development with comprehensive SDK
-
-Installation:
-
-```bash
-just dagster::install
-```
-
-**Project Development**: Deploy `dagster project scaffold` projects directly to Dagster:
-
-```bash
-# Create a new project locally
-dagster project scaffold my-project
-
-# Deploy to Dagster cluster
-just dagster::deploy-project my-project
-
-# Remove project when done
-just dagster::remove-project my-project
-```
-
-**Storage Configuration**:
-
-- **MinIO**: S3-compatible object storage for compute logs and staging
-- **Local**: Persistent volumes with automatic Longhorn RWX detection for shared development
-
-**Custom Dependencies**: For projects requiring additional Python packages:
-
-```bash
-# Build custom image with dependencies
-export DAGSTER_CONTAINER_IMAGE=myregistry/dagster-custom
-export DAGSTER_CONTAINER_TAG=latest
-just dagster::build-container-image
-just dagster::push-container-image
-just dagster::upgrade
-```
-
-**Project Structure**: Projects must follow naming conventions:
-
-- Directory names: Use underscores only (e.g., `my_project`, not `my-project`)
-- Python modules: Follow standard Python naming (snake_case)
-
-**Authentication**: Dagster uses OAuth2 Proxy for Keycloak integration:
-
-- During installation, OAuth2 authentication is automatically configured
-- Access control through Keycloak groups and roles
-- **Note**: All authenticated users share the same Dagster instance and workspace
-
-> **⚠️ Multi-user Limitation**: Dagster OSS does not support individual user workspaces or role-based permissions within the application. All users authenticated through Keycloak will share the same Dagster instance and have access to all assets, jobs, and configurations. Use naming conventions and team coordination for shared usage.
->
-> **💡 Development Workflow**: Create projects locally with `dagster project scaffold`, develop with local dependencies, then deploy to the cluster for execution. The shared PVC allows immediate access to deployed code.
-
-Access Dagster at `https://dagster.yourdomain.com` and authenticate via Keycloak.
+[📖 See Dagster Documentation](./dagster/README.md)
 
 ## Common Operations
 
