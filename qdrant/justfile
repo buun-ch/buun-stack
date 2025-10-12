@@ -1,0 +1,196 @@
+set fallback := true
+
+export QDRANT_NAMESPACE := env("QDRANT_NAMESPACE", "qdrant")
+export QDRANT_VERSION := env("QDRANT_VERSION", "1.15.5")
+export QDRANT_HOST := env("QDRANT_HOST", "")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add qdrant https://qdrant.github.io/qdrant-helm
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove qdrant
+
+# Create Qdrant namespace
+create-namespace:
+    @kubectl get namespace ${QDRANT_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${QDRANT_NAMESPACE}
+
+# Delete Qdrant namespace
+delete-namespace:
+    @kubectl delete namespace ${QDRANT_NAMESPACE} --ignore-not-found
+
+# Create Qdrant API keys secret
+create-api-keys:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up Qdrant API keys..."
+
+    # Generate API keys
+    API_KEY=$(just utils::random-password)
+    READONLY_API_KEY=$(just utils::random-password)
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing API keys in Vault and creating ExternalSecret..."
+        just vault::put qdrant/api-keys api_key="$API_KEY" readonly_api_key="$READONLY_API_KEY"
+        gomplate -f qdrant-api-keys-external-secret.gomplate.yaml -o qdrant-api-keys-external-secret.yaml
+        kubectl apply -f qdrant-api-keys-external-secret.yaml
+        echo "Waiting for API keys secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/qdrant-api-keys-external-secret \
+            -n ${QDRANT_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret qdrant-api-keys -n ${QDRANT_NAMESPACE} --ignore-not-found
+        kubectl create secret generic qdrant-api-keys -n ${QDRANT_NAMESPACE} \
+            --from-literal=api_key="$API_KEY" \
+            --from-literal=readonly_api_key="$READONLY_API_KEY"
+        echo "API keys secret created directly in Kubernetes"
+    fi
+    echo "Qdrant API keys setup completed"
+
+# Delete Qdrant API keys secret
+delete-api-keys-secret:
+    @kubectl delete secret qdrant-api-keys -n ${QDRANT_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret qdrant-api-keys-external-secret -n ${QDRANT_NAMESPACE} --ignore-not-found
+
+# Install Qdrant
+install:
+    #!/bin/bash
+    set -euo pipefail
+    just add-helm-repo
+    just create-namespace
+    just create-api-keys
+    while [ -z "${QDRANT_HOST}" ]; do
+        QDRANT_HOST=$(
+            gum input --prompt="Qdrant host (FQDN): " --width=100 \
+            --placeholder="e.g., qdrant.example.com"
+        )
+    done
+    gomplate -f qdrant-values.gomplate.yaml -o qdrant-values.yaml
+    helm upgrade --install qdrant qdrant/qdrant \
+        --version ${QDRANT_VERSION} -n ${QDRANT_NAMESPACE} --create-namespace --wait \
+        -f qdrant-values.yaml
+
+# Uninstall Qdrant
+uninstall:
+    helm uninstall qdrant -n ${QDRANT_NAMESPACE} --wait --ignore-not-found
+    just delete-api-keys-secret
+    just delete-namespace
+
+# Get API key
+get-api-key:
+    @kubectl get secret qdrant-api-keys -n ${QDRANT_NAMESPACE} \
+        -o jsonpath="{.data.api_key}" | base64 -d
+    @echo
+
+# Get readonly API key
+get-readonly-api-key:
+    @kubectl get secret qdrant-api-keys -n ${QDRANT_NAMESPACE} \
+        -o jsonpath="{.data.readonly_api_key}" | base64 -d
+    @echo
+
+# Check if telepresence is connected
+[private]
+check-telepresence:
+    #!/bin/bash
+    set -euo pipefail
+    if ! command -v telepresence &>/dev/null; then
+        echo "Error: telepresence is not installed" >&2
+        exit 1
+    fi
+    if ! telepresence status &>/dev/null; then
+        echo "Error: telepresence is not connected" >&2
+        echo "Please run: telepresence connect" >&2
+        exit 1
+    fi
+
+# Get Qdrant service URL
+[private]
+get-service-url:
+    @echo "http://qdrant.${QDRANT_NAMESPACE}.svc.cluster.local:6333"
+
+# Check Qdrant health
+health-check:
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    API_KEY=$(just get-api-key)
+    QDRANT_URL=$(just get-service-url)
+    echo "Checking Qdrant health at ${QDRANT_URL}..."
+    curl -s -H "api-key: ${API_KEY}" "${QDRANT_URL}/healthz"
+    echo
+
+# Test Qdrant with basic vector operations
+test:
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    API_KEY=$(just get-api-key)
+    QDRANT_URL=$(just get-service-url)
+    COLLECTION_NAME="test_collection_$(date +%s)"
+
+    echo "Testing Qdrant at ${QDRANT_URL}"
+    echo "Using collection: ${COLLECTION_NAME}"
+    echo
+
+    echo "1. Creating collection..."
+    curl -s -X PUT "${QDRANT_URL}/collections/${COLLECTION_NAME}" \
+        -H "api-key: ${API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "vectors": {
+            "size": 4,
+            "distance": "Cosine"
+          }
+        }' | jq .
+    echo
+
+    echo "2. Adding test points..."
+    curl -s -X PUT "${QDRANT_URL}/collections/${COLLECTION_NAME}/points" \
+        -H "api-key: ${API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "points": [
+            {"id": 1, "vector": [0.05, 0.61, 0.76, 0.74], "payload": {"city": "Berlin"}},
+            {"id": 2, "vector": [0.19, 0.81, 0.75, 0.11], "payload": {"city": "London"}},
+            {"id": 3, "vector": [0.36, 0.55, 0.47, 0.94], "payload": {"city": "Tokyo"}}
+          ]
+        }' | jq .
+    echo
+
+    echo "3. Searching for similar vectors..."
+    curl -s -X POST "${QDRANT_URL}/collections/${COLLECTION_NAME}/points/search" \
+        -H "api-key: ${API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "vector": [0.2, 0.8, 0.7, 0.1],
+          "limit": 3
+        }' | jq .
+    echo
+
+    echo "4. Deleting test collection..."
+    curl -s -X DELETE "${QDRANT_URL}/collections/${COLLECTION_NAME}" \
+        -H "api-key: ${API_KEY}" | jq .
+    echo
+
+    echo "Test completed successfully!"
+
+# Clean up Qdrant resources
+cleanup:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete all Qdrant resources and secrets."
+    if gum confirm "Are you sure you want to proceed?"; then
+        echo "Cleaning up Qdrant resources..."
+        just vault::delete qdrant/api-keys || true
+        echo "Cleanup completed"
+    else
+        echo "Cleanup cancelled"
+    fi

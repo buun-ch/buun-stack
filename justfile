@@ -22,6 +22,7 @@ mod metabase
 mod minio
 mod oauth2-proxy
 mod postgres
+mod qdrant
 mod utils
 mod vault
 

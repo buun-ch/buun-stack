@@ -1,0 +1,27 @@
+apiKey:
+  valueFrom:
+    secretKeyRef:
+      name: qdrant-api-keys
+      key: api_key
+
+readOnlyApiKey:
+  valueFrom:
+    secretKeyRef:
+      name: qdrant-api-keys
+      key: readonly_api_key
+
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  ingressClassName: traefik
+  hosts:
+    - host: {{ .Env.QDRANT_HOST }}
+      paths:
+        - path: /
+          pathType: Prefix
+          servicePort: 6333
+  tls:
+    - hosts:
+      - {{ .Env.QDRANT_HOST }}
