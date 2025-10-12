@@ -479,6 +479,7 @@ deploy-project project_dir='':
 
     # Add to workspace (use definitions submodule)
     just dagster::add-workspace-module "${PYTHON_MODULE_NAME}.definitions" "${WORKING_DIR}"
+    just dagster::reload-workspace
 
     echo "✓ Project '${PROJECT_NAME}' deployed successfully"
     echo "Files location: /opt/dagster/user-code/${PROJECT_NAME}"
@@ -553,8 +554,7 @@ remove-project project_name='':
     fi
 
     echo "✓ Project '${PROJECT_NAME}' removed successfully"
-    echo "Dagster will automatically reload the workspace within ~1 minute"
-    echo "If needed, manually reload with: just dagster::reload-workspace"
+    just dagster::reload-workspace
 
 # Setup OAuth2 Proxy for Dagster authentication
 setup-oauth2-proxy:
