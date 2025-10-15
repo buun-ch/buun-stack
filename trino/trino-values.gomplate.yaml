@@ -21,7 +21,7 @@ server:
     https:
       enabled: false
 
-    authenticationType: "OAUTH2"
+    authenticationType: "PASSWORD,OAUTH2"
 
   exchangeManager:
     name: "filesystem"
@@ -59,7 +59,7 @@ accessControl: {}
 
 resourceGroups: {}
 
-{{- if eq (.Env.TRINO_POSTGRES_ENABLED | default "false") "true" }}
+{{- if .Env.TRINO_POSTGRES_ENABLED }}
 catalogs:
   postgresql: |
     connector.name=postgresql
@@ -71,7 +71,7 @@ catalogs:
     connector.name=tpch
     tpch.splits-per-node=4
 
-{{- if eq (.Env.TRINO_MINIO_ENABLED | default "false") "true" }}
+{{- if .Env.TRINO_MINIO_ENABLED }}
   iceberg: |
     connector.name=iceberg
     iceberg.catalog.type=rest
@@ -106,10 +106,7 @@ ingress:
       paths:
         - path: /
           pathType: ImplementationSpecific
-  tls:
-    - secretName: trino-tls
-      hosts:
-        - {{ .Env.TRINO_HOST }}
+  tls: []
 
 auth: {}
 
@@ -166,7 +163,10 @@ coordinator:
 
   affinity: {}
 
-  additionalConfigFiles: {}
+  additionalConfigFiles:
+    password-authenticator.properties: |
+      password-authenticator.name=file
+      file.password-file=/etc/trino/password/password.db
 
   additionalVolumes: []
 
@@ -176,7 +176,10 @@ coordinator:
 
   labels: {}
 
-  secretMounts: []
+  secretMounts:
+    - name: trino-password
+      secretName: trino-password-secret
+      path: /etc/trino/password
 
 worker:
   jvm:
@@ -268,7 +271,7 @@ env:
       secretKeyRef:
         name: trino-oauth-secret
         key: client_secret
-{{- if eq (.Env.TRINO_POSTGRES_ENABLED | default "false") "true" }}
+{{- if .Env.TRINO_POSTGRES_ENABLED }}
   - name: POSTGRES_USER
     valueFrom:
       secretKeyRef:

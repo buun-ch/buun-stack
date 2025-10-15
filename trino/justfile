@@ -5,6 +5,7 @@ export TRINO_CHART_VERSION := env("TRINO_CHART_VERSION", "1.41.0")
 export TRINO_IMAGE_TAG := env("TRINO_IMAGE_TAG", "477")
 export TRINO_HOST := env("TRINO_HOST", "")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export TRINO_COORDINATOR_MEMORY := env("TRINO_COORDINATOR_MEMORY", "4Gi")
 export TRINO_COORDINATOR_CPU := env("TRINO_COORDINATOR_CPU", "2")
@@ -13,6 +14,8 @@ export TRINO_WORKER_MEMORY := env("TRINO_WORKER_MEMORY", "4Gi")
 export TRINO_WORKER_CPU := env("TRINO_WORKER_CPU", "2")
 export TRINO_WORKER_JVM_HEAP := env("TRINO_WORKER_JVM_HEAP", "4G")
 export TRINO_WORKER_COUNT := env("TRINO_WORKER_COUNT", "2")
+export TRINO_POSTGRES_ENABLED := env("TRINO_POSTGRES_ENABLED", "true")
+export TRINO_MINIO_ENABLED := env("TRINO_MINIO_ENABLED", "")
 export POSTGRES_NAMESPACE := env("POSTGRES_NAMESPACE", "postgres")
 export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 
@@ -85,45 +88,42 @@ delete-oauth-secret:
     @kubectl delete secret trino-oauth-secret -n ${TRINO_NAMESPACE} --ignore-not-found
     @kubectl delete externalsecret trino-oauth-external-secret -n ${TRINO_NAMESPACE} --ignore-not-found
 
-# Create self-signed certificate for HTTPS
-create-self-signed-cert:
+# Create password file for basic authentication
+create-password-secret:
     #!/bin/bash
     set -euo pipefail
-    echo "Creating self-signed certificate for Trino..."
+    echo "Creating password secret for Trino..."
 
-    CERT_PASSWORD=$(just utils::random-password)
-    TRINO_HOST=${TRINO_HOST:-trino.local}
+    admin_password=$(just utils::random-password)
 
-    # Create temporary directory
-    TEMP_DIR=$(mktemp -d)
-    trap "rm -rf ${TEMP_DIR}" EXIT
+    temp_dir=$(mktemp -d)
+    trap "rm -rf ${temp_dir}" EXIT
 
-    # Generate JKS keystore with self-signed certificate
-    keytool -genkeypair \
-        -alias trino \
-        -keyalg RSA \
-        -keysize 2048 \
-        -validity 3650 \
-        -keystore ${TEMP_DIR}/keystore.jks \
-        -storepass "${CERT_PASSWORD}" \
-        -keypass "${CERT_PASSWORD}" \
-        -dname "CN=${TRINO_HOST}, OU=Trino, O=BuunStack, L=Local, ST=Local, C=US" \
-        -ext SAN=dns:${TRINO_HOST},dns:trino-coordinator,dns:trino-coordinator.${TRINO_NAMESPACE}.svc.cluster.local
+    # Generate bcrypt password using htpasswd
+    # -B for bcrypt, -C 10 for cost factor 10
+    htpasswd -B -C 10 -b -c ${temp_dir}/password.db admin "${admin_password}"
 
-    echo "Certificate created successfully"
+    # Store password in Vault if available
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Storing password in Vault"
+        just vault::put trino/password admin_password="${admin_password}"
+    fi
 
     # Create Kubernetes secret
-    kubectl delete secret trino-tls-secret -n ${TRINO_NAMESPACE} --ignore-not-found
-    kubectl create secret generic trino-tls-secret -n ${TRINO_NAMESPACE} \
-        --from-file=keystore.jks=${TEMP_DIR}/keystore.jks \
-        --from-literal=keystore-password="${CERT_PASSWORD}"
+    kubectl delete secret trino-password-secret -n ${TRINO_NAMESPACE} --ignore-not-found
+    kubectl create secret generic trino-password-secret -n ${TRINO_NAMESPACE} \
+        --from-file=password.db=${temp_dir}/password.db
 
-    echo "TLS secret created in Kubernetes"
-    echo "Certificate password stored in secret 'trino-tls-secret'"
+    echo "Password secret created successfully"
+    echo "Username: admin"
+    echo "Password: ${admin_password}"
+    echo ""
+    echo "Please save this password. You can also retrieve it from Vault with:"
+    echo "  just vault::get trino/password admin_password"
 
-# Delete TLS secret
-delete-tls-secret:
-    @kubectl delete secret trino-tls-secret -n ${TRINO_NAMESPACE} --ignore-not-found
+# Delete password secret
+delete-password-secret:
+    @kubectl delete secret trino-password-secret -n ${TRINO_NAMESPACE} --ignore-not-found
 
 # Setup PostgreSQL catalog for Trino
 setup-postgres-catalog:
@@ -141,41 +141,42 @@ setup-postgres-catalog:
     if just postgres::user-exists trino &>/dev/null; then
         echo "User 'trino' already exists."
         if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
-            if DB_PASSWORD=$(just vault::get trino/postgres password 2>/dev/null); then
+            if db_password=$(just vault::get trino/postgres password 2>/dev/null); then
                 echo "Using existing password from Vault."
             else
                 echo "Generating new password and updating Vault..."
-                DB_PASSWORD=$(just utils::random-password)
-                just postgres::psql -c "ALTER USER trino WITH PASSWORD '$DB_PASSWORD';"
+                db_password=$(just utils::random-password)
+                just postgres::psql -c "ALTER USER trino WITH PASSWORD '${db_password}';"
             fi
         else
             echo "Generating new password for existing user..."
-            DB_PASSWORD=$(just utils::random-password)
-            just postgres::psql -c "ALTER USER trino WITH PASSWORD '$DB_PASSWORD';"
+            db_password=$(just utils::random-password)
+            just postgres::psql -c "ALTER USER trino WITH PASSWORD '${db_password}';"
         fi
     else
         echo "Creating new user 'trino'..."
-        DB_PASSWORD=$(just utils::random-password)
-        just postgres::create-user trino "$DB_PASSWORD"
+        db_password=$(just utils::random-password)
+        just postgres::create-user trino "${db_password}"
     fi
 
     echo "Ensuring database permissions..."
     just postgres::grant trino trino
 
     if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
-        echo "External Secrets available. Storing credentials in Vault and creating ExternalSecret..."
-        just vault::put trino/postgres username=trino password="$DB_PASSWORD"
-        gomplate -f trino-postgres-external-secret.gomplate.yaml -o trino-postgres-external-secret.yaml
+        echo "External Secrets available. Storing credentials in Vault"
+        just vault::put trino/postgres username=trino password="${db_password}"
+        gomplate -f trino-postgres-external-secret.gomplate.yaml \
+            -o trino-postgres-external-secret.yaml
         kubectl apply -f trino-postgres-external-secret.yaml
         echo "Waiting for PostgreSQL secret to be ready..."
         kubectl wait --for=condition=Ready externalsecret/trino-postgres-external-secret \
             -n ${TRINO_NAMESPACE} --timeout=60s
     else
-        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        echo "External Secrets not available. Creating Kubernetes Secret directly"
         kubectl delete secret trino-postgres-secret -n ${TRINO_NAMESPACE} --ignore-not-found
         kubectl create secret generic trino-postgres-secret -n ${TRINO_NAMESPACE} \
             --from-literal=username=trino \
-            --from-literal=password="$DB_PASSWORD"
+            --from-literal=password="${db_password}"
         echo "PostgreSQL secret created directly in Kubernetes"
     fi
     echo "PostgreSQL catalog setup completed"
@@ -183,7 +184,8 @@ setup-postgres-catalog:
 # Delete PostgreSQL secret
 delete-postgres-secret:
     @kubectl delete secret trino-postgres-secret -n ${TRINO_NAMESPACE} --ignore-not-found
-    @kubectl delete externalsecret trino-postgres-external-secret -n ${TRINO_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret trino-postgres-external-secret -n ${TRINO_NAMESPACE} \
+        --ignore-not-found
 
 # Setup MinIO storage for Trino (optional)
 setup-minio-storage:
@@ -225,13 +227,13 @@ setup-minio-storage:
 # Delete MinIO secret
 delete-minio-secret:
     @kubectl delete secret trino-minio-secret -n ${TRINO_NAMESPACE} --ignore-not-found
-    @kubectl delete externalsecret trino-minio-external-secret -n ${TRINO_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret trino-minio-external-secret -n ${TRINO_NAMESPACE} \
+        --ignore-not-found
 
 # Install Trino
 install:
     #!/bin/bash
     set -euo pipefail
-    export TRINO_HOST=${TRINO_HOST:-}
     while [ -z "${TRINO_HOST}" ]; do
         TRINO_HOST=$(
             gum input --prompt="Trino host (FQDN): " --width=100 \
@@ -241,35 +243,28 @@ install:
     echo "Installing Trino..."
     just create-namespace
     just create-oauth-client
-    export TRINO_HOST="${TRINO_HOST}"
-    just create-self-signed-cert
+    just create-password-secret
 
-    if gum confirm "Setup PostgreSQL catalog?"; then
-        just setup-postgres-catalog
-        export TRINO_POSTGRES_ENABLED="true"
-    else
-        export TRINO_POSTGRES_ENABLED="false"
-    fi
+    just setup-postgres-catalog
 
-    if gum confirm "Setup MinIO storage (for Hive/Iceberg catalogs)?"; then
-        just setup-minio-storage
-        export TRINO_MINIO_ENABLED="true"
-    else
-        export TRINO_MINIO_ENABLED="false"
+    if [ -z "${TRINO_MINIO_ENABLED}" ]; then
+        if gum confirm "Setup MinIO storage (for Iceberg catalogs)?"; then
+            just setup-minio-storage
+            TRINO_MINIO_ENABLED="true"
+        else
+            TRINO_MINIO_ENABLED="false"
+        fi
     fi
 
     just add-helm-repo
 
-    SHARED_SECRET=$(just utils::random-password)
-    export TRINO_SHARED_SECRET="$SHARED_SECRET"
+    shared_secret=$(just utils::random-password)
+    export TRINO_SHARED_SECRET="${shared_secret}"
 
     gomplate -f trino-values.gomplate.yaml -o trino-values.yaml
 
-    helm upgrade --install trino trino/trino \
-        --namespace ${TRINO_NAMESPACE} \
-        --version ${TRINO_CHART_VERSION} \
-        -f trino-values.yaml \
-        --wait --timeout=10m
+    helm upgrade --install trino trino/trino --namespace ${TRINO_NAMESPACE} \
+        --version ${TRINO_CHART_VERSION} -f trino-values.yaml --wait --timeout=10m
 
     echo "Trino installed successfully"
     echo "Access Trino at: https://${TRINO_HOST}"
@@ -278,48 +273,40 @@ install:
 upgrade:
     #!/bin/bash
     set -euo pipefail
+    while [ -z "${TRINO_HOST}" ]; do
+        TRINO_HOST=$(
+            gum input --prompt="Trino host (FQDN): " --width=100 \
+            --placeholder="e.g., trino.example.com"
+        )
+    done
+
     echo "Upgrading Trino..."
 
-    # Detect current configuration from existing secrets
-    if kubectl get secret trino-postgres-secret -n ${TRINO_NAMESPACE} &>/dev/null; then
-        export TRINO_POSTGRES_ENABLED="true"
-        echo "PostgreSQL catalog: enabled"
-    else
-        export TRINO_POSTGRES_ENABLED="false"
-        echo "PostgreSQL catalog: disabled"
+    if [ -z "${TRINO_MINIO_ENABLED}" ]; then
+        if kubectl get secret trino-minio-secret -n ${TRINO_NAMESPACE} &>/dev/null; then
+            TRINO_MINIO_ENABLED="true"
+            echo "MinIO storage: enabled"
+        else
+            TRINO_MINIO_ENABLED="false"
+            echo "MinIO storage: disabled"
+        fi
     fi
 
-    if kubectl get secret trino-minio-secret -n ${TRINO_NAMESPACE} &>/dev/null; then
-        export TRINO_MINIO_ENABLED="true"
-        echo "MinIO storage: enabled"
-    else
-        export TRINO_MINIO_ENABLED="false"
-        echo "MinIO storage: disabled"
-    fi
-
-    # Get TRINO_HOST from existing ingress
-    export TRINO_HOST=$(kubectl get ingress -n ${TRINO_NAMESPACE} trino-coordinator -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
-    if [ -z "${TRINO_HOST}" ]; then
-        echo "Error: Could not determine TRINO_HOST from existing ingress"
-        exit 1
-    fi
-    echo "Trino host: ${TRINO_HOST}"
-
-    # Get existing shared secret from config
-    SHARED_SECRET=$(kubectl get configmap trino-coordinator -n ${TRINO_NAMESPACE} -o jsonpath='{.data.config\.properties}' 2>/dev/null | grep "internal-communication.shared-secret=" | cut -d'=' -f2 || echo "")
-    if [ -z "${SHARED_SECRET}" ]; then
+    shared_secret=$(
+        kubectl get configmap trino-coordinator -n ${TRINO_NAMESPACE} \
+        -o jsonpath='{.data.config\.properties}' 2>/dev/null |
+        grep "internal-communication.shared-secret=" | cut -d'=' -f2 || echo ""
+    )
+    if [ -z "${shared_secret}" ]; then
         echo "Error: Could not retrieve existing shared secret"
         exit 1
     fi
-    export TRINO_SHARED_SECRET="${SHARED_SECRET}"
+    export TRINO_SHARED_SECRET="${shared_secret}"
 
     gomplate -f trino-values.gomplate.yaml -o trino-values.yaml
 
-    helm upgrade trino trino/trino \
-        --namespace ${TRINO_NAMESPACE} \
-        --version ${TRINO_CHART_VERSION} \
-        -f trino-values.yaml \
-        --wait --timeout=10m
+    helm upgrade trino trino/trino --namespace ${TRINO_NAMESPACE} --version ${TRINO_CHART_VERSION} \
+        -f trino-values.yaml --wait --timeout=10m
 
     echo "Trino upgraded successfully"
     echo "Access Trino at: https://${TRINO_HOST}"
@@ -333,7 +320,7 @@ uninstall delete-db='true':
     just delete-oauth-secret
     just delete-postgres-secret
     just delete-minio-secret
-    just delete-tls-secret
+    just delete-password-secret
     just delete-namespace
     if [ "{{ delete-db }}" = "true" ]; then
         just postgres::delete-db trino || true
@@ -352,8 +339,20 @@ cleanup:
         just vault::delete trino/oauth || true
         just vault::delete trino/postgres || true
         just vault::delete trino/minio || true
+        just vault::delete trino/password || true
         just keycloak::delete-client ${KEYCLOAK_REALM} trino || true
         echo "Cleanup completed"
     else
         echo "Cleanup cancelled"
+    fi
+
+# Print Trino admin password
+admin-password:
+    #!/bin/bash
+    set -euo pipefail
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        just vault::get trino/password admin_password
+    else
+        echo "Cannot retrieve password: External Secrets not installed"
+        exit 1
     fi
