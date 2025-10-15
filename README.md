@@ -32,6 +32,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 ### Data & Analytics (Optional)
 
 - **Interactive Computing**: [JupyterHub](https://jupyter.org/hub) for collaborative notebooks
+- **SQL Query Engine**: [Trino](https://trino.io/) for distributed SQL queries across multiple data sources
 - **Analytics Database**: [ClickHouse](https://clickhouse.com/) for high-performance analytics
 - **Vector Database**: [Qdrant](https://qdrant.tech/) for vector search and AI/ML applications
 - **Iceberg REST Catalog**: [Lakekeeper](https://lakekeeper.io/) for Apache Iceberg table management
@@ -147,6 +148,17 @@ Multi-user platform for interactive computing with Keycloak authentication and p
 Business intelligence and data visualization platform with PostgreSQL integration.
 
 [📖 See Metabase Documentation](./metabase/README.md)
+
+### Trino
+
+Fast distributed SQL query engine for big data analytics with:
+
+- **Multi-Source Queries**: Query PostgreSQL, Iceberg, and other data sources in a single query
+- **Keycloak Authentication**: OAuth2 for Web UI and password authentication for JDBC clients
+- **Metabase Integration**: Connect via Starburst driver for data visualization
+- **Sample Data**: TPCH catalog with benchmark data for testing
+
+[📖 See Trino Documentation](./trino/README.md)
 
 ### DataHub
 
@@ -283,6 +295,7 @@ kubectl --context yourpc-oidc get nodes
 # Web interfaces
 # Vault: https://vault.yourdomain.com
 # Keycloak: https://auth.yourdomain.com
+# Trino: https://trino.yourdomain.com
 # Metabase: https://metabase.yourdomain.com
 # Airflow: https://airflow.yourdomain.com
 # JupyterHub: https://jupyter.yourdomain.com
