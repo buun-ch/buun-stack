@@ -9,44 +9,47 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 
 ### Foundation
 
-- **Kubernetes**: [k3s](https://k3s.io/) lightweight distribution
-- **Automation**: [Just](https://just.systems/) task runner with templated configurations
-- **Remote Access**: [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) for secure internet connectivity
+- **[k3s](https://k3s.io/)**: Lightweight Kubernetes distribution
+- **[Just](https://just.systems/)**: Task runner with templated configurations
+- **[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)**: Secure internet connectivity
 
 ### Core Components (Required)
 
-- **Database**: [PostgreSQL](https://www.postgresql.org/) cluster with pgvector extension
-- **Identity & Access**: [Keycloak](https://www.keycloak.org/) for OIDC authentication
+- **[PostgreSQL](https://www.postgresql.org/)**: Database cluster with pgvector extension
+- **[Keycloak](https://www.keycloak.org/)**: Identity and access management with OIDC authentication
 
 ### Recommended Components
 
-- **Secrets Management**: [HashiCorp Vault](https://www.vaultproject.io/) with [External Secrets Operator](https://external-secrets.io/)
-    - Used by most stack modules for secure credential management
+- **[HashiCorp Vault](https://www.vaultproject.io/)**: Centralized secrets management
+    - Used by most stack modules for secure credential storage
     - Can be deployed without, but highly recommended
+- **[External Secrets Operator](https://external-secrets.io/)**: Kubernetes secret synchronization from Vault
+    - Automatically syncs secrets from Vault to Kubernetes Secrets
+    - Provides secure secret rotation and lifecycle management
 
 ### Storage (Optional)
 
-- **Block Storage**: [Longhorn](https://longhorn.io/) distributed block storage
-- **Object Storage**: [MinIO](https://min.io/) S3-compatible storage
+- **[Longhorn](https://longhorn.io/)**: Distributed block storage
+- **[MinIO](https://min.io/)**: S3-compatible object storage
 
 ### Data & Analytics (Optional)
 
-- **Interactive Computing**: [JupyterHub](https://jupyter.org/hub) for collaborative notebooks
-- **SQL Query Engine**: [Trino](https://trino.io/) for distributed SQL queries across multiple data sources
-- **Analytics Database**: [ClickHouse](https://clickhouse.com/) for high-performance analytics
-- **Vector Database**: [Qdrant](https://qdrant.tech/) for vector search and AI/ML applications
-- **Iceberg REST Catalog**: [Lakekeeper](https://lakekeeper.io/) for Apache Iceberg table management
-- **Business Intelligence**: [Metabase](https://www.metabase.com/) for data visualization
-- **Data Catalog**: [DataHub](https://datahubproject.io/) for metadata management
+- **[JupyterHub](https://jupyter.org/hub)**: Interactive computing with collaborative notebooks
+- **[Trino](https://trino.io/)**: Distributed SQL query engine for querying multiple data sources
+- **[ClickHouse](https://clickhouse.com/)**: High-performance columnar analytics database
+- **[Qdrant](https://qdrant.tech/)**: Vector database for AI/ML applications
+- **[Lakekeeper](https://lakekeeper.io/)**: Apache Iceberg REST Catalog for data lake management
+- **[Metabase](https://www.metabase.com/)**: Business intelligence and data visualization
+- **[DataHub](https://datahubproject.io/)**: Data catalog and metadata management
 
 ### Orchestration (Optional)
 
-- **Data Orchestration**: [Dagster](https://dagster.io/) for modern data pipelines
-- **Workflow Orchestration**: [Apache Airflow](https://airflow.apache.org/) for task scheduling
+- **[Dagster](https://dagster.io/)**: Modern data orchestration platform
+- **[Apache Airflow](https://airflow.apache.org/)**: Workflow orchestration and task scheduling
 
 ### Security (Optional)
 
-- **Authentication Proxy**: [OAuth2 Proxy](https://oauth2-proxy.github.io/oauth2-proxy/) for adding Keycloak authentication
+- **[OAuth2 Proxy](https://oauth2-proxy.github.io/oauth2-proxy/)**: Authentication proxy for adding Keycloak authentication
 
 ## Quick Start
 
