@@ -200,6 +200,19 @@ setup-minio-storage:
 
     just minio::create-user trino "trino-data"
 
+    echo "Configuring Keycloak client for Lakekeeper integration..."
+
+    echo "Enabling service account for Trino client..."
+    just keycloak::enable-service-account ${KEYCLOAK_REALM} trino
+
+    echo "Adding lakekeeper scope to Trino client..."
+    just keycloak::add-scope-to-client ${KEYCLOAK_REALM} trino lakekeeper
+
+    echo "Adding lakekeeper audience mapper to Trino client..."
+    just keycloak::add-audience-mapper trino lakekeeper
+
+    echo "Keycloak configuration completed"
+
     if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
         echo "Creating ExternalSecret for MinIO credentials..."
         gomplate -f trino-minio-external-secret.gomplate.yaml -o trino-minio-external-secret.yaml

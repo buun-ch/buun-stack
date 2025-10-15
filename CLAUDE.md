@@ -161,6 +161,14 @@ just vault::get secret/postgres/superuser password
 
 5. **Cleanup Operations**: Most modules provide cleanup recipes (e.g., `just keycloak::delete-user`) with confirmation prompts.
 
+6. **Trino and Lakekeeper Integration**: When setting up Trino with Lakekeeper (Iceberg REST Catalog):
+   - The Keycloak client MUST have service accounts enabled for OAuth2 client credentials flow
+   - The `lakekeeper` client scope MUST be added to the Trino client
+   - An audience mapper MUST be configured to set `aud: lakekeeper` in JWT tokens
+   - Trino REQUIRES `fs.native-s3.enabled=true` to handle `s3://` URIs, regardless of vended credentials
+   - When `vended-credentials-enabled=false`, static S3 credentials must be provided via environment variables
+   - All these configurations are automatically applied by `just trino::install` when MinIO storage is enabled
+
 ## Testing and Validation
 
 After setup, validate the stack:

@@ -42,6 +42,9 @@ You will be prompted for:
 - Password authentication for JDBC access
 - PostgreSQL catalog (if selected)
 - Iceberg catalog with Lakekeeper (if MinIO selected)
+    - Keycloak service account enabled for OAuth2 client credentials flow
+    - `lakekeeper` client scope added
+    - `lakekeeper` audience mapper configured
 - TPCH catalog with sample data
 
 ## Configuration
@@ -90,9 +93,15 @@ Returns the password for username `admin`.
     Port: 443
     Username: admin
     Password: [from just trino::admin-password]
-    Catalog: postgresql
+    Catalog: postgresql  (or iceberg for Iceberg tables)
     SSL: Yes
     ```
+
+**Catalog Selection**:
+
+- Use `postgresql` to query PostgreSQL database tables
+- Use `iceberg` to query Iceberg tables via Lakekeeper
+- You can create multiple Metabase connections, one for each catalog
 
 **Note**: Do NOT use internal Kubernetes hostnames like `trino.trino.svc.cluster.local` as they do not have valid TLS certificates for password authentication.
 
@@ -110,6 +119,19 @@ SELECT * FROM tpch.tiny.customer LIMIT 10;
 SELECT * FROM postgresql.public.pg_tables;
 ```
 
+**Query Iceberg tables:**
+
+```sql
+-- Show schemas in Iceberg catalog
+SHOW SCHEMAS FROM iceberg;
+
+-- Show tables in a namespace
+SHOW TABLES FROM iceberg.ecommerce;
+
+-- Query Iceberg table
+SELECT * FROM iceberg.ecommerce.products LIMIT 10;
+```
+
 **Show all catalogs:**
 
 ```sql
@@ -120,6 +142,7 @@ SHOW CATALOGS;
 
 ```sql
 SHOW SCHEMAS FROM postgresql;
+SHOW SCHEMAS FROM iceberg;
 ```
 
 ## Catalogs
@@ -143,10 +166,52 @@ Queries your CloudNativePG cluster:
 
 ### Iceberg (Optional)
 
-Queries Iceberg tables via Lakekeeper:
+Queries Iceberg tables via Lakekeeper REST Catalog:
 
-- Catalog: `iceberg`
-- Storage: MinIO S3-compatible
+- **Catalog**: `iceberg`
+- **Storage**: MinIO S3-compatible object storage
+- **REST Catalog**: Lakekeeper (Apache Iceberg REST Catalog implementation)
+- **Authentication**: OAuth2 client credentials flow with Keycloak
+
+**How It Works**:
+
+1. Trino authenticates to Lakekeeper using OAuth2 (client credentials flow)
+2. Lakekeeper provides Iceberg table metadata from its catalog
+3. Trino reads actual data files directly from MinIO using static S3 credentials
+4. Vended credentials are disabled; Trino uses pre-configured MinIO access keys
+
+**Configuration**:
+
+The following settings are automatically configured during installation when MinIO storage is enabled:
+
+- Service account enabled on Trino Keycloak client
+- `lakekeeper` client scope added to Trino client
+- Audience mapper configured to include `aud: lakekeeper` in JWT tokens
+- S3 file system factory enabled (`fs.native-s3.enabled=true`)
+- Static MinIO credentials provided via Kubernetes secrets
+
+**Example Usage**:
+
+```sql
+-- List all namespaces (schemas)
+SHOW SCHEMAS FROM iceberg;
+
+-- Create a namespace
+CREATE SCHEMA iceberg.analytics;
+
+-- List tables in a namespace
+SHOW TABLES FROM iceberg.ecommerce;
+
+-- Query table
+SELECT * FROM iceberg.ecommerce.products LIMIT 10;
+
+-- Create table
+CREATE TABLE iceberg.analytics.sales (
+    date DATE,
+    product VARCHAR,
+    amount DECIMAL(10,2)
+);
+```
 
 ## Management
 
@@ -204,13 +269,20 @@ Cloudflare Tunnel (HTTPS)
 Traefik Ingress
       ↓
 Trino Coordinator (HTTP:8080)
+      ├─ OAuth2 → Keycloak (Web UI auth)
+      └─ Password file (JDBC auth)
       ↓
 Trino Workers (HTTP:8080)
       ↓
 Data Sources:
   - PostgreSQL (CloudNativePG)
-  - MinIO (S3)
-  - Iceberg (Lakekeeper)
+    └─ Direct SQL connection
+
+  - Iceberg Tables
+    ├─ Metadata: Lakekeeper (REST Catalog)
+    │   └─ OAuth2 → Keycloak (client credentials)
+    └─ Data: MinIO (S3)
+        └─ Static credentials
 ```
 
 ## Troubleshooting
@@ -245,9 +317,11 @@ kubectl exec -n trino deployment/trino-coordinator -- \
 
 #### Metabase Sync Fails
 
-- Ensure catalog is specified in connection settings (e.g., `postgresql`)
+- Ensure catalog is specified in connection settings (e.g., `postgresql` or `iceberg`)
+- For Iceberg catalog, verify Lakekeeper is running: `kubectl get pods -n lakekeeper`
 - Check Trino coordinator logs for errors
 - Verify PostgreSQL/Iceberg connectivity
+- For Iceberg issues, check OAuth2 token: Service account should be enabled on Trino client
 
 #### OAuth2 Login Fails
 
@@ -269,3 +343,5 @@ kubectl exec -n trino deployment/trino-coordinator -- \
 - [Password Authentication](https://trino.io/docs/current/security/password-file.html)
 - [PostgreSQL Connector](https://trino.io/docs/current/connector/postgresql.html)
 - [Iceberg Connector](https://trino.io/docs/current/connector/iceberg.html)
+- [Lakekeeper (Iceberg REST Catalog)](https://lakekeeper.io/)
+- [Apache Iceberg](https://iceberg.apache.org/)
