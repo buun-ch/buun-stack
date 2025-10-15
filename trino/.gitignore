@@ -1,0 +1,4 @@
+trino-minio-external-secret.yaml
+trino-oauth-external-secret.yaml
+trino-postgres-external-secret.yaml
+trino-values.yaml

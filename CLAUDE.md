@@ -225,4 +225,3 @@ receiving
 - Only write code comments when necessary, as the code should be self-explanatory
   (Avoid trivial comment for each code block)
 - Write output messages and code comments in English
-- Omit trailing spaces at the end of lines

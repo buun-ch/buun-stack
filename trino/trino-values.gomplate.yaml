@@ -1,0 +1,284 @@
+# Trino Helm Chart Values
+# Configuration for Trino deployment with Keycloak OIDC authentication
+
+image:
+  tag: "{{ .Env.TRINO_IMAGE_TAG }}"
+
+server:
+  workers: {{ .Env.TRINO_WORKER_COUNT }}
+
+  node:
+    environment: production
+    dataDir: /data/trino
+    pluginDir: /usr/lib/trino/plugin
+
+  log:
+    trino:
+      level: INFO
+
+  config:
+    path: /etc/trino
+    https:
+      enabled: false
+
+    authenticationType: "OAUTH2"
+
+  exchangeManager:
+    name: "filesystem"
+    baseDir: "/tmp/trino-local-file-system-exchange-manager"
+
+  workerExtraConfig: ""
+  coordinatorExtraConfig: |
+    http-server.authentication.oauth2.issuer=https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}
+    http-server.authentication.oauth2.auth-url=https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/auth
+    http-server.authentication.oauth2.token-url=https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/token
+    http-server.authentication.oauth2.jwks-url=https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/certs
+    http-server.authentication.oauth2.userinfo-url=https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/userinfo
+    http-server.authentication.oauth2.client-id=${ENV:OAUTH2_CLIENT_ID}
+    http-server.authentication.oauth2.client-secret=${ENV:OAUTH2_CLIENT_SECRET}
+    http-server.authentication.oauth2.scopes=openid,email,profile
+    http-server.authentication.oauth2.oidc.discovery=true
+    web-ui.authentication.type=oauth2
+
+  autoscaling:
+    enabled: false
+
+additionalNodeProperties: {}
+
+additionalConfigProperties:
+  - internal-communication.shared-secret={{ .Env.TRINO_SHARED_SECRET }}
+  - http-server.process-forwarded=true
+
+additionalLogProperties: {}
+
+additionalExchangeManagerProperties: {}
+
+eventListenerProperties: {}
+
+accessControl: {}
+
+resourceGroups: {}
+
+{{- if eq (.Env.TRINO_POSTGRES_ENABLED | default "false") "true" }}
+catalogs:
+  postgresql: |
+    connector.name=postgresql
+    connection-url=jdbc:postgresql://postgres-cluster-rw.{{ .Env.POSTGRES_NAMESPACE }}.svc.cluster.local:5432/trino
+    connection-user=${ENV:POSTGRES_USER}
+    connection-password=${ENV:POSTGRES_PASSWORD}
+
+  tpch: |
+    connector.name=tpch
+    tpch.splits-per-node=4
+
+{{- if eq (.Env.TRINO_MINIO_ENABLED | default "false") "true" }}
+  iceberg: |
+    connector.name=iceberg
+    iceberg.catalog.type=rest
+    iceberg.rest-catalog.uri=http://lakekeeper.lakekeeper.svc.cluster.local:8181
+    iceberg.rest-catalog.warehouse=default
+    iceberg.rest-catalog.nested-namespace-enabled=true
+    iceberg.rest-catalog.vended-credentials-enabled=true
+    iceberg.unique-table-location=true
+    fs.native-s3.enabled=true
+    s3.region=us-east-1
+    s3.endpoint=http://minio.{{ .Env.MINIO_NAMESPACE }}.svc.cluster.local:9000
+    s3.path-style-access=true
+{{- end }}
+{{- else }}
+catalogs:
+  tpch: |
+    connector.name=tpch
+    tpch.splits-per-node=4
+{{- end }}
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: {{ .Env.TRINO_HOST }}
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls:
+    - secretName: trino-tls
+      hosts:
+        - {{ .Env.TRINO_HOST }}
+
+auth: {}
+
+serviceAccount:
+  create: true
+  name: "trino"
+  annotations: {}
+
+secretMounts: []
+
+coordinator:
+  jvm:
+    maxHeapSize: "{{ .Env.TRINO_COORDINATOR_JVM_HEAP }}"
+    gcMethod:
+      type: "UseG1GC"
+      g1:
+        heapRegionSize: "32M"
+
+  config:
+    memory:
+      heapHeadroomPerNode: ""
+    query:
+      maxMemoryPerNode: "1GB"
+
+  additionalJVMConfig: {}
+
+  additionalExposedPorts: {}
+
+  resources:
+    requests:
+      memory: "{{ .Env.TRINO_COORDINATOR_MEMORY }}"
+      cpu: "{{ .Env.TRINO_COORDINATOR_CPU }}"
+    limits:
+      memory: "{{ .Env.TRINO_COORDINATOR_MEMORY }}"
+      cpu: "{{ .Env.TRINO_COORDINATOR_CPU }}"
+
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+    successThreshold: 1
+
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+    successThreshold: 1
+
+  nodeSelector: {}
+
+  tolerations: []
+
+  affinity: {}
+
+  additionalConfigFiles: {}
+
+  additionalVolumes: []
+
+  additionalVolumeMounts: []
+
+  annotations: {}
+
+  labels: {}
+
+  secretMounts: []
+
+worker:
+  jvm:
+    maxHeapSize: "{{ .Env.TRINO_WORKER_JVM_HEAP }}"
+    gcMethod:
+      type: "UseG1GC"
+      g1:
+        heapRegionSize: "32M"
+
+  config:
+    memory:
+      heapHeadroomPerNode: ""
+    query:
+      maxMemoryPerNode: "1GB"
+
+  additionalJVMConfig: {}
+
+  additionalExposedPorts: {}
+
+  resources:
+    requests:
+      memory: "{{ .Env.TRINO_WORKER_MEMORY }}"
+      cpu: "{{ .Env.TRINO_WORKER_CPU }}"
+    limits:
+      memory: "{{ .Env.TRINO_WORKER_MEMORY }}"
+      cpu: "{{ .Env.TRINO_WORKER_CPU }}"
+
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+    successThreshold: 1
+
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+    successThreshold: 1
+
+  nodeSelector: {}
+
+  tolerations: []
+
+  affinity: {}
+
+  additionalConfigFiles: {}
+
+  additionalVolumes: []
+
+  additionalVolumeMounts: []
+
+  annotations: {}
+
+  labels: {}
+
+  secretMounts: []
+
+kafka:
+  mountPath: "/etc/trino/schemas"
+  tableDescriptions: {}
+
+commonLabels: {}
+
+initContainers: {}
+
+sidecarContainers: {}
+
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+
+shareProcessNamespace:
+  coordinator: false
+  worker: false
+
+volumePermissions:
+  enabled: false
+
+env:
+  - name: OAUTH2_CLIENT_ID
+    valueFrom:
+      secretKeyRef:
+        name: trino-oauth-secret
+        key: client_id
+  - name: OAUTH2_CLIENT_SECRET
+    valueFrom:
+      secretKeyRef:
+        name: trino-oauth-secret
+        key: client_secret
+{{- if eq (.Env.TRINO_POSTGRES_ENABLED | default "false") "true" }}
+  - name: POSTGRES_USER
+    valueFrom:
+      secretKeyRef:
+        name: trino-postgres-secret
+        key: username
+  - name: POSTGRES_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: trino-postgres-secret
+        key: password
+{{- end }}
+
+envFrom: []
