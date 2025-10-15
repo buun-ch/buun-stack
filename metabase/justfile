@@ -1,7 +1,7 @@
 set fallback := true
 
 export METABASE_NAMESPACE := env("METABASE_NAMESPACE", "metabase")
-export METABASE_CHART_VERSION := env("METABASE_CHART_VERSION", "2.22.0")
+export METABASE_CHART_VERSION := env("METABASE_CHART_VERSION", "2.22.2")
 export METABASE_HOST := env("METABASE_HOST", "")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
@@ -83,7 +83,6 @@ delete-database-secret:
 install:
     #!/bin/bash
     set -euo pipefail
-    export METABASE_HOST=${METABASE_HOST:-}
     while [ -z "${METABASE_HOST}" ]; do
         METABASE_HOST=$(
             gum input --prompt="Metabase host (FQDN): " --width=100 \
@@ -102,6 +101,23 @@ install:
     helm upgrade --cleanup-on-fail --install metabase pmint93/metabase \
         --version ${METABASE_CHART_VERSION} -n ${METABASE_NAMESPACE} --wait \
         -f metabase-values.yaml
+
+# Upgrade Metabase
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${METABASE_HOST}" ]; do
+        METABASE_HOST=$(
+            gum input --prompt="Metabase host (FQDN): " --width=100 \
+            --placeholder="e.g., metabase.example.com"
+        )
+    done
+    echo "Upgrading Metabase..."
+    gomplate -f metabase-values.gomplate.yaml -o metabase-values.yaml
+    helm upgrade metabase pmint93/metabase \
+        --version ${METABASE_CHART_VERSION} -n ${METABASE_NAMESPACE} --wait \
+        -f metabase-values.yaml
+    echo "Metabase upgraded successfully"
 
 # Uninstall Metabase
 uninstall delete-db='true':

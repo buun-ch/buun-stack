@@ -32,6 +32,31 @@ session:
   existingSecret: metabase-config
   existingSecretKey: session
 
+# Trino driver plugin configuration
+extraInitContainers:
+  - name: download-trino-driver
+    image: curlimages/curl:8.5.0
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - name: plugins
+        mountPath: /plugins
+    workingDir: /plugins
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        curl -Lso /plugins/starburst.metabase-driver.jar \
+          https://github.com/starburstdata/metabase-driver/releases/download/6.1.0/starburst-6.1.0.metabase-driver.jar
+
+extraVolumeMounts:
+  - name: plugins
+    mountPath: /plugins
+    readOnly: false
+
+extraVolumes:
+  - name: plugins
+    emptyDir: {}
+
 # Basic configuration
 extraEnv:
   - name: MB_APPLICATION_NAME
