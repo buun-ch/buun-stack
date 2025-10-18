@@ -44,7 +44,7 @@ const main = async () => {
 
     // Check if group has members
     const groupMembers = await kcAdminClient.groups.listMembers({ id: group.id! });
-    if (groupMembers.length > 0) {
+    if (groupMembers && groupMembers.length > 0) {
       console.log(`Warning: Group '${groupName}' has ${groupMembers.length} members:`);
       groupMembers.forEach(member => {
         console.log(`  - ${member.username} (${member.firstName} ${member.lastName})`);
@@ -54,7 +54,7 @@ const main = async () => {
 
     // Check for subgroups
     const subGroups = await kcAdminClient.groups.listSubGroups({ id: group.id! });
-    if (subGroups.length > 0) {
+    if (subGroups && subGroups.length > 0) {
       console.log(`Warning: Group '${groupName}' has ${subGroups.length} subgroups:`);
       subGroups.forEach(subGroup => {
         console.log(`  - ${subGroup.name}`);
