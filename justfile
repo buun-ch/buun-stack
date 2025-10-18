@@ -23,6 +23,7 @@ mod minio
 mod oauth2-proxy
 mod postgres
 mod qdrant
+mod querybook
 mod trino
 mod utils
 mod vault

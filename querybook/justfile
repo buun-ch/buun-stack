@@ -1,0 +1,327 @@
+set fallback := true
+
+export QUERYBOOK_NAMESPACE := env("QUERYBOOK_NAMESPACE", "querybook")
+export QUERYBOOK_HOST := env("QUERYBOOK_HOST", "")
+export QUERYBOOK_CHART_REPO := env("QUERYBOOK_CHART_REPO", "https://github.com/pinterest/querybook")
+export QUERYBOOK_CHART_PATH := env("QUERYBOOK_CHART_PATH", "helm")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Create Querybook namespace
+create-namespace:
+    @kubectl get namespace ${QUERYBOOK_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${QUERYBOOK_NAMESPACE}
+
+# Delete Querybook namespace
+delete-namespace:
+    @kubectl delete namespace ${QUERYBOOK_NAMESPACE} --ignore-not-found
+
+# Clone Querybook Helm chart repository
+clone-chart-repo:
+    #!/bin/bash
+    set -euo pipefail
+    if [ ! -d "querybook-repo" ]; then
+        echo "Cloning Querybook Helm chart repository..."
+        git clone --depth 1 ${QUERYBOOK_CHART_REPO} querybook-repo
+    else
+        echo "Querybook repository already exists. Pulling latest changes..."
+        cd querybook-repo && git pull
+    fi
+
+# Remove cloned chart repository
+remove-chart-repo:
+    rm -rf querybook-repo
+
+# Create Keycloak client and OAuth secret for Querybook
+create-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${QUERYBOOK_HOST}" ]; do
+        QUERYBOOK_HOST=$(
+            gum input --prompt="Querybook host (FQDN): " --width=100 \
+            --placeholder="e.g., querybook.example.com"
+        )
+    done
+
+    echo "Creating Keycloak client for Querybook..."
+
+    # Delete existing client if present
+    just keycloak::delete-client ${KEYCLOAK_REALM} querybook || true
+
+    # Generate client secret
+    CLIENT_SECRET=$(just utils::random-password)
+
+    # Create 'querybook-admin' group if it doesn't exist
+    echo "Creating 'querybook-admin' group..."
+    just keycloak::create-group querybook-admin '' 'Querybook administrators' || echo "Group may already exist"
+
+    # Create confidential client with client secret
+    # Uses standard OIDC scopes: openid, email, profile (no custom scopes needed)
+    just keycloak::create-client \
+        realm=${KEYCLOAK_REALM} \
+        client_id=querybook \
+        redirect_url="https://${QUERYBOOK_HOST}/oauth2callback" \
+        client_secret="${CLIENT_SECRET}"
+
+    # Add groups mapper to include group membership in UserInfo
+    echo "Adding groups mapper to querybook client..."
+    just keycloak::add-groups-mapper querybook
+
+    # Store client secret temporarily in Kubernetes Secret (always created)
+    kubectl delete secret querybook-oauth-temp -n ${QUERYBOOK_NAMESPACE} --ignore-not-found
+    kubectl create secret generic querybook-oauth-temp -n ${QUERYBOOK_NAMESPACE} \
+        --from-literal=client_secret="${CLIENT_SECRET}"
+
+    # Also store in Vault if available
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+        echo "Storing OAuth client secret in Vault..."
+        just vault::put querybook/oauth client_secret="${CLIENT_SECRET}"
+    fi
+
+    echo "Keycloak client created successfully"
+    echo "Client ID: querybook"
+    echo "Scopes: openid, email, profile (standard OIDC scopes)"
+    echo "Redirect URI: https://${QUERYBOOK_HOST}/oauth2callback"
+    echo ""
+    echo "Admin Group: querybook-admin"
+    echo "To grant admin access, add users to 'querybook-admin' group:"
+    echo "  just keycloak::add-user-to-group <username> querybook-admin"
+
+# Delete Keycloak client
+delete-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deleting Keycloak client for Querybook..."
+    just keycloak::delete-client ${KEYCLOAK_REALM} querybook || true
+    echo "Deleting querybook-admin group..."
+    just keycloak::delete-group querybook-admin || true
+    kubectl delete secret querybook-oauth-temp -n ${QUERYBOOK_NAMESPACE} --ignore-not-found
+
+# Create Querybook secrets
+create-secrets:
+    #!/bin/bash
+    set -euo pipefail
+
+    # Generate Flask secret key
+    flask_secret=$(just utils::random-password)
+
+    # Get PostgreSQL credentials
+    pg_host="postgres-cluster-rw.postgres"
+    pg_port="5432"
+    pg_user=$(just postgres::admin-username)
+    pg_password=$(just postgres::admin-password)
+    pg_database="querybook"
+
+    # Build database connection string
+    database_conn="postgresql://${pg_user}:${pg_password}@${pg_host}:${pg_port}/${pg_database}"
+
+    # Get OAuth client secret (created by create-keycloak-client)
+    # Try Vault first, fallback to Kubernetes Secret
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null && \
+       just vault::get querybook/oauth client_secret &>/dev/null; then
+        oauth_client_secret=$(just vault::get querybook/oauth client_secret)
+    elif kubectl get secret querybook-oauth-temp -n ${QUERYBOOK_NAMESPACE} &>/dev/null; then
+        oauth_client_secret=$(kubectl get secret querybook-oauth-temp -n ${QUERYBOOK_NAMESPACE} \
+            -o jsonpath='{.data.client_secret}' | base64 -d)
+    else
+        echo "Error: Cannot retrieve OAuth client secret. Please run 'just querybook::create-keycloak-client' first."
+        exit 1
+    fi
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Storing secrets in Vault..."
+
+        just vault::put querybook/config \
+            FLASK_SECRET_KEY="${flask_secret}" \
+            DATABASE_CONN="${database_conn}" \
+            REDIS_URL="redis://redis:6379/0" \
+            ELASTICSEARCH_HOST="elasticsearch:9200" \
+            OAUTH_CLIENT_SECRET="${oauth_client_secret}"
+
+        kubectl delete secret querybook-secret -n ${QUERYBOOK_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret querybook-secret -n ${QUERYBOOK_NAMESPACE} --ignore-not-found
+
+        gomplate -f querybook-config-external-secret.gomplate.yaml \
+            -o querybook-config-external-secret.yaml
+        kubectl apply -f querybook-config-external-secret.yaml
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/querybook-secret \
+            -n ${QUERYBOOK_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating secret directly..."
+        kubectl delete secret querybook-secret -n ${QUERYBOOK_NAMESPACE} --ignore-not-found
+        kubectl create secret generic querybook-secret -n ${QUERYBOOK_NAMESPACE} \
+            --from-literal=FLASK_SECRET_KEY="${flask_secret}" \
+            --from-literal=DATABASE_CONN="${database_conn}" \
+            --from-literal=REDIS_URL="redis://redis:6379/0" \
+            --from-literal=ELASTICSEARCH_HOST="elasticsearch:9200" \
+            --from-literal=OAUTH_CLIENT_SECRET="${oauth_client_secret}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put querybook/config \
+                FLASK_SECRET_KEY="${flask_secret}" \
+                DATABASE_CONN="${database_conn}" \
+                REDIS_URL="redis://redis:6379/0" \
+                ELASTICSEARCH_HOST="elasticsearch:9200" \
+                OAUTH_CLIENT_SECRET="${oauth_client_secret}"
+        fi
+    fi
+
+# Delete Querybook secrets
+delete-secrets:
+    @kubectl delete secret querybook-secret -n ${QUERYBOOK_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret querybook-secret -n ${QUERYBOOK_NAMESPACE} --ignore-not-found
+
+# Create Keycloak auth ConfigMap
+create-auth-configmap:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Creating Keycloak auth ConfigMap..."
+    gomplate -f keycloak-auth-configmap.gomplate.yaml -o keycloak-auth-configmap.yaml
+    kubectl apply -f keycloak-auth-configmap.yaml
+
+# Create Traefik Middleware for WebSocket support
+create-traefik-middleware:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Creating Traefik Middleware for WebSocket support..."
+    gomplate -f traefik-middleware.gomplate.yaml -o traefik-middleware.yaml
+    kubectl apply -f traefik-middleware.yaml
+
+# Install Querybook
+install:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${QUERYBOOK_HOST}" ]; do
+        QUERYBOOK_HOST=$(
+            gum input --prompt="Querybook host (FQDN): " --width=100 \
+            --placeholder="e.g., querybook.example.com"
+        )
+    done
+
+    while [ -z "${KEYCLOAK_HOST}" ]; do
+        KEYCLOAK_HOST=$(
+            gum input --prompt="Keycloak host (FQDN): " --width=100 \
+            --placeholder="e.g., auth.example.com"
+        )
+    done
+
+    just create-namespace
+    just postgres::create-db querybook
+    just create-keycloak-client
+    just create-secrets
+    just clone-chart-repo
+
+    # Get OAuth client secret for gomplate template
+    # Try Vault first, fallback to Kubernetes Secret
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null && \
+       just vault::get querybook/oauth client_secret &>/dev/null; then
+        export OAUTH_CLIENT_SECRET=$(just vault::get querybook/oauth client_secret)
+    elif kubectl get secret querybook-oauth-temp -n ${QUERYBOOK_NAMESPACE} &>/dev/null; then
+        export OAUTH_CLIENT_SECRET=$(kubectl get secret querybook-oauth-temp -n ${QUERYBOOK_NAMESPACE} \
+            -o jsonpath='{.data.client_secret}' | base64 -d)
+    else
+        echo "Error: Cannot retrieve OAuth client secret. Please run 'just querybook::create-keycloak-client' first."
+        exit 1
+    fi
+
+    # Create Traefik Middleware (must exist before Helm install)
+    just create-traefik-middleware
+
+    # Create Keycloak auth ConfigMap (must exist before Helm install)
+    just create-auth-configmap
+
+    gomplate -f querybook-values.gomplate.yaml -o querybook-values.yaml
+
+    helm upgrade --cleanup-on-fail --install querybook ./querybook-repo/${QUERYBOOK_CHART_PATH} \
+        -n ${QUERYBOOK_NAMESPACE} --wait \
+        -f querybook-values.yaml
+
+    echo ""
+    echo "Querybook installed successfully!"
+    echo "Access URL: https://${QUERYBOOK_HOST}"
+    echo ""
+    echo "OAuth Configuration:"
+    echo "  Provider: Keycloak (custom OIDC backend)"
+    echo "  Realm: ${KEYCLOAK_REALM}"
+    echo "  Scopes: openid, email, profile"
+    echo "  Authorization URL: https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/auth"
+    echo ""
+    echo "Admin Access:"
+    echo "  To grant admin access, add users to 'querybook-admin' group:"
+    echo "  just keycloak::add-user-to-group <username> querybook-admin"
+    echo ""
+
+# Upgrade Querybook
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${QUERYBOOK_HOST}" ]; do
+        QUERYBOOK_HOST=$(
+            gum input --prompt="Querybook host (FQDN): " --width=100 \
+            --placeholder="e.g., querybook.example.com"
+        )
+    done
+
+    while [ -z "${KEYCLOAK_HOST}" ]; do
+        KEYCLOAK_HOST=$(
+            gum input --prompt="Keycloak host (FQDN): " --width=100 \
+            --placeholder="e.g., auth.example.com"
+        )
+    done
+
+    # Get OAuth client secret for gomplate template
+    # Try Vault first, fallback to Kubernetes Secret
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null && \
+       just vault::get querybook/oauth client_secret &>/dev/null; then
+        export OAUTH_CLIENT_SECRET=$(just vault::get querybook/oauth client_secret)
+    elif kubectl get secret querybook-oauth-temp -n ${QUERYBOOK_NAMESPACE} &>/dev/null; then
+        export OAUTH_CLIENT_SECRET=$(kubectl get secret querybook-oauth-temp -n ${QUERYBOOK_NAMESPACE} \
+            -o jsonpath='{.data.client_secret}' | base64 -d)
+    else
+        echo "Error: Cannot retrieve OAuth client secret. Please run 'just querybook::create-keycloak-client' first."
+        exit 1
+    fi
+
+    echo "Upgrading Querybook..."
+
+    # Update Traefik Middleware (must exist before Helm upgrade)
+    just create-traefik-middleware
+
+    # Update Keycloak auth ConfigMap (must exist before Helm upgrade)
+    just create-auth-configmap
+
+    gomplate -f querybook-values.gomplate.yaml -o querybook-values.yaml
+    helm upgrade querybook ./querybook-repo/${QUERYBOOK_CHART_PATH} \
+        -n ${QUERYBOOK_NAMESPACE} --wait \
+        -f querybook-values.yaml
+
+    echo "Querybook upgraded successfully"
+
+# Uninstall Querybook
+uninstall delete-db='true':
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall querybook -n ${QUERYBOOK_NAMESPACE} --ignore-not-found --wait
+    kubectl delete configmap querybook-keycloak-auth -n ${QUERYBOOK_NAMESPACE} --ignore-not-found
+    kubectl delete middleware querybook-headers -n ${QUERYBOOK_NAMESPACE} --ignore-not-found
+    kubectl delete serverstransport querybook-transport -n ${QUERYBOOK_NAMESPACE} --ignore-not-found
+    just delete-secrets
+    just delete-keycloak-client
+    just delete-namespace
+    if [ "{{ delete-db }}" = "true" ]; then
+        just postgres::delete-db querybook
+    fi
+
+    # Clean up Vault entries if present
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+        just vault::delete querybook/config || true
+        just vault::delete querybook/oauth || true
+    fi

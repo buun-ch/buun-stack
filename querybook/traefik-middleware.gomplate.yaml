@@ -1,0 +1,25 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: querybook-headers
+  namespace: {{ .Env.QUERYBOOK_NAMESPACE }}
+spec:
+  headers:
+    customRequestHeaders:
+      X-Forwarded-Proto: "https"
+    customResponseHeaders:
+      X-Forwarded-Proto: "https"
+---
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: querybook-transport
+  namespace: {{ .Env.QUERYBOOK_NAMESPACE }}
+spec:
+  serverName: ""
+  insecureSkipVerify: false
+  # Timeouts for WebSocket connections
+  forwardingTimeouts:
+    dialTimeout: 30s
+    responseHeaderTimeout: 0s  # No timeout for response headers (needed for WebSocket)
+    idleConnTimeout: 0s  # No timeout for idle connections (needed for WebSocket)

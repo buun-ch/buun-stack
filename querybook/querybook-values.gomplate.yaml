@@ -1,0 +1,187 @@
+# Querybook Helm Chart Values
+# https://github.com/pinterest/querybook/tree/master/helm
+
+# Worker configuration
+worker:
+  replicaCount: 1
+  name: worker
+  image:
+    repository: querybook/querybook
+    pullPolicy: IfNotPresent
+    tag: latest
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 700m
+    limits:
+      memory: 2Gi
+      cpu: 1
+
+# Scheduler configuration
+scheduler:
+  replicaCount: 1
+  name: scheduler
+  image:
+    repository: querybook/querybook
+    pullPolicy: IfNotPresent
+    tag: latest
+  resources:
+    requests:
+      memory: 200Mi
+      cpu: 100m
+    limits:
+      memory: 300Mi
+      cpu: 200m
+
+# Web server configuration
+web:
+  replicaCount: 1
+  name: web
+  image:
+    repository: querybook/querybook
+    pullPolicy: IfNotPresent
+    tag: latest
+  service:
+    serviceType: ClusterIP
+    servicePort: 80
+    containerPort: 10001
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 500m
+    limits:
+      memory: 2Gi
+      cpu: 1
+
+  # Custom initContainer to inject Keycloak auth backend
+  initContainers:
+    - name: copy-keycloak-auth
+      image: busybox:latest
+      command:
+        - sh
+        - -c
+        - cp /config/keycloak_auth.py /auth/keycloak_auth.py && chmod 644 /auth/keycloak_auth.py
+      volumeMounts:
+        - name: keycloak-auth-config
+          mountPath: /config
+        - name: auth-volume
+          mountPath: /auth
+
+  # Volume mounts for main container
+  volumeMounts:
+    - name: auth-volume
+      mountPath: /opt/querybook/querybook/server/app/auth/keycloak_auth.py
+      subPath: keycloak_auth.py
+
+  # Volumes
+  volumes:
+    - name: keycloak-auth-config
+      configMap:
+        name: querybook-keycloak-auth
+    - name: auth-volume
+      emptyDir: {}
+
+# Use external PostgreSQL (buun-stack PostgreSQL cluster)
+mysql:
+  enabled: false
+
+# Redis configuration (use Helm chart's embedded Redis)
+redis:
+  enabled: true
+  replicaCount: 1
+  name: redis
+  image:
+    repository: redis
+    pullPolicy: IfNotPresent
+    tag: "7.2"
+  service:
+    serviceType: ClusterIP
+    servicePort: 6379
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 200m
+    limits:
+      memory: 1Gi
+      cpu: 500m
+
+# Elasticsearch configuration (use Helm chart's embedded Elasticsearch)
+elasticsearch:
+  enabled: true
+  replicaCount: 1
+  name: elasticsearch
+  image:
+    repository: docker.elastic.co/elasticsearch/elasticsearch
+    pullPolicy: IfNotPresent
+    tag: "7.17.16"
+  extraEnvs:
+    - name: ES_JAVA_OPTS
+      value: -Xms1g -Xmx1g
+    - name: bootstrap.memory_lock
+      value: 'false'
+    - name: cluster.name
+      value: querybook-cluster
+    - name: discovery.type
+      value: single-node
+  service:
+    serviceType: ClusterIP
+    servicePort: 9200
+  resources:
+    requests:
+      memory: 2Gi
+      cpu: 500m
+    limits:
+      memory: 3Gi
+      cpu: 1
+
+# Ingress configuration
+ingress:
+  enabled: true
+  ingressClassName: traefik
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # WebSocket support - apply middleware for X-Forwarded-Proto header
+    traefik.ingress.kubernetes.io/router.middlewares: querybook-querybook-headers@kubernetescrd
+    # Sticky sessions for WebSocket connections
+    traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+    traefik.ingress.kubernetes.io/service.sticky.cookie.name: querybook-session
+    # Increase timeouts for WebSocket connections (in seconds)
+    traefik.ingress.kubernetes.io/service.serversTransport: querybook-transport@kubernetescrd
+  path: /
+  pathType: Prefix
+  hosts:
+    - {{ .Env.QUERYBOOK_HOST }}
+  tls:
+    - hosts:
+        - {{ .Env.QUERYBOOK_HOST }}
+
+# Querybook environment variables
+extraEnv:
+  # Public URL (required for OAuth)
+  PUBLIC_URL: https://{{ .Env.QUERYBOOK_HOST }}
+
+  # WebSocket CORS origins (required for socket.io to accept connections)
+  WS_CORS_ALLOWED_ORIGINS: '["https://{{ .Env.QUERYBOOK_HOST }}"]'
+
+  # Authentication backend (custom Keycloak OIDC implementation)
+  AUTH_BACKEND: app.auth.keycloak_auth
+
+  # OAuth configuration for Keycloak
+  OAUTH_CLIENT_ID: querybook
+  OAUTH_CLIENT_SECRET: {{ .Env.OAUTH_CLIENT_SECRET }}
+  OAUTH_AUTHORIZATION_URL: https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/auth
+  OAUTH_TOKEN_URL: https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/token
+  OAUTH_USER_PROFILE: https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/userinfo
+
+  # Session configuration
+  LOGS_OUT_AFTER: "0"  # Never expire (re-login on browser close)
+
+# Use existing secret for Flask, database, Redis, and Elasticsearch configuration
+existingSecret: querybook-secret
+
+# Node selector, affinity, and tolerations
+nodeSelector: {}
+affinity: {}
+tolerations: []
+podAnnotations: {}

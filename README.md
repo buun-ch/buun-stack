@@ -36,6 +36,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 
 - **[JupyterHub](https://jupyter.org/hub)**: Interactive computing with collaborative notebooks
 - **[Trino](https://trino.io/)**: Distributed SQL query engine for querying multiple data sources
+- **[Querybook](https://www.querybook.org/)**: Big data querying UI with notebook interface
 - **[ClickHouse](https://clickhouse.com/)**: High-performance columnar analytics database
 - **[Qdrant](https://qdrant.tech/)**: Vector database for AI/ML applications
 - **[Lakekeeper](https://lakekeeper.io/)**: Apache Iceberg REST Catalog for data lake management
@@ -151,6 +152,17 @@ Multi-user platform for interactive computing with Keycloak authentication and p
 Business intelligence and data visualization platform with PostgreSQL integration.
 
 [📖 See Metabase Documentation](./metabase/README.md)
+
+### Querybook
+
+Pinterest's big data querying UI with notebook interface for collaborative data exploration:
+
+- **Trino Integration**: Execute SQL queries against multiple data sources with user impersonation
+- **Notebook Interface**: Create shareable datadocs with queries, visualizations, and documentation
+- **Keycloak Authentication**: OAuth2 integration with group-based admin access
+- **Real-time Execution**: WebSocket-based query execution with live progress updates
+
+[📖 See Querybook Documentation](./querybook/README.md)
 
 ### Trino
 
@@ -299,6 +311,7 @@ kubectl --context yourpc-oidc get nodes
 # Vault: https://vault.yourdomain.com
 # Keycloak: https://auth.yourdomain.com
 # Trino: https://trino.yourdomain.com
+# Querybook: https://querybook.yourdomain.com
 # Metabase: https://metabase.yourdomain.com
 # Airflow: https://airflow.yourdomain.com
 # JupyterHub: https://jupyter.yourdomain.com

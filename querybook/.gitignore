@@ -1,0 +1,10 @@
+# Generated Helm values (contains OAuth client secret)
+querybook-values.yaml
+
+# Generated Kubernetes manifests
+querybook-config-external-secret.yaml
+keycloak-auth-configmap.yaml
+traefik-middleware.yaml
+
+# Cloned Helm chart repository
+querybook-repo/
