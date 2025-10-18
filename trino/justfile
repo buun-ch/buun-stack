@@ -5,6 +5,7 @@ export TRINO_CHART_VERSION := env("TRINO_CHART_VERSION", "1.41.0")
 export TRINO_IMAGE_TAG := env("TRINO_IMAGE_TAG", "477")
 export TRINO_HOST := env("TRINO_HOST", "")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export TRINO_COORDINATOR_MEMORY := env("TRINO_COORDINATOR_MEMORY", "4Gi")
@@ -276,6 +277,10 @@ install:
 
     gomplate -f trino-values.gomplate.yaml -o trino-values.yaml
 
+    echo "Creating Traefik Middleware..."
+    gomplate -f trino-middleware.gomplate.yaml -o trino-middleware.yaml
+    kubectl apply -f trino-middleware.yaml
+
     helm upgrade --install trino trino/trino --namespace ${TRINO_NAMESPACE} \
         --version ${TRINO_CHART_VERSION} -f trino-values.yaml --wait --timeout=10m
 
@@ -318,6 +323,10 @@ upgrade:
 
     gomplate -f trino-values.gomplate.yaml -o trino-values.yaml
 
+    echo "Creating Traefik Middleware..."
+    gomplate -f trino-middleware.gomplate.yaml -o trino-middleware.yaml
+    kubectl apply -f trino-middleware.yaml
+
     helm upgrade trino trino/trino --namespace ${TRINO_NAMESPACE} --version ${TRINO_CHART_VERSION} \
         -f trino-values.yaml --wait --timeout=10m
 
@@ -353,6 +362,7 @@ cleanup:
         just vault::delete trino/postgres || true
         just vault::delete trino/minio || true
         just vault::delete trino/password || true
+        just vault::delete trino/tls || true
         just keycloak::delete-client ${KEYCLOAK_REALM} trino || true
         echo "Cleanup completed"
     else

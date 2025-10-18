@@ -1,0 +1,11 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: trino-headers
+  namespace: {{ .Env.TRINO_NAMESPACE }}
+spec:
+  headers:
+    customRequestHeaders:
+      X-Forwarded-Proto: "https"
+      X-Forwarded-Host: "{{ .Env.TRINO_HOST }}"
+      X-Forwarded-Port: "443"

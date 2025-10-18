@@ -29,6 +29,8 @@ server:
 
   workerExtraConfig: ""
   coordinatorExtraConfig: |
+    discovery.uri=http://localhost:8080
+    http-server.authentication.allow-insecure-over-http=true
     http-server.authentication.oauth2.issuer=https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}
     http-server.authentication.oauth2.auth-url=https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/auth
     http-server.authentication.oauth2.token-url=https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/token
@@ -55,7 +57,25 @@ additionalExchangeManagerProperties: {}
 
 eventListenerProperties: {}
 
-accessControl: {}
+accessControl:
+  type: configmap
+  refreshPeriod: 60s
+  configFile: "rules.json"
+  rules:
+    rules.json: |-
+      {
+        "catalogs": [
+          {
+            "allow": "all"
+          }
+        ],
+        "impersonation": [
+          {
+            "original_user": "admin",
+            "new_user": ".*"
+          }
+        ]
+      }
 
 resourceGroups: {}
 
@@ -107,6 +127,8 @@ ingress:
   className: traefik
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # Pass X-Forwarded-* headers to Trino so it returns correct URLs
+    traefik.ingress.kubernetes.io/router.middlewares: trino-trino-headers@kubernetescrd
   hosts:
     - host: {{ .Env.TRINO_HOST }}
       paths:
