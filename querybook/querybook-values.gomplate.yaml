@@ -6,9 +6,15 @@ worker:
   replicaCount: 1
   name: worker
   image:
+{{- if .Env.QUERYBOOK_CUSTOM_IMAGE }}
+    repository: {{ .Env.QUERYBOOK_CUSTOM_IMAGE }}
+    pullPolicy: {{ .Env.QUERYBOOK_CUSTOM_IMAGE_PULL_POLICY | default "Always" }}
+    tag: {{ .Env.QUERYBOOK_CUSTOM_IMAGE_TAG | default "latest" }}
+{{- else }}
     repository: querybook/querybook
     pullPolicy: IfNotPresent
     tag: latest
+{{- end }}
   resources:
     requests:
       memory: 1Gi
@@ -22,9 +28,15 @@ scheduler:
   replicaCount: 1
   name: scheduler
   image:
+{{- if .Env.QUERYBOOK_CUSTOM_IMAGE }}
+    repository: {{ .Env.QUERYBOOK_CUSTOM_IMAGE }}
+    pullPolicy: {{ .Env.QUERYBOOK_CUSTOM_IMAGE_PULL_POLICY | default "Always" }}
+    tag: {{ .Env.QUERYBOOK_CUSTOM_IMAGE_TAG | default "latest" }}
+{{- else }}
     repository: querybook/querybook
     pullPolicy: IfNotPresent
     tag: latest
+{{- end }}
   resources:
     requests:
       memory: 200Mi
@@ -38,9 +50,15 @@ web:
   replicaCount: 1
   name: web
   image:
+{{- if .Env.QUERYBOOK_CUSTOM_IMAGE }}
+    repository: {{ .Env.QUERYBOOK_CUSTOM_IMAGE }}
+    pullPolicy: {{ .Env.QUERYBOOK_CUSTOM_IMAGE_PULL_POLICY | default "Always" }}
+    tag: {{ .Env.QUERYBOOK_CUSTOM_IMAGE_TAG | default "latest" }}
+{{- else }}
     repository: querybook/querybook
     pullPolicy: IfNotPresent
     tag: latest
+{{- end }}
   service:
     serviceType: ClusterIP
     servicePort: 80
