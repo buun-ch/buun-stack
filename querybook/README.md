@@ -101,7 +101,7 @@ just querybook::upgrade
 
 ### Building Custom Image
 
-To build a custom Querybook image with `sqlalchemy-trino` support:
+To build a custom Querybook image with bug fixes and `sqlalchemy-trino` support:
 
 1. **Clone Querybook repository**:
 
@@ -110,31 +110,60 @@ To build a custom Querybook image with `sqlalchemy-trino` support:
     cd querybook
     ```
 
-2. **Create requirements/local.txt**:
+2. **Apply bug fix patch**:
+
+    ```bash
+    # Copy patch file from buun-stack repository
+    # cp /path/to/buun-stack/querybook/querybook-fix-socketio-disconnect.diff .
+
+    # Apply the patch
+    git apply querybook-fix-socketio-disconnect.diff
+    ```
+
+    **Patch includes**:
+    - Fix for WebSocket disconnect handler signature (python-socketio 5.12.0+ compatibility)
+
+3. **Create requirements/local.txt**:
 
     ```bash
     cat > requirements/local.txt <<EOF
     # Local additional requirements for buun-stack
     # SQLAlchemy dialect for Trino (required for Metastore)
-    sqlalchemy-trino
+    # IMPORTANT: Pin both trino and sqlalchemy-trino versions to maintain compatibility
+    # - trino must be 0.305.0 (what Querybook is tested with)
+    # - sqlalchemy-trino 0.2.2 is compatible with trino ~=0.305
+    # - sqlalchemy-trino >=0.3.0 requires trino>=0.310 (incompatible)
+    # - Both must be explicitly pinned to prevent pip from upgrading them when extra.txt is installed
+    trino==0.305.0
+    sqlalchemy-trino==0.2.2
     EOF
     ```
 
-3. **Build the Docker image**:
+    **Critical**: Both packages must be pinned:
+    - `trino==0.305.0` prevents pip from upgrading to 0.310+ when resolving dependencies
+    - `sqlalchemy-trino==0.2.2` is the only version compatible with trino 0.305
+    - When `EXTRA_PIP_INSTALLS=extra.txt` is used, pip installs many packages which can trigger dependency upgrades
+    - Without explicitly pinning trino, pip may upgrade it to satisfy other package requirements, breaking query execution
+
+4. **Build the Docker image**:
 
     ```bash
     # For remote Docker host (e.g., k3s node)
     DOCKER_HOST=ssh://yourdomain.com docker build \
+        --no-cache \
         --build-arg EXTRA_PIP_INSTALLS=extra.txt \
         -t localhost:30500/querybook:trino-metastore .
 
     # For local Docker
     docker build \
+        --no-cache \
         --build-arg EXTRA_PIP_INSTALLS=extra.txt \
         -t localhost:30500/querybook:trino-metastore .
     ```
 
-4. **Push to registry**:
+    **Important**: Use `--no-cache` when changing `requirements/local.txt` to ensure pip installs the correct package versions. Docker layer caching can cause pip to reuse old dependency resolutions.
+
+5. **Push to registry**:
 
     ```bash
     DOCKER_HOST=ssh://yourdomain.com docker push localhost:30500/querybook:trino-metastore
@@ -142,12 +171,34 @@ To build a custom Querybook image with `sqlalchemy-trino` support:
     docker push localhost:30500/querybook:trino-metastore
     ```
 
-5. **Deploy to Kubernetes**:
+6. **Deploy to Kubernetes**:
 
     ```bash
     export QUERYBOOK_CUSTOM_IMAGE=localhost:30500/querybook
     export QUERYBOOK_CUSTOM_IMAGE_TAG=trino-metastore
     just querybook::upgrade
+    ```
+
+7. **Restart Pods to use new image**:
+
+    ```bash
+    # Delete all Querybook pods to force image pull
+    kubectl delete pod -n querybook -l app=querybook
+
+    # Wait for pods to be ready
+    kubectl wait --for=condition=ready pod -l app=querybook -n querybook --timeout=120s
+
+    # Verify correct package versions
+    kubectl exec -n querybook deployment/worker -- pip show trino sqlalchemy-trino | grep -E "Name:|Version:"
+    ```
+
+    Expected output:
+
+    ```
+    Name: trino
+    Version: 0.305.0
+    Name: sqlalchemy-trino
+    Version: 0.2.2
     ```
 
 **Notes**:

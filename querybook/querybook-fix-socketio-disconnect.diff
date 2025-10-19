@@ -1,0 +1,26 @@
+diff --git a/querybook/server/datasources_socketio/datadoc.py b/querybook/server/datasources_socketio/datadoc.py
+index d7455cd9..2f41e7a2 100644
+--- a/querybook/server/datasources_socketio/datadoc.py
++++ b/querybook/server/datasources_socketio/datadoc.py
+@@ -165,7 +165,7 @@ def on_leave_room(data_doc_id):
+ 
+ 
+ @register_socket("disconnect", namespace=DATA_DOC_NAMESPACE)
+-def disconnect():
++def disconnect(*args, **kwargs):
+     data_doc_ids = rooms(request.sid, namespace=DATA_DOC_NAMESPACE)
+     for data_doc_id in data_doc_ids:
+         leave_room(data_doc_id)
+diff --git a/querybook/server/datasources_socketio/query_execution.py b/querybook/server/datasources_socketio/query_execution.py
+index 9c6a2f8a..7b3668db 100644
+--- a/querybook/server/datasources_socketio/query_execution.py
++++ b/querybook/server/datasources_socketio/query_execution.py
+@@ -65,7 +65,7 @@ def on_leave_room(query_execution_id):
+ 
+ 
+ @register_socket("disconnect", namespace=QUERY_EXECUTION_NAMESPACE)
+-def disconnect():
++def disconnect(*args, **kwargs):
+     query_execution_ids = rooms(request.sid, namespace=QUERY_EXECUTION_NAMESPACE)
+     for query_execution_id in query_execution_ids:
+         leave_room(query_execution_id)
