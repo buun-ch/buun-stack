@@ -57,7 +57,7 @@ KEYCLOAK_REALM=buunstack               # Keycloak realm name
 
 # Optional: Use custom Docker image (for testing fixes/patches)
 QUERYBOOK_CUSTOM_IMAGE=localhost:30500/querybook        # Custom image repository
-QUERYBOOK_CUSTOM_IMAGE_TAG=trino-metastore              # Custom image tag (default: latest)
+QUERYBOOK_CUSTOM_IMAGE_TAG=buun-stack                   # Custom image tag (default: latest)
 QUERYBOOK_CUSTOM_IMAGE_PULL_POLICY=Always               # Image pull policy (default: Always)
 ```
 
@@ -68,7 +68,7 @@ To use a custom Querybook image (e.g., with patches or fixes):
 ```bash
 # Set environment variables
 export QUERYBOOK_CUSTOM_IMAGE=localhost:30500/querybook
-export QUERYBOOK_CUSTOM_IMAGE_TAG=trino-metastore
+export QUERYBOOK_CUSTOM_IMAGE_TAG=buun-stack
 
 # Install or upgrade Querybook
 just querybook::install
@@ -79,14 +79,14 @@ just querybook::upgrade
 **When to use custom image**:
 
 - Testing bug fixes before they are merged upstream
-- Applying patches for specific issues (e.g., datetime JSON serialization)
-- Using Trino Metastore integration (requires sqlalchemy-trino)
+- Applying patches for specific issues (e.g., WebSocket disconnect errors)
 - Using modified versions with custom features
 
-**Custom image includes** (`trino-metastore` tag):
+**Custom image includes** (`buun-stack` tag):
 
-- Datetime JSON serialization fixes for WebSocket communication
-- `sqlalchemy-trino` package for Metastore integration
+- Fix for WebSocket disconnect handler (python-socketio 5.12.0+ compatibility)
+- Fix for datetime serialization in WebSocket emit
+- Trino 0.336.0 upgrade with Metastore support (table autocomplete, schema browser)
 
 **Custom image behavior** (when `QUERYBOOK_CUSTOM_IMAGE` is set):
 
@@ -97,11 +97,11 @@ just querybook::upgrade
 
 - Uses official image: `querybook/querybook:latest`
 - Pull policy: `IfNotPresent`
-- Note: Official image does not include `sqlalchemy-trino`, so Trino Metastore integration will not work
+- Note: Official image may encounter WebSocket disconnect errors with python-socketio 5.12.0+
 
 ### Building Custom Image
 
-To build a custom Querybook image with bug fixes and `sqlalchemy-trino` support:
+To build a custom Querybook image with bug fixes and Metastore support:
 
 1. **Clone Querybook repository**:
 
@@ -114,72 +114,53 @@ To build a custom Querybook image with bug fixes and `sqlalchemy-trino` support:
 
     ```bash
     # Copy patch file from buun-stack repository
-    # cp /path/to/buun-stack/querybook/querybook-fix-socketio-disconnect.diff .
+    # cp /path/to/buun-stack/querybook/querybook-trino-metastore.diff .
 
     # Apply the patch
-    git apply querybook-fix-socketio-disconnect.diff
+    git apply querybook-trino-metastore.diff
     ```
 
     **Patch includes**:
-    - Fix for WebSocket disconnect handler signature (python-socketio 5.12.0+ compatibility)
+    - Fix for WebSocket disconnect handler (python-socketio 5.12.0+ compatibility)
+    - Fix for datetime serialization in WebSocket emit
+    - Trino 0.336.0 upgrade with TrinoCursor.poll() compatibility fix
+    - sqlalchemy-trino 0.5.0 for Metastore support
 
-3. **Create requirements/local.txt**:
-
-    ```bash
-    cat > requirements/local.txt <<EOF
-    # Local additional requirements for buun-stack
-    # SQLAlchemy dialect for Trino (required for Metastore)
-    # IMPORTANT: Pin both trino and sqlalchemy-trino versions to maintain compatibility
-    # - trino must be 0.305.0 (what Querybook is tested with)
-    # - sqlalchemy-trino 0.2.2 is compatible with trino ~=0.305
-    # - sqlalchemy-trino >=0.3.0 requires trino>=0.310 (incompatible)
-    # - Both must be explicitly pinned to prevent pip from upgrading them when extra.txt is installed
-    trino==0.305.0
-    sqlalchemy-trino==0.2.2
-    EOF
-    ```
-
-    **Critical**: Both packages must be pinned:
-    - `trino==0.305.0` prevents pip from upgrading to 0.310+ when resolving dependencies
-    - `sqlalchemy-trino==0.2.2` is the only version compatible with trino 0.305
-    - When `EXTRA_PIP_INSTALLS=extra.txt` is used, pip installs many packages which can trigger dependency upgrades
-    - Without explicitly pinning trino, pip may upgrade it to satisfy other package requirements, breaking query execution
-
-4. **Build the Docker image**:
+3. **Build the Docker image**:
 
     ```bash
     # For remote Docker host (e.g., k3s node)
     DOCKER_HOST=ssh://yourdomain.com docker build \
         --no-cache \
         --build-arg EXTRA_PIP_INSTALLS=extra.txt \
-        -t localhost:30500/querybook:trino-metastore .
+        -t localhost:30500/querybook:buun-stack .
 
     # For local Docker
     docker build \
         --no-cache \
         --build-arg EXTRA_PIP_INSTALLS=extra.txt \
-        -t localhost:30500/querybook:trino-metastore .
+        -t localhost:30500/querybook:buun-stack .
     ```
 
-    **Important**: Use `--no-cache` when changing `requirements/local.txt` to ensure pip installs the correct package versions. Docker layer caching can cause pip to reuse old dependency resolutions.
+    **Important**: Use `--no-cache` to ensure pip installs the correct package versions. Docker layer caching can cause pip to reuse old dependency resolutions.
 
-5. **Push to registry**:
+4. **Push to registry**:
 
     ```bash
-    DOCKER_HOST=ssh://yourdomain.com docker push localhost:30500/querybook:trino-metastore
+    DOCKER_HOST=ssh://yourdomain.com docker push localhost:30500/querybook:buun-stack
     # or for local Docker
-    docker push localhost:30500/querybook:trino-metastore
+    docker push localhost:30500/querybook:buun-stack
     ```
 
-6. **Deploy to Kubernetes**:
+5. **Deploy to Kubernetes**:
 
     ```bash
     export QUERYBOOK_CUSTOM_IMAGE=localhost:30500/querybook
-    export QUERYBOOK_CUSTOM_IMAGE_TAG=trino-metastore
+    export QUERYBOOK_CUSTOM_IMAGE_TAG=buun-stack
     just querybook::upgrade
     ```
 
-7. **Restart Pods to use new image**:
+6. **Restart Pods to use new image**:
 
     ```bash
     # Delete all Querybook pods to force image pull
@@ -188,24 +169,24 @@ To build a custom Querybook image with bug fixes and `sqlalchemy-trino` support:
     # Wait for pods to be ready
     kubectl wait --for=condition=ready pod -l app=querybook -n querybook --timeout=120s
 
-    # Verify correct package versions
-    kubectl exec -n querybook deployment/worker -- pip show trino sqlalchemy-trino | grep -E "Name:|Version:"
+    # Verify trino version and sqlalchemy-trino is installed
+    kubectl exec -n querybook deployment/worker -- pip show trino | grep -E "Name:|Version:"
+    kubectl exec -n querybook deployment/worker -- pip show sqlalchemy-trino | grep -E "Name:|Version:"
     ```
 
     Expected output:
 
     ```
     Name: trino
-    Version: 0.305.0
+    Version: 0.336.0
     Name: sqlalchemy-trino
-    Version: 0.2.2
+    Version: 0.5.0
     ```
 
 **Notes**:
 
-- The Dockerfile automatically includes `requirements/local.txt` if it exists (lines 40-42)
-- `EXTRA_PIP_INSTALLS=extra.txt` ensures additional dependencies are installed during build
-- The custom image will have both the official Querybook packages and `sqlalchemy-trino`
+- `EXTRA_PIP_INSTALLS=extra.txt` ensures all query engines (Trino, BigQuery, Snowflake, etc.) are installed
+- Metastore features are fully enabled with trino 0.336.0 and sqlalchemy-trino 0.5.0
 
 ## Usage
 
@@ -264,41 +245,37 @@ Admin users can:
     - **Metastore**: Select created Metastore (see Metastore Configuration section below)
     - Enables autocomplete for table and column names in query editor
 
-### Configure Metastore (Optional but Recommended)
+### Metastore Configuration
 
-Metastore enables table/column autocompletion and provides a browsable table catalog.
+**Status**: Metastore features are **fully enabled** in the custom image (`buun-stack` tag) with trino 0.336.0 and sqlalchemy-trino 0.5.0.
 
-**Prerequisites**: Custom image with `sqlalchemy-trino` (official image does not include this package)
+**How to configure**:
 
-1. Navigate to Admin → Metastores
-2. Click "Create Metastore"
-3. Configure:
+1. Log in as an admin user
+2. Navigate to Admin → Metastores
+3. Click "Add Metastore"
+4. Configure settings:
 
-    ```plain
-    Name: Trino Iceberg
-    Metastore Loader: SqlAlchemyMetastoreLoader
-    Connection String: trino://admin:[password]@trino.example.com:443/iceberg?SSL=true
-    Acct Info (Key-Value):
-      http_scheme = https
-    Impersonate: OFF (recommended for shared table catalog)
-    ```
+   ```plain
+   Name: Trino Iceberg
+   Metastore Loader: SqlAlchemyMetastoreLoader
+   Connection String: trino://trino.example.com:443/iceberg?SSL=true
+   Username: admin
+   Password: [from just trino::admin-password]
+   ```
 
-    **Important Notes**:
-    - Include authentication in Connection String: `admin:[password]@host`
-    - Include catalog in Connection String: `/iceberg` after port
-    - `http_scheme` must be set to `https` in Acct Info
-    - Keep Impersonate OFF unless you need per-user table filtering
+5. Link the Metastore to your Query Engine (Admin → Query Engines → Edit → Metastore)
 
-4. Click "Run Task" to sync table metadata
-5. Verify in Admin → Metastores that "Last Synced" timestamp is updated
-6. Check left sidebar "Tables" for table list
+**Features**:
 
-**Scheduled Updates** (recommended):
+- **Schema Browser**: Browse catalogs, schemas, and tables in Admin UI
+- **Table Autocomplete**: Type table names in query editor, press Tab or Escape
+- **Column Autocomplete**: Type column names after table name in query
+- **Search**: Use search box in Tables sidebar to find tables by name
 
-- Navigate to Admin → Metastores → [your metastore] → Schedule
-- Set cron expression: `0 */6 * * *` (sync every 6 hours)
+**Note**: Views are currently not displayed in the schema browser (only tables are shown)
 
-**Usage**:
+## Features
 
 - **Tables Sidebar**: Browse schemas and tables, view column details
 - **Autocomplete**: Type table/column names in query editor, press Tab or Escape
@@ -444,31 +421,22 @@ kubectl get pods -n querybook
 
 ### Metastore Issues
 
-- **Tables sidebar is empty**
-    - Check Admin → Metastores for "Last Synced" timestamp
-    - Click "Run Task" to manually sync
-    - Verify Metastore is linked to Query Engine (Admin → Query Engines → Metastore field)
-    - Check worker logs: `kubectl logs -n querybook deployment/worker --tail=100 | grep metastore`
+**Note**: Metastore features are fully enabled in the `buun-stack` custom image with trino 0.336.0 and sqlalchemy-trino 0.5.0.
 
-- **Error: "Can't load plugin: sqlalchemy.dialects:trino"**
-    - Official Querybook image does not include `sqlalchemy-trino`
-    - Use custom image with `QUERYBOOK_CUSTOM_IMAGE_TAG=trino-metastore`
-    - See "Using Custom Image" section above
+- **Metastore not loading tables**:
+    - Verify Metastore configuration: Admin → Metastores → Edit
+    - Check connection string includes catalog: `trino://host:443/iceberg?SSL=true`
+    - Test Trino connection with admin credentials
+    - Check worker pod logs for errors: `just querybook::logs worker`
 
-- **Error: "Connection.**init**() got an unexpected keyword argument 'password'"**
-    - Do not use `password` key in Acct Info
-    - Embed authentication in Connection String: `trino://admin:[password]@host:port/catalog?SSL=true`
-    - Set `http_scheme = https` in Acct Info
+- **Tables not appearing in sidebar**:
+    - Wait for initial metadata sync (may take a few minutes)
+    - Trigger manual sync: Admin → Metastores → Sync
+    - Verify schemas exist in Trino: `SHOW SCHEMAS FROM iceberg`
 
-- **Only system.* schemas visible**
-    - Connection String is missing catalog specification
-    - Add `/iceberg` (or your catalog) after port: `trino://host:443/iceberg?SSL=true`
-
-- **Autocomplete not working**
-    - Verify Query Engine has Metastore linked (Admin → Query Engines → Metastore field)
-    - Refresh DataDoc page (F5) after linking Metastore
-    - Check Environment matches between DataDoc and Query Engine
-    - Try Tab or Escape key instead of Ctrl+Space (macOS shortcut conflict)
+- **Views not displayed**:
+    - This is a known limitation - only tables are currently shown
+    - Views can still be queried directly by typing the full name
 
 ## References
 
