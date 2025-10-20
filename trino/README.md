@@ -88,6 +88,10 @@ just trino::admin-password
 
 Returns the password for username `admin`.
 
+### Claude Code Integration (MCP)
+
+See [MCP.md](./MCP.md) for detailed instructions on integrating Trino with Claude Code using the mcp-trino MCP server.
+
 ### Metabase Integration
 
 **Important**: The Python Trino client (used by Metabase) requires HTTPS when using authentication. You must use the external hostname which has TLS provided by Traefik Ingress.
@@ -331,7 +335,7 @@ The access control rules are defined in `/etc/trino/access-control/rules.json` (
 
 ## Architecture
 
-```
+```plain
 External Users / Querybook
       ↓
 Cloudflare Tunnel (HTTPS)
@@ -400,22 +404,22 @@ kubectl exec -n trino deployment/trino-coordinator -- \
 #### Querybook Connection Fails
 
 - **Error: "cannot use authentication with HTTP"**
-  - Python Trino client requires HTTPS when using authentication (client-side enforcement)
-  - Trino runs HTTP-only internally; TLS is provided by Traefik Ingress at the external hostname
-  - Solution: Use external hostname with SSL: `trino://your-trino-host:443?SSL=true`
-  - Do NOT use internal service names (e.g., `trino.trino.svc.cluster.local:8080`) as they lack TLS
+    - Python Trino client requires HTTPS when using authentication (client-side enforcement)
+    - Trino runs HTTP-only internally; TLS is provided by Traefik Ingress at the external hostname
+    - Solution: Use external hostname with SSL: `trino://your-trino-host:443?SSL=true`
+    - Do NOT use internal service names (e.g., `trino.trino.svc.cluster.local:8080`) as they lack TLS
 
 - **Error: "Access Denied: User admin cannot impersonate user X"**
-  - Access control rules may not be properly configured
-  - Verify rules exist: `kubectl exec -n trino deployment/trino-coordinator -- cat /etc/trino/access-control/rules.json`
-  - Check for impersonation section in rules
+    - Access control rules may not be properly configured
+    - Verify rules exist: `kubectl exec -n trino deployment/trino-coordinator -- cat /etc/trino/access-control/rules.json`
+    - Check for impersonation section in rules
 
 - **Error: "500 Internal Server Error"**
-  - Check Traefik middleware exists: `kubectl get middleware trino-headers -n trino`
-  - Verify Ingress annotation references correct middleware: `trino-trino-headers@kubernetescrd`
-  - Check Traefik logs: `kubectl logs -n kube-system -l app.kubernetes.io/name=traefik`
-  - Verify Ingress backend port is 8080: `kubectl get ingress trino-coordinator -n trino -o yaml | grep "number:"`
-  - If Ingress shows port 8443, ensure `server.config.https.enabled: false` in values (Helm chart v1.41.0 auto-selects HTTPS port when enabled)
+    - Check Traefik middleware exists: `kubectl get middleware trino-headers -n trino`
+    - Verify Ingress annotation references correct middleware: `trino-trino-headers@kubernetescrd`
+    - Check Traefik logs: `kubectl logs -n kube-system -l app.kubernetes.io/name=traefik`
+    - Verify Ingress backend port is 8080: `kubectl get ingress trino-coordinator -n trino -o yaml | grep "number:"`
+    - If Ingress shows port 8443, ensure `server.config.https.enabled: false` in values (Helm chart v1.41.0 auto-selects HTTPS port when enabled)
 
 #### Metabase Sync Fails
 
