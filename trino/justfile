@@ -379,3 +379,28 @@ admin-password:
         echo "Cannot retrieve password: External Secrets not installed"
         exit 1
     fi
+
+# Connect to Trino CLI with OIDC authentication
+cli user="":
+    #!/bin/bash
+    set -euo pipefail
+    if ! command -v trino &>/dev/null; then
+        echo "Error: trino command not found"
+        echo "Please install Trino CLI first"
+        exit 1
+    fi
+    TRINO_HOST="${TRINO_HOST}"
+    while [ -z "${TRINO_HOST}" ]; do
+        TRINO_HOST=$(gum input --prompt="Trino host (FQDN): " --width=100 \
+            --placeholder="e.g., trino.buun.dev")
+    done
+    TRINO_USER="{{ user }}"
+    if [ -z "${TRINO_USER}" ]; then
+        TRINO_USER=$(gum input --prompt="Username (Keycloak username): " --width=100 \
+            --placeholder="e.g., buun")
+    fi
+    echo "Connecting to Trino at https://${TRINO_HOST} as user: ${TRINO_USER}"
+    echo "OIDC authentication will open in your browser..."
+    trino --server "https://${TRINO_HOST}" \
+        --user "${TRINO_USER}" \
+        --external-authentication
