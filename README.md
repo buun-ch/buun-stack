@@ -1,6 +1,6 @@
 # buun-stack
 
-A remotely accessible Kubernetes home lab with OIDC authentication. Build a modern development environment with integrated data analytics and AI capabilities. Includes a complete open data stack for data ingestion, transformation, serving, and orchestration—built on open-source components you can run locally and port to any cloud.
+A remotely accessible Kubernetes home lab with OIDC authentication. Build a modern development environment with integrated data analytics and AI capabilities. Includes an open data stack for data ingestion, transformation, serving, and orchestration—built on open-source components you can run locally and port to any cloud.
 
 - 📺 [Remote-Accessible Kubernetes Home Lab](https://www.youtube.com/playlist?list=PLbAvvJK22Y6vJPrUC6GrfNMXneYspckAo) (YouTube playlist)
 - 📝 [Building a Remote-Accessible Kubernetes Home Lab with k3s](https://dev.to/buun-ch/building-a-remote-accessible-kubernetes-home-lab-with-k3s-5g05) (Dev.to article)
