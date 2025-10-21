@@ -1,0 +1,3 @@
+# Generated files from gomplate templates
+superset-values.yaml
+superset-config-external-secret.yaml

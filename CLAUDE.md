@@ -22,6 +22,27 @@ just                   # Show all available commands
 - **List All Recipes**: Run `just` to display all available recipes across modules
 - **Module-Specific Help**: Run `just <module>` (e.g., `just keycloak`) to show recipes for that module
 - **Execution Location**: ALWAYS run all recipes from the top directory (buun-stack root)
+- **Recipe Parameters**: Recipe parameters are passed as **positional arguments**, not named arguments
+
+**Parameter Passing Examples:**
+
+```bash
+# CORRECT: Positional arguments
+just postgres::create-user-and-db superset superset "password123"
+
+# INCORRECT: Named arguments (will not work)
+just postgres::create-user-and-db username=superset db_name=superset password="password123"
+
+# Recipe definition (for reference)
+create-user-and-db username='' db_name='' password='':
+    just create-db "{{ db_name }}"
+    just create-user "{{ username }}" "{{ password }}"
+```
+
+**Important Notes:**
+- Parameters must be passed in the exact order they appear in the recipe definition
+- Named parameter syntax in the recipe definition is only for documentation
+- Always quote parameters that contain special characters or spaces
 
 ### Core Installation Sequence
 
@@ -92,53 +113,69 @@ All scripts in `/keycloak/scripts/` follow this pattern:
 
 ### Credential Storage Pattern
 
-The credential storage approach depends on whether External Secrets Operator is available:
-
-**When External Secrets is available** (determined by `helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE}`):
-
-- Credentials are generated and stored in Vault using `just vault::put` commands
-- Vault commands are used for secret management
-
-```bash
-# Example: PostgreSQL superuser password (only when External Secrets is available)
-just vault::get secret/postgres/superuser password
-```
-
-**When External Secrets is NOT available**:
-
-- Credentials are stored directly as Kubernetes Secrets
-- Vault commands are NOT used
+The credential storage approach depends on the type of secret and whether External Secrets Operator is available:
 
 #### Secret Management Rules
 
 1. **Environment File**: Do NOT write to `.env.local` directly for secrets. Use it only for configuration values.
 
-2. **Vault and External Secrets Integration**:
-   - When Vault and External Secrets are available, ALWAYS:
-     - Store secrets in Vault
-     - Create ExternalSecret resources to sync secrets from Vault to Kubernetes
+2. **Two Types of Secrets**:
+
+   **Application Secrets** (Metabase, Querybook, Superset, etc.):
+   - When External Secrets Operator is available:
+     - Store in Vault using `just vault::put`
+     - Create ExternalSecret resources to sync from Vault to Kubernetes
      - Let External Secrets Operator create the actual Secret resources
-   - Check availability with:
+   - When External Secrets Operator is NOT available:
+     - Create Kubernetes Secrets directly
+     - Do NOT store in Vault (even if Vault is available)
 
-     ```bash
-     if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
-         # Use Vault + External Secrets pattern
-     fi
-     ```
+   ```bash
+   if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+       # Store in Vault + create ExternalSecret
+       just vault::put app/config key="${value}"
+       gomplate -f app-external-secret.gomplate.yaml | kubectl apply -f -
+   else
+       # Create Kubernetes Secret directly (no Vault)
+       kubectl create secret generic app-secret --from-literal=key="${value}"
+   fi
+   ```
 
-3. **Fallback Pattern**: Only create Kubernetes Secrets directly when Vault/External Secrets are not available.
+   **Core/Admin Credentials** (PostgreSQL superuser, Keycloak admin, MinIO root, etc.):
+   - When External Secrets Operator is available:
+     - Store in Vault using `just vault::put` or `just vault::put-root`
+     - Create ExternalSecret resources
+   - When External Secrets Operator is NOT available:
+     - Create Kubernetes Secrets directly
+     - ALSO store in Vault if Vault is available (as backup)
 
-4. **Helm Values Secret References**:
+   ```bash
+   if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+       # Store in Vault + create ExternalSecret
+       just vault::put-root postgres/admin username=postgres password="${password}"
+       gomplate -f postgres-superuser-external-secret.gomplate.yaml | kubectl apply -f -
+   else
+       # Create Kubernetes Secret directly
+       kubectl create secret generic postgres-cluster-superuser \
+           --from-literal=username=postgres --from-literal=password="${password}"
+       # ALSO store in Vault if available (backup for admin credentials)
+       if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+           just vault::put-root postgres/admin username=postgres password="${password}"
+       fi
+   fi
+   ```
+
+3. **Helm Values Secret References**:
    - When Helm charts support referencing external Secrets (via `existingSecret`, `secretName`, etc.), ALWAYS use this pattern
    - Create the Secret using External Secrets (preferred) or directly as Kubernetes Secret
    - Reference the Secret in Helm values instead of embedding credentials
 
-5. **Keycloak Client Configuration**:
+4. **Keycloak Client Configuration**:
    - Prefer creating Public clients (without client secret) when possible
    - Public clients are suitable for browser-based applications and native apps
    - Only use confidential clients (with secret) when required by the service
 
-6. **Password Generation**:
+5. **Password Generation**:
    - Use `just utils::random-password` whenever possible to generate random passwords
    - Avoid using `openssl rand -base64 32` or other direct methods
    - This ensures consistent password generation across all modules

@@ -40,7 +40,8 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - **[ClickHouse](https://clickhouse.com/)**: High-performance columnar analytics database
 - **[Qdrant](https://qdrant.tech/)**: Vector database for AI/ML applications
 - **[Lakekeeper](https://lakekeeper.io/)**: Apache Iceberg REST Catalog for data lake management
-- **[Metabase](https://www.metabase.com/)**: Business intelligence and data visualization
+- **[Apache Superset](https://superset.apache.org/)**: BI platform with rich chart types and high customizability
+- **[Metabase](https://www.metabase.com/)**: Lightweight BI with simple configuration and clean, modern interface
 - **[DataHub](https://datahubproject.io/)**: Data catalog and metadata management
 
 ### Orchestration (Optional)
@@ -146,6 +147,18 @@ S3-compatible object storage system providing:
 Multi-user platform for interactive computing with Keycloak authentication and persistent storage.
 
 [📖 See JupyterHub Documentation](./jupyterhub/README.md)
+
+### Apache Superset
+
+Modern business intelligence platform with rich visualization capabilities:
+
+- **40+ Chart Types**: Mixed charts, treemaps, sunburst, heatmaps, and more
+- **SQL Lab**: Powerful SQL editor for complex queries and dataset creation
+- **Keycloak Authentication**: OAuth2 integration with group-based admin access
+- **Trino Integration**: Connect to Iceberg data lake and multiple data sources
+- **High Customizability**: Extensive chart configuration and dashboard design options
+
+[📖 See Superset Documentation](./superset/README.md)
 
 ### Metabase
 
@@ -312,6 +325,7 @@ kubectl --context yourpc-oidc get nodes
 # Keycloak: https://auth.yourdomain.com
 # Trino: https://trino.yourdomain.com
 # Querybook: https://querybook.yourdomain.com
+# Superset: https://superset.yourdomain.com
 # Metabase: https://metabase.yourdomain.com
 # Airflow: https://airflow.yourdomain.com
 # JupyterHub: https://jupyter.yourdomain.com

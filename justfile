@@ -24,6 +24,7 @@ mod oauth2-proxy
 mod postgres
 mod qdrant
 mod querybook
+mod superset
 mod trino
 mod utils
 mod vault

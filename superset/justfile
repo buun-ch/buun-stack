@@ -1,0 +1,259 @@
+set fallback := true
+
+export SUPERSET_NAMESPACE := env("SUPERSET_NAMESPACE", "superset")
+export SUPERSET_CHART_VERSION := env("SUPERSET_CHART_VERSION", "0.15.0")
+export SUPERSET_HOST := env("SUPERSET_HOST", "")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add superset https://apache.github.io/superset
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove superset
+
+# Create Superset namespace
+create-namespace:
+    @kubectl get namespace ${SUPERSET_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${SUPERSET_NAMESPACE}
+
+# Delete Superset namespace
+delete-namespace:
+    @kubectl delete namespace ${SUPERSET_NAMESPACE} --ignore-not-found
+
+# Create Keycloak client and OAuth secret for Superset
+create-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${SUPERSET_HOST}" ]; do
+        SUPERSET_HOST=$(
+            gum input --prompt="Superset host (FQDN): " --width=100 \
+            --placeholder="e.g., superset.example.com"
+        )
+    done
+
+    echo "Creating Keycloak client for Superset..."
+
+    just keycloak::delete-client ${KEYCLOAK_REALM} superset || true
+
+    CLIENT_SECRET=$(just utils::random-password)
+
+    just keycloak::create-group superset-admin '' 'Superset administrators' || echo "Group may already exist"
+
+    just keycloak::create-client \
+        realm=${KEYCLOAK_REALM} \
+        client_id=superset \
+        redirect_url="https://${SUPERSET_HOST}/oauth-authorized/keycloak" \
+        client_secret="${CLIENT_SECRET}"
+
+    just keycloak::add-groups-mapper superset
+
+    kubectl delete secret superset-oauth-temp -n ${SUPERSET_NAMESPACE} --ignore-not-found
+    kubectl create secret generic superset-oauth-temp -n ${SUPERSET_NAMESPACE} \
+        --from-literal=client_secret="${CLIENT_SECRET}"
+
+    echo "Keycloak client created successfully"
+    echo "Client ID: superset"
+    echo "Redirect URI: https://${SUPERSET_HOST}/oauth-authorized/keycloak"
+    echo ""
+    echo "Admin Group: superset-admin"
+    echo "To grant admin access, add users to 'superset-admin' group:"
+    echo "  just keycloak::add-user-to-group <username> superset-admin"
+
+# Delete Keycloak client
+delete-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deleting Keycloak client for Superset..."
+    just keycloak::delete-client ${KEYCLOAK_REALM} superset || true
+    echo "Deleting superset-admin group..."
+    just keycloak::delete-group superset-admin || true
+    kubectl delete secret superset-oauth-temp -n ${SUPERSET_NAMESPACE} --ignore-not-found
+
+# Create Superset secrets
+create-secrets postgres_password='':
+    #!/bin/bash
+    set -euo pipefail
+
+    secret_key=$(just utils::random-password)
+
+    pg_host="postgres-cluster-rw.postgres"
+    pg_port="5432"
+    pg_user="superset"
+    pg_password="{{ postgres_password }}"
+    pg_database="superset"
+
+    database_url="postgresql://${pg_user}:${pg_password}@${pg_host}:${pg_port}/${pg_database}"
+
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null && \
+       just vault::get superset/oauth client_secret &>/dev/null; then
+        oauth_client_secret=$(just vault::get superset/oauth client_secret)
+    elif kubectl get secret superset-oauth-temp -n ${SUPERSET_NAMESPACE} &>/dev/null; then
+        oauth_client_secret=$(kubectl get secret superset-oauth-temp -n ${SUPERSET_NAMESPACE} \
+            -o jsonpath='{.data.client_secret}' | base64 -d)
+    else
+        echo "Error: Cannot retrieve OAuth client secret. Please run 'just superset::create-keycloak-client' first."
+        exit 1
+    fi
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Storing secrets in Vault..."
+
+        just vault::put superset/config \
+            SECRET_KEY="${secret_key}" \
+            SQLALCHEMY_DATABASE_URI="${database_url}" \
+            OAUTH_CLIENT_SECRET="${oauth_client_secret}"
+
+        kubectl delete secret superset-secret -n ${SUPERSET_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret superset-secret -n ${SUPERSET_NAMESPACE} --ignore-not-found
+
+        gomplate -f superset-config-external-secret.gomplate.yaml \
+            -o superset-config-external-secret.yaml
+        kubectl apply -f superset-config-external-secret.yaml
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/superset-secret \
+            -n ${SUPERSET_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating secret directly..."
+        kubectl delete secret superset-secret -n ${SUPERSET_NAMESPACE} --ignore-not-found
+        kubectl create secret generic superset-secret -n ${SUPERSET_NAMESPACE} \
+            --from-literal=SECRET_KEY="${secret_key}" \
+            --from-literal=SQLALCHEMY_DATABASE_URI="${database_url}" \
+            --from-literal=OAUTH_CLIENT_SECRET="${oauth_client_secret}"
+    fi
+
+# Delete Superset secrets
+delete-secrets:
+    @kubectl delete secret superset-secret -n ${SUPERSET_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret superset-secret -n ${SUPERSET_NAMESPACE} --ignore-not-found
+
+# Install Superset
+install:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${SUPERSET_HOST}" ]; do
+        SUPERSET_HOST=$(
+            gum input --prompt="Superset host (FQDN): " --width=100 \
+            --placeholder="e.g., superset.example.com"
+        )
+    done
+
+    while [ -z "${KEYCLOAK_HOST}" ]; do
+        KEYCLOAK_HOST=$(
+            gum input --prompt="Keycloak host (FQDN): " --width=100 \
+            --placeholder="e.g., auth.example.com"
+        )
+    done
+
+    just create-namespace
+
+    # Create Superset database and user
+    POSTGRES_PASSWORD=$(just utils::random-password)
+    just postgres::create-user-and-db superset superset "${POSTGRES_PASSWORD}"
+
+    just create-keycloak-client
+    just create-secrets "${POSTGRES_PASSWORD}"
+
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null && \
+       just vault::get superset/oauth client_secret &>/dev/null; then
+        export OAUTH_CLIENT_SECRET=$(just vault::get superset/oauth client_secret)
+    elif kubectl get secret superset-oauth-temp -n ${SUPERSET_NAMESPACE} &>/dev/null; then
+        export OAUTH_CLIENT_SECRET=$(kubectl get secret superset-oauth-temp -n ${SUPERSET_NAMESPACE} \
+            -o jsonpath='{.data.client_secret}' | base64 -d)
+    else
+        echo "Error: Cannot retrieve OAuth client secret. Please run 'just superset::create-keycloak-client' first."
+        exit 1
+    fi
+
+    export SUPERSET_DB_PASSWORD="${POSTGRES_PASSWORD}"
+
+    just add-helm-repo
+    gomplate -f superset-values.gomplate.yaml -o superset-values.yaml
+
+    helm upgrade --cleanup-on-fail --install superset superset/superset \
+        --version ${SUPERSET_CHART_VERSION} -n ${SUPERSET_NAMESPACE} --wait \
+        -f superset-values.yaml
+
+    echo ""
+    echo "Superset installed successfully!"
+    echo "Access URL: https://${SUPERSET_HOST}"
+    echo ""
+    echo "OAuth Configuration:"
+    echo "  Provider: Keycloak"
+    echo "  Realm: ${KEYCLOAK_REALM}"
+    echo "  Authorization URL: https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/auth"
+    echo ""
+    echo "Admin Access:"
+    echo "  To grant admin access, add users to 'superset-admin' group:"
+    echo "  just keycloak::add-user-to-group <username> superset-admin"
+    echo ""
+
+# Upgrade Superset
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${SUPERSET_HOST}" ]; do
+        SUPERSET_HOST=$(
+            gum input --prompt="Superset host (FQDN): " --width=100 \
+            --placeholder="e.g., superset.example.com"
+        )
+    done
+
+    while [ -z "${KEYCLOAK_HOST}" ]; do
+        KEYCLOAK_HOST=$(
+            gum input --prompt="Keycloak host (FQDN): " --width=100 \
+            --placeholder="e.g., auth.example.com"
+        )
+    done
+
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null && \
+       just vault::get superset/oauth client_secret &>/dev/null; then
+        export OAUTH_CLIENT_SECRET=$(just vault::get superset/oauth client_secret)
+    elif kubectl get secret superset-oauth-temp -n ${SUPERSET_NAMESPACE} &>/dev/null; then
+        export OAUTH_CLIENT_SECRET=$(kubectl get secret superset-oauth-temp -n ${SUPERSET_NAMESPACE} \
+            -o jsonpath='{.data.client_secret}' | base64 -d)
+    else
+        echo "Error: Cannot retrieve OAuth client secret. Please run 'just superset::create-keycloak-client' first."
+        exit 1
+    fi
+
+    # Extract database password from SQLALCHEMY_DATABASE_URI in existing secret
+    database_uri=$(kubectl get secret superset-secret -n ${SUPERSET_NAMESPACE} \
+        -o jsonpath='{.data.SQLALCHEMY_DATABASE_URI}' | base64 -d)
+    export SUPERSET_DB_PASSWORD=$(echo "$database_uri" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+
+    echo "Upgrading Superset..."
+
+    gomplate -f superset-values.gomplate.yaml -o superset-values.yaml
+    helm upgrade superset superset/superset \
+        --version ${SUPERSET_CHART_VERSION} -n ${SUPERSET_NAMESPACE} --wait \
+        -f superset-values.yaml
+
+    echo "Superset upgraded successfully"
+
+# Uninstall Superset
+uninstall delete-db='true':
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall superset -n ${SUPERSET_NAMESPACE} --ignore-not-found --wait
+    just delete-secrets
+    just delete-keycloak-client
+    just delete-namespace
+    if [ "{{ delete-db }}" = "true" ]; then
+        just postgres::delete-user-and-db superset superset
+    fi
+
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+        just vault::delete superset/config || true
+        just vault::delete superset/oauth || true
+    fi

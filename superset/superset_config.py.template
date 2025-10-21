@@ -1,0 +1,66 @@
+import os
+from flask_appbuilder.security.manager import AUTH_OAUTH
+from superset.security import SupersetSecurityManager
+
+
+class CustomSsoSecurityManager(SupersetSecurityManager):
+    def oauth_user_info(self, provider, response=None):
+        """Get user information from OAuth provider."""
+        if provider == "keycloak":
+            me = self.appbuilder.sm.oauth_remotes[provider].get(
+                "protocol/openid-connect/userinfo"
+            )
+            data = me.json()
+            return {
+                "username": data.get("preferred_username"),
+                "name": data.get("name"),
+                "email": data.get("email"),
+                "first_name": data.get("given_name", ""),
+                "last_name": data.get("family_name", ""),
+                "role_keys": data.get("groups", []),
+            }
+        return {}
+
+
+# Authentication type
+AUTH_TYPE = AUTH_OAUTH
+
+# Auto-registration for new users
+AUTH_USER_REGISTRATION = True
+AUTH_USER_REGISTRATION_ROLE = "Gamma"
+
+# Custom security manager
+CUSTOM_SECURITY_MANAGER = CustomSsoSecurityManager
+
+# OAuth configuration
+OAUTH_PROVIDERS = [
+    {
+        "name": "keycloak",
+        "icon": "fa-key",
+        "token_key": "access_token",
+        "remote_app": {
+            "client_id": "superset",
+            "client_secret": os.environ.get("OAUTH_CLIENT_SECRET"),
+            "api_base_url": "https://{{ env.Getenv "KEYCLOAK_HOST" }}/realms/{{ env.Getenv "KEYCLOAK_REALM" }}/",
+            "client_kwargs": {
+                "scope": "openid email profile"
+            },
+            "access_token_url": "https://{{ env.Getenv "KEYCLOAK_HOST" }}/realms/{{ env.Getenv "KEYCLOAK_REALM" }}/protocol/openid-connect/token",
+            "authorize_url": "https://{{ env.Getenv "KEYCLOAK_HOST" }}/realms/{{ env.Getenv "KEYCLOAK_REALM" }}/protocol/openid-connect/auth",
+            "request_token_url": None,
+        }
+    }
+]
+
+# Role mapping
+AUTH_ROLES_MAPPING = {
+    "superset-admin": ["Admin"],
+    "Alpha": ["Alpha"],
+    "Gamma": ["Gamma"],
+}
+
+# Sync roles at each login
+AUTH_ROLES_SYNC_AT_LOGIN = True
+
+# Enable Trino database support
+PREVENT_UNSAFE_DB_CONNECTIONS = False
