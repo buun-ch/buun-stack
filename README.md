@@ -360,6 +360,40 @@ Add new modules to the `custom/` directory following the same pattern as the exa
 
 The `custom.just` file is automatically imported by the main Justfile if it exists, allowing you to maintain your custom workflows separately from the core stack.
 
+## Demo Projects
+
+The following demo projects showcase end-to-end data workflows using buun-stack:
+
+### Salesforce to Iceberg REST Catalog
+
+[**dlt-salesforce-iceberg-rest-demo**](https://github.com/buun-ch/dlt-salesforce-iceberg-rest-demo)
+
+Demonstrates Salesforce data ingestion into an Iceberg data lake:
+
+- **dlt** extracts data from Salesforce API (Account, Contact, Opportunity, etc.)
+- **Custom Iceberg destination** loads data into Lakekeeper REST Catalog
+- **Automatic schema conversion** from dlt to Iceberg with PyArrow
+- **Orchestration** with Dagster or Apache Airflow
+- **Query** with Trino and visualize in Superset/Metabase
+
+Key technologies: dlt, PyIceberg, Lakekeeper, Trino, MinIO
+
+### E-commerce Lakehouse Analytics
+
+[**payload-ecommerce-lakehouse-demo**](https://github.com/buun-ch/payload-ecommerce-lakehouse-demo)
+
+Full-stack e-commerce application with integrated lakehouse analytics:
+
+- **Next.js + Payload CMS** for e-commerce application
+- **dlt** ingests data incrementally from Payload API to Iceberg
+- **dbt** transforms raw data into analytics-ready star schema
+- **Trino** queries across all data layers (raw, staging, marts)
+- **Superset/Metabase** for dashboards and business intelligence
+
+Key technologies: Next.js, Payload CMS, dlt, dbt, Iceberg, Trino, Superset, PostgreSQL
+
+Both projects demonstrate the medallion architecture (raw → staging → marts) and showcase how buun-stack components work together for production data workflows.
+
 ## Troubleshooting
 
 - Check logs: `kubectl logs -n <namespace> <pod-name>`
