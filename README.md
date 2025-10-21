@@ -89,138 +89,167 @@ For detailed step-by-step instructions, see the [Installation Guide](./INSTALLAT
 
 ### k3s
 
-Lightweight Kubernetes distribution optimized for edge computing and resource-constrained environments.
+Lightweight Kubernetes distribution optimized for edge computing:
+
+- **Resource Efficient**: Runs on resource-constrained environments
+- **Production Ready**: Full Kubernetes functionality with minimal overhead
+- **Easy Deployment**: Single binary installation with built-in ingress
 
 ### Longhorn
 
-Enterprise-grade distributed storage system providing:
+Enterprise-grade distributed storage system:
 
-- Highly available block storage
-- Backup and disaster recovery
-- No single point of failure
-- Support for NFS persistent volumes
+- **Highly Available**: Block storage with no single point of failure
+- **Backup & Recovery**: Built-in disaster recovery capabilities
+- **NFS Support**: Persistent volumes with NFS compatibility
 
 ### HashiCorp Vault
 
-Centralized secrets management offering:
+Centralized secrets management:
 
-- Secure secret storage
-- Dynamic secrets generation
-- Encryption as a service
-- Integration with External Secrets Operator for automatic Kubernetes Secret synchronization
+- **Secure Storage**: Encrypted secret storage with access control
+- **Dynamic Secrets**: Automatic credential generation and rotation
+- **External Secrets Integration**: Syncs with Kubernetes via External Secrets Operator
 
 ### Keycloak
 
-Open-source identity and access management providing:
+Open-source identity and access management:
 
-- Single Sign-On (SSO)
-- OIDC/OAuth2 authentication
-- User federation and identity brokering
+- **Single Sign-On**: OIDC/OAuth2 authentication across all services
+- **User Federation**: Identity brokering and external provider integration
+- **Group-Based Access**: Role and permission management
 
 ### PostgreSQL
 
-Production-ready relational database for:
+Production-ready relational database:
 
-- Keycloak data storage
-- Application databases
-- Vector similarity search with [pgvector](https://github.com/pgvector/pgvector) extension for AI/ML workloads
+- **High Availability**: Clustered deployment with CloudNativePG
+- **pgvector Extension**: Vector similarity search for AI/ML workloads
+- **Multi-Tenant**: Shared database for Keycloak and applications
 
 ### External Secrets Operator
 
-Kubernetes operator for syncing secrets from external systems:
+Kubernetes operator for secret synchronization:
 
-- Automatically syncs secrets from Vault to Kubernetes Secrets
-- Supports multiple secret backends
-- Provides secure secret rotation and lifecycle management
+- **Vault Integration**: Automatically syncs secrets from Vault to Kubernetes
+- **Multiple Backends**: Supports various secret management systems
+- **Secure Rotation**: Automatic secret lifecycle management
 
 ### MinIO
 
-S3-compatible object storage system providing:
+S3-compatible object storage:
 
-- High-performance distributed object storage
-- AWS S3 API compatibility
-- Erasure coding for data protection
-- Multi-tenancy support
+- **S3 API**: Drop-in replacement for AWS S3
+- **High Performance**: Distributed object storage with erasure coding
+- **Multi-Tenancy**: Isolated storage buckets per application
 
 ### JupyterHub
 
-Multi-user platform for interactive computing with Keycloak authentication and persistent storage.
+Multi-user platform for interactive computing:
+
+- **Keycloak Authentication**: OAuth2 integration with SSO
+- **Persistent Storage**: User notebooks stored in Longhorn volumes
+- **Collaborative**: Shared computing environment for teams
 
 [📖 See JupyterHub Documentation](./jupyterhub/README.md)
 
 ### Apache Superset
 
-Modern business intelligence platform with rich visualization capabilities:
+Modern business intelligence platform:
 
-- **40+ Chart Types**: Mixed charts, treemaps, sunburst, heatmaps, and more
-- **SQL Lab**: Powerful SQL editor for complex queries and dataset creation
-- **Keycloak Authentication**: OAuth2 integration with group-based admin access
-- **Trino Integration**: Connect to Iceberg data lake and multiple data sources
-- **High Customizability**: Extensive chart configuration and dashboard design options
+- **Rich Visualizations**: 40+ chart types including mixed charts, treemaps, and heatmaps
+- **SQL Lab**: Powerful editor for complex queries and dataset creation
+- **Keycloak & Trino**: OAuth2 authentication and Iceberg data lake integration
 
 [📖 See Superset Documentation](./superset/README.md)
 
 ### Metabase
 
-Business intelligence and data visualization platform with PostgreSQL integration.
+Lightweight business intelligence:
+
+- **Simple Setup**: Quick configuration with clean, modern UI
+- **Multiple Databases**: Connect to PostgreSQL, Trino, and more
+- **Keycloak Authentication**: OAuth2 integration for user management
 
 [📖 See Metabase Documentation](./metabase/README.md)
 
 ### Querybook
 
-Pinterest's big data querying UI with notebook interface for collaborative data exploration:
+Big data querying UI with notebook interface:
 
-- **Trino Integration**: Execute SQL queries against multiple data sources with user impersonation
-- **Notebook Interface**: Create shareable datadocs with queries, visualizations, and documentation
-- **Keycloak Authentication**: OAuth2 integration with group-based admin access
-- **Real-time Execution**: WebSocket-based query execution with live progress updates
+- **Trino Integration**: SQL queries against multiple data sources with user impersonation
+- **Notebook Interface**: Shareable datadocs with queries and visualizations
+- **Real-time Execution**: WebSocket-based query progress updates
 
 [📖 See Querybook Documentation](./querybook/README.md)
 
 ### Trino
 
-Fast distributed SQL query engine for big data analytics with:
+Fast distributed SQL query engine:
 
-- **Multi-Source Queries**: Query PostgreSQL, Iceberg, and other data sources in a single query
-- **Keycloak Authentication**: OAuth2 for Web UI and password authentication for JDBC clients
-- **Metabase Integration**: Connect via Starburst driver for data visualization
+- **Multi-Source Queries**: Query PostgreSQL, Iceberg, and other sources in single query
+- **Keycloak Authentication**: OAuth2 for Web UI, password auth for JDBC clients
 - **Sample Data**: TPCH catalog with benchmark data for testing
 
 [📖 See Trino Documentation](./trino/README.md)
 
 ### DataHub
 
-Modern data catalog and metadata management platform with OIDC integration.
+Modern data catalog and metadata management:
+
+- **OIDC Integration**: Keycloak authentication for unified access
+- **Metadata Discovery**: Search and browse data assets across platforms
+- **Lineage Tracking**: Visualize data flow and dependencies
 
 [📖 See DataHub Documentation](./datahub/README.md)
 
 ### ClickHouse
 
-High-performance columnar OLAP database for analytics and data warehousing.
+High-performance columnar OLAP database:
+
+- **Fast Analytics**: Optimized for analytical queries on large datasets
+- **Compression**: Efficient storage with columnar format
+- **Real-time Ingestion**: Stream data from Kafka and other sources
 
 [📖 See ClickHouse Documentation](./clickhouse/README.md)
 
 ### Qdrant
 
-High-performance vector database for AI/ML applications with similarity search and rich filtering.
+High-performance vector database:
+
+- **Similarity Search**: Fast vector search for AI/ML applications
+- **Rich Filtering**: Combine vector search with structured filters
+- **Scalable**: Distributed deployment for large-scale embeddings
 
 [📖 See Qdrant Documentation](./qdrant/README.md)
 
 ### Lakekeeper
 
-Apache Iceberg REST Catalog for managing data lake tables with OIDC authentication.
+Apache Iceberg REST Catalog:
+
+- **OIDC Authentication**: Keycloak integration for secure access
+- **Table Management**: Manages Iceberg tables with ACID transactions
+- **Multi-Engine**: Compatible with Trino, Spark, and other query engines
 
 [📖 See Lakekeeper Documentation](./lakekeeper/README.md)
 
 ### Apache Airflow
 
-Modern workflow orchestration platform for data pipelines with JupyterHub integration.
+Workflow orchestration platform:
+
+- **DAG-Based**: Define data pipelines as code with Python
+- **JupyterHub Integration**: Develop and test workflows in notebooks
+- **Keycloak Authentication**: OAuth2 for user management
 
 [📖 See Airflow Documentation](./airflow/README.md)
 
 ### Dagster
 
-Modern data orchestration platform for building data pipelines and managing data assets.
+Modern data orchestration platform:
+
+- **Asset-Centric**: Define data assets and their dependencies
+- **Integrated Development**: Built-in UI for development and monitoring
+- **Testing & Validation**: Data quality checks and pipeline testing
 
 [📖 See Dagster Documentation](./dagster/README.md)
 
