@@ -114,10 +114,10 @@ To build a custom Querybook image with bug fixes and Metastore support:
 
     ```bash
     # Copy patch file from buun-stack repository
-    # cp /path/to/buun-stack/querybook/querybook-trino-metastore.diff .
+    # cp /path/to/buun-stack/querybook/querybook-fixes.diff .
 
     # Apply the patch
-    git apply querybook-trino-metastore.diff
+    git apply querybook-fixes.diff
     ```
 
     **Patch includes**:

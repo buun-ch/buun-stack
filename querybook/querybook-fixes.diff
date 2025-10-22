@@ -1,3 +1,26 @@
+diff --git a/querybook/server/app/datasource.py b/querybook/server/app/datasource.py
+index 124df071..eb6cc394 100644
+--- a/querybook/server/app/datasource.py
++++ b/querybook/server/app/datasource.py
+@@ -37,13 +37,16 @@ class RequestException(Exception):
+         self.status_code = status_code
+ 
+ 
+-_epoch = datetime.datetime.utcfromtimestamp(0)
++_epoch = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+ 
+ 
+ def DATE_MILLISECONDS(dt):
+     """Return miliseconds for the given date"""
+     if isinstance(dt, datetime.date):
+-        dt = datetime.datetime.combine(dt, datetime.datetime.min.time())
++        dt = datetime.datetime.combine(dt, datetime.datetime.min.time(), tzinfo=datetime.timezone.utc)
++    # Ensure datetime is timezone-aware (treat naive as UTC)
++    if dt.tzinfo is None:
++        dt = dt.replace(tzinfo=datetime.timezone.utc)
+     delta = dt - _epoch
+     return delta.total_seconds() * 1000.0
+ 
 diff --git a/querybook/server/datasources/query_execution.py b/querybook/server/datasources/query_execution.py
 index e70122b3..9b6ab563 100644
 --- a/querybook/server/datasources/query_execution.py
@@ -72,6 +95,58 @@ index 35e9839d..658a91d9 100644
              self._cursor._iterator = iter(self.rows)
              poll_result = self._cursor.stats
              completed = self._cursor._query._finished
+diff --git a/querybook/server/lib/utils/utils.py b/querybook/server/lib/utils/utils.py
+index d1add40e..244fab5b 100644
+--- a/querybook/server/lib/utils/utils.py
++++ b/querybook/server/lib/utils/utils.py
+@@ -2,7 +2,7 @@ from contextlib import contextmanager
+ import inspect
+ import signal
+ import subprocess
+-from datetime import datetime, date
++from datetime import datetime, date, timezone
+ from functools import wraps
+ from typing import Optional, Union
+ 
+@@ -11,7 +11,7 @@ import gevent
+ from lib.logger import get_logger
+ 
+ LOG = get_logger(__file__)
+-_epoch = datetime.utcfromtimestamp(0)
++_epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+ 
+ 
+ def DATE_TO_UTC(dt: date) -> int:
+@@ -23,11 +23,10 @@ def DATE_TO_UTC(dt: date) -> int:
+     return the result in seconds instead of ms
+     at least for the time being.
+     """
+-    return (
+-        int((datetime.combine(dt, datetime.min.time()) - _epoch).total_seconds())
+-        if dt
+-        else None
+-    )
++    if not dt:
++        return None
++    dt_combined = datetime.combine(dt, datetime.min.time(), tzinfo=timezone.utc)
++    return int((dt_combined - _epoch).total_seconds())
+ 
+ 
+ def DATETIME_TO_UTC(dt: datetime) -> int:
+@@ -39,7 +38,12 @@ def DATETIME_TO_UTC(dt: datetime) -> int:
+     return the result in seconds instead of ms
+     at least for the time being.
+     """
+-    return int((dt - _epoch).total_seconds()) if dt else None
++    if not dt:
++        return None
++    # Ensure datetime is timezone-aware (treat naive as UTC)
++    if dt.tzinfo is None:
++        dt = dt.replace(tzinfo=timezone.utc)
++    return int((dt - _epoch).total_seconds())
+ 
+ 
+ def DATE_STRING(dt):
 diff --git a/querybook/server/logic/datadoc_collab.py b/querybook/server/logic/datadoc_collab.py
 index 76a0ce5c..9fb371ed 100644
 --- a/querybook/server/logic/datadoc_collab.py
@@ -103,6 +178,37 @@ index 76a0ce5c..9fb371ed 100644
                  ),
                  namespace=DATA_DOC_NAMESPACE,
                  room=doc_id,
+diff --git a/querybook/webapp/redux/dataTableSearch/action.ts b/querybook/webapp/redux/dataTableSearch/action.ts
+index c70ea6a1..eb07134f 100644
+--- a/querybook/webapp/redux/dataTableSearch/action.ts
++++ b/querybook/webapp/redux/dataTableSearch/action.ts
+@@ -90,7 +90,7 @@ function searchDataTable(): ThunkResult<Promise<ITableSearchResult[]>> {
+             const search = { ...mapStateToSearch(state) };
+             if (tableSort.key === 'name') {
+                 const tableSortAsc = tableSort.asc ? 'asc' : 'desc';
+-                search['sort_key'] = ['schema', 'name'];
++                search['sort_key'] = ['schema.keyword', 'name.keyword'];
+                 search['sort_order'] = [tableSortAsc, tableSortAsc];
+             } else if (tableSort.key === 'relevance') {
+                 search['sort_key'] = '_score';
+@@ -196,7 +196,7 @@ export function searchTableBySchema(
+                         schema: schemaName,
+                     },
+                 }),
+-                sort_key: orderBy.key === 'relevance' ? '_score' : orderBy.key,
++                sort_key: orderBy.key === 'relevance' ? '_score' : orderBy.key === 'name' ? 'name.keyword' : orderBy.key,
+                 sort_order: orderBy.key === 'relevance' ? 'desc' : sortOrder,
+                 offset: resultsCount,
+             });
+@@ -245,7 +245,7 @@ export function getMoreDataTable(): ThunkResult<Promise<ITableSearchResult[]>> {
+ 
+             if (tableSort.key === 'name') {
+                 const tableSortAsc = tableSort.asc ? 'asc' : 'desc';
+-                searchParams['sort_key'] = ['schema', 'name'];
++                searchParams['sort_key'] = ['schema.keyword', 'name.keyword'];
+                 searchParams['sort_order'] = [tableSortAsc, tableSortAsc];
+             } else if (tableSort.key === 'relevance') {
+                 searchParams['sort_key'] = '_score';
 diff --git a/requirements/engine/trino.txt b/requirements/engine/trino.txt
 index 86cb0ed2..c3b91e72 100644
 --- a/requirements/engine/trino.txt
