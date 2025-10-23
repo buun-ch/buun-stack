@@ -121,6 +121,25 @@ index 35e9839d..658a91d9 100644
              self._cursor._iterator = iter(self.rows)
              poll_result = self._cursor.stats
              completed = self._cursor._query._finished
+diff --git a/querybook/server/lib/utils/json.py b/querybook/server/lib/utils/json.py
+index c8fb2250..daa43c0f 100644
+--- a/querybook/server/lib/utils/json.py
++++ b/querybook/server/lib/utils/json.py
+@@ -1,4 +1,5 @@
+ from datetime import datetime, date
++from decimal import Decimal
+ import json
+ 
+ from flask import json as flask_json
+@@ -27,6 +28,8 @@ class JSONEncoder(flask_json.JSONEncoder):
+             return self.datetime_formatter(obj)
+         elif isinstance(obj, date):
+             return self.date_formatter(obj)
++        elif isinstance(obj, Decimal):
++            return float(obj)
+         elif isinstance(obj, Row):
+             return list(obj)
+ 
 diff --git a/querybook/server/lib/utils/utils.py b/querybook/server/lib/utils/utils.py
 index d1add40e..244fab5b 100644
 --- a/querybook/server/lib/utils/utils.py
@@ -204,37 +223,6 @@ index 76a0ce5c..9fb371ed 100644
                  ),
                  namespace=DATA_DOC_NAMESPACE,
                  room=doc_id,
-diff --git a/querybook/webapp/redux/dataTableSearch/action.ts b/querybook/webapp/redux/dataTableSearch/action.ts
-index c70ea6a1..eb07134f 100644
---- a/querybook/webapp/redux/dataTableSearch/action.ts
-+++ b/querybook/webapp/redux/dataTableSearch/action.ts
-@@ -90,7 +90,7 @@ function searchDataTable(): ThunkResult<Promise<ITableSearchResult[]>> {
-             const search = { ...mapStateToSearch(state) };
-             if (tableSort.key === 'name') {
-                 const tableSortAsc = tableSort.asc ? 'asc' : 'desc';
--                search['sort_key'] = ['schema', 'name'];
-+                search['sort_key'] = ['schema.keyword', 'name.keyword'];
-                 search['sort_order'] = [tableSortAsc, tableSortAsc];
-             } else if (tableSort.key === 'relevance') {
-                 search['sort_key'] = '_score';
-@@ -196,7 +196,7 @@ export function searchTableBySchema(
-                         schema: schemaName,
-                     },
-                 }),
--                sort_key: orderBy.key === 'relevance' ? '_score' : orderBy.key,
-+                sort_key: orderBy.key === 'relevance' ? '_score' : orderBy.key === 'name' ? 'name.keyword' : orderBy.key,
-                 sort_order: orderBy.key === 'relevance' ? 'desc' : sortOrder,
-                 offset: resultsCount,
-             });
-@@ -245,7 +245,7 @@ export function getMoreDataTable(): ThunkResult<Promise<ITableSearchResult[]>> {
- 
-             if (tableSort.key === 'name') {
-                 const tableSortAsc = tableSort.asc ? 'asc' : 'desc';
--                searchParams['sort_key'] = ['schema', 'name'];
-+                searchParams['sort_key'] = ['schema.keyword', 'name.keyword'];
-                 searchParams['sort_order'] = [tableSortAsc, tableSortAsc];
-             } else if (tableSort.key === 'relevance') {
-                 searchParams['sort_key'] = '_score';
 diff --git a/requirements/engine/trino.txt b/requirements/engine/trino.txt
 index 86cb0ed2..c3b91e72 100644
 --- a/requirements/engine/trino.txt
