@@ -1,3 +1,29 @@
+diff --git a/querybook/scripts/init_db b/querybook/scripts/init_db
+index a6656b6b..123d8bb9 100755
+--- a/querybook/scripts/init_db
++++ b/querybook/scripts/init_db
+@@ -2,5 +2,20 @@
+ 
+ cd querybook
+ PYTHONPATH=server alembic upgrade head
+-PYTHONPATH=server python server/scripts/init_es.py
++
++# Retry Elasticsearch initialization to handle timing issues
++echo "Initializing Elasticsearch indices..."
++for i in {1..30}; do
++    if PYTHONPATH=server python server/scripts/init_es.py; then
++        echo "Elasticsearch initialized successfully"
++        cd -
++        exit 0
++    else
++        echo "Failed to initialize Elasticsearch, retrying in 5 seconds... ($i/30)"
++        sleep 5
++    fi
++done
++
++echo "ERROR: Failed to initialize Elasticsearch after 30 attempts"
+ cd -
++exit 1
 diff --git a/querybook/server/app/datasource.py b/querybook/server/app/datasource.py
 index 124df071..eb6cc394 100644
 --- a/querybook/server/app/datasource.py
