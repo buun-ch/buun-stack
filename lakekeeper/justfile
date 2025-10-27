@@ -109,6 +109,10 @@ create-oidc-client:
     echo "Creating 'lakekeeper' client scope if it doesn't exist..."
     just keycloak::create-client-scope ${KEYCLOAK_REALM} lakekeeper "Lakekeeper API scope"
 
+    # Add audience mapper to lakekeeper scope
+    echo "Adding audience mapper to 'lakekeeper' client scope..."
+    just keycloak::add-audience-mapper-to-scope ${KEYCLOAK_REALM} lakekeeper lakekeeper
+
     # Check if client already exists
     if just keycloak::client-exists ${KEYCLOAK_REALM} lakekeeper &>/dev/null; then
         echo "Client 'lakekeeper' already exists, skipping creation..."
@@ -128,10 +132,6 @@ create-oidc-client:
     # Ensure the lakekeeper scope is added to the client (for both existing and new clients)
     echo "Adding 'lakekeeper' scope to client..."
     just keycloak::add-scope-to-client ${KEYCLOAK_REALM} lakekeeper lakekeeper
-
-    # Add audience mapper to include 'lakekeeper' in JWT audience
-    echo "Adding audience mapper for JWT token..."
-    just keycloak::add-audience-mapper lakekeeper lakekeeper
 
     echo "OAuth client configured successfully for PKCE authentication"
 
