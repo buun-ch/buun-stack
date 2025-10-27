@@ -7,7 +7,7 @@ Fast distributed SQL query engine for big data analytics with Keycloak authentic
 This module deploys Trino using the official Helm chart with:
 
 - **Keycloak OAuth2 authentication** for Web UI access
-- **Password authentication** for JDBC clients (Metabase, Querybook, etc.)
+- **Password authentication** for programmatic clients (Metabase, Querybook, etc.)
 - **Access control with user impersonation** for multi-user query attribution
 - **PostgreSQL catalog** for querying PostgreSQL databases
 - **Iceberg catalog** with Lakekeeper (optional)
@@ -19,7 +19,8 @@ This module deploys Trino using the official Helm chart with:
 - Kubernetes cluster (k3s)
 - Keycloak installed and configured
 - PostgreSQL cluster (CloudNativePG)
-- MinIO (optional, for Iceberg catalog)
+- MinIO (optional, for Iceberg catalog storage backend)
+- Lakekeeper (optional, required before enabling Iceberg catalog for Trino)
 - External Secrets Operator (optional, for Vault integration)
 
 ## Installation
@@ -34,7 +35,7 @@ You will be prompted for:
 
 1. **Trino host (FQDN)**: e.g., `trino.example.com`
 2. **PostgreSQL catalog setup**: Recommended for production use
-3. **MinIO storage setup**: Optional, for Iceberg/Hive catalogs
+3. **Iceberg catalog setup**: Optional, enables Iceberg REST catalog via Lakekeeper with MinIO storage
 
 ### What Gets Installed
 
@@ -45,10 +46,10 @@ You will be prompted for:
 - Traefik Middleware for X-Forwarded-* header injection
 - Access control with impersonation rules (admin can impersonate any user)
 - PostgreSQL catalog (if selected)
-- Iceberg catalog with Lakekeeper (if MinIO selected)
+- Iceberg catalog with Lakekeeper (if Iceberg catalog selected)
     - Keycloak service account enabled for OAuth2 client credentials flow
-    - `lakekeeper` client scope added
-    - `lakekeeper` audience mapper configured
+    - `lakekeeper` client scope added to Trino client
+    - MinIO credentials configured for storage backend
 - TPCH catalog with sample data
 
 **Note**: Trino runs HTTP-only internally. HTTPS is provided by Traefik Ingress, which handles TLS termination.
@@ -94,7 +95,9 @@ See [MCP.md](./MCP.md) for detailed instructions on integrating Trino with Claud
 
 ### Metabase Integration
 
-**Important**: The Python Trino client (used by Metabase) requires HTTPS when using authentication. You must use the external hostname which has TLS provided by Traefik Ingress.
+Metabase connects to Trino using the JDBC driver (Starburst driver). You must use the external hostname with SSL/TLS for authenticated connections.
+
+#### Connection Configuration
 
 1. In Metabase, go to Admin → Databases → Add database
 2. Select **Database type**: Starburst
@@ -109,17 +112,15 @@ See [MCP.md](./MCP.md) for detailed instructions on integrating Trino with Claud
     SSL: Yes
     ```
 
-**Catalog Selection**:
+#### Catalog Selection
 
 - Use `postgresql` to query PostgreSQL database tables
 - Use `iceberg` to query Iceberg tables via Lakekeeper
 - You can create multiple Metabase connections, one for each catalog
 
-**Note**: Do NOT use internal Kubernetes hostnames like `trino.trino.svc.cluster.local:8080`. Internal services do not have TLS, and the Python Trino client enforces HTTPS when authentication is used. Always use the external hostname with port 443.
-
 ### Querybook Integration
 
-**Connection Configuration**:
+#### Connection Configuration
 
 1. In Querybook, create a new Environment and Query Engine
 2. Configure the Trino connection:
@@ -133,11 +134,13 @@ See [MCP.md](./MCP.md) for detailed instructions on integrating Trino with Claud
 
 3. Optional: Configure `Proxy_user_id` to enable user impersonation
 
-**User Impersonation**:
+#### User Impersonation
 
-Trino is configured with file-based access control that allows the `admin` user to impersonate any user. This enables:
+Querybook can execute queries as logged-in users via Trino's impersonation feature. Trino is configured with file-based access control that allows the `admin` user to impersonate any user.
 
-- Querybook to connect as `admin` but execute queries as the logged-in Querybook user
+**Benefits:**
+
+- Querybook connects as `admin` but executes queries as the actual logged-in user
 - Proper query attribution and audit logging
 - User-specific access control (when configured)
 
@@ -155,12 +158,45 @@ The impersonation rules are defined in `trino-values.gomplate.yaml`:
 }
 ```
 
-**Why External Hostname is Required**:
+See the [Access Control](#access-control) section for detailed impersonation configuration.
 
-- The Python Trino client enforces HTTPS when authentication is used (client-side requirement)
-- Trino runs HTTP-only internally; TLS is provided by Traefik Ingress
-- Internal service names (e.g., `trino.trino.svc.cluster.local:8080`) do not have TLS termination
-- Therefore, you must use the external hostname (e.g., `trino.example.com:443`) which has TLS from Traefik
+### External Hostname Requirement
+
+Both Metabase and Querybook **require the external hostname with HTTPS** for authenticated connections to Trino. Internal Kubernetes service names will not work.
+
+**Why external hostname is required:**
+
+1. **Client-side HTTPS enforcement**:
+   - Metabase JDBC driver enforces HTTPS for authenticated connections
+   - Querybook Python Trino client enforces HTTPS when authentication is used
+   - Both clients validate SSL/TLS certificates
+
+2. **Trino runs HTTP-only internally**:
+   - Trino coordinator listens on HTTP port 8080 inside the cluster
+   - No TLS termination within the Trino pods
+   - Internal service names (e.g., `trino.trino.svc.cluster.local:8080`) do not provide HTTPS
+
+3. **Traefik provides TLS termination**:
+   - External hostname (e.g., `trino.example.com:443`) routes through Traefik Ingress
+   - Traefik handles SSL/TLS termination with valid certificates
+   - Traefik forwards to Trino's internal HTTP endpoint
+
+**Connection requirements:**
+
+```plain
+✅ CORRECT: trino.example.com:443 (HTTPS via Traefik)
+❌ WRONG:   trino.trino.svc.cluster.local:8080 (HTTP, no TLS)
+```
+
+**Architecture:**
+
+```plain
+Client (Metabase/Querybook)
+    ↓ HTTPS (port 443)
+Traefik Ingress
+    ↓ HTTP (port 8080)
+Trino Coordinator
+```
 
 ### Example Queries
 
@@ -221,7 +257,7 @@ Queries your CloudNativePG cluster:
 - Default schema: `public`
 - Database: `trino`
 
-### Iceberg (Optional)
+### Iceberg (Lakekeeper)
 
 Queries Iceberg tables via Lakekeeper REST Catalog:
 
@@ -230,24 +266,93 @@ Queries Iceberg tables via Lakekeeper REST Catalog:
 - **REST Catalog**: Lakekeeper (Apache Iceberg REST Catalog implementation)
 - **Authentication**: OAuth2 client credentials flow with Keycloak
 
-**How It Works**:
+#### How It Works
 
 1. Trino authenticates to Lakekeeper using OAuth2 (client credentials flow)
 2. Lakekeeper provides Iceberg table metadata from its catalog
 3. Trino reads actual data files directly from MinIO using static S3 credentials
 4. Vended credentials are disabled; Trino uses pre-configured MinIO access keys
 
-**Configuration**:
+#### Configuration
 
-The following settings are automatically configured during installation when MinIO storage is enabled:
+The following settings are automatically configured when enabling the Iceberg catalog (`just trino::enable-iceberg-catalog`):
 
-- Service account enabled on Trino Keycloak client
-- `lakekeeper` client scope added to Trino client
-- Audience mapper configured to include `aud: lakekeeper` in JWT tokens
+- Service account enabled on Trino Keycloak client (for OAuth2 Client Credentials Flow)
+- `lakekeeper` Client Scope created in Keycloak with audience mapper
+- `lakekeeper` scope added to Trino client as default scope
+- Audience mapper in `lakekeeper` scope adds `aud: lakekeeper` to JWT tokens
 - S3 file system factory enabled (`fs.native-s3.enabled=true`)
 - Static MinIO credentials provided via Kubernetes secrets
 
-**Example Usage**:
+#### OAuth2 Scope and Audience
+
+The Iceberg catalog connection to Lakekeeper uses OAuth2 Client Credentials Flow with the following scope configuration:
+
+```properties
+iceberg.rest-catalog.oauth2.scope=openid profile lakekeeper
+```
+
+#### Purpose of lakekeeper scope
+
+The `lakekeeper` scope controls whether the JWT token includes the audience claim required by Lakekeeper:
+
+1. **Scope-based Control**:
+   - The `lakekeeper` Client Scope contains an audience mapper
+   - When `scope=lakekeeper` is included in the token request, the mapper is applied
+   - Without this scope parameter, the audience claim is not added
+
+2. **Audience Claim**:
+   - The audience mapper adds `"aud": "lakekeeper"` to the JWT token
+   - This happens only when the `lakekeeper` scope is requested
+
+3. **Token Validation**:
+   - Lakekeeper validates incoming JWT tokens and requires `aud` to contain `"lakekeeper"`
+   - Tokens without this audience claim are rejected
+
+4. **Security**:
+   - Prevents tokens issued for other purposes from accessing Lakekeeper
+   - Enforces explicit authorization through scope parameter
+   - Defense against token leakage/misuse
+
+#### Authentication Flow
+
+```plain
+1. Trino requests token from Keycloak (Client Credentials Flow)
+   POST /realms/buunstack/protocol/openid-connect/token
+   - client_id: trino
+   - client_secret: [from service account]
+   - grant_type: client_credentials
+   - scope: openid profile lakekeeper
+
+2. Keycloak validates client credentials and generates JWT token
+   - Checks that 'lakekeeper' is in the requested scopes
+   - Applies the 'lakekeeper' Client Scope
+   - Audience mapper (in lakekeeper scope) adds "aud": "lakekeeper" to JWT
+   - Includes 'lakekeeper' scope in response
+
+3. Trino sends JWT token to Lakekeeper REST Catalog
+   Authorization: Bearer [JWT token]
+
+4. Lakekeeper validates JWT token:
+   - Verifies signature using JWKS from Keycloak
+   - Checks issuer matches LAKEKEEPER__OPENID_PROVIDER_URI
+   - Validates aud claim contains "lakekeeper"
+   - Rejects token if audience doesn't match
+
+5. Lakekeeper returns Iceberg table metadata to Trino
+```
+
+#### Important Notes
+
+- This OAuth2 authentication is **completely separate** from Trino Web UI OAuth2 authentication
+- Web UI OAuth2: User login via browser (Authorization Code Flow)
+- Iceberg REST Catalog OAuth2: Service-to-service authentication (Client Credentials Flow)
+- The `lakekeeper` scope controls the audience claim:
+  - With scope: `scope=openid profile lakekeeper` → JWT includes `"aud": "lakekeeper"`
+  - Without scope: `scope=openid profile` → JWT does not include Lakekeeper audience
+- The `lakekeeper` scope is only used for Trino→Lakekeeper communication, not for user authentication
+
+#### Example Usage
 
 ```sql
 -- List all namespaces (schemas)
@@ -317,21 +422,120 @@ Removes:
 - Stored in Vault at `trino/password`
 - Requires external hostname with SSL/TLS
 
-### Access Control
+## Access Control
 
-Trino uses file-based system access control with the following configuration:
+Trino uses file-based system access control managed via Kubernetes ConfigMap. The configuration is defined in Helm values and automatically deployed.
 
-**Catalogs**: All users can access all catalogs
+### Configuration Structure
 
-**Impersonation**: The `admin` user can impersonate any user
+```yaml
+accessControl:
+  type: configmap              # Store rules in Kubernetes ConfigMap
+  refreshPeriod: 60s           # Check for rule changes every 60 seconds
+  configFile: "rules.json"     # Rules file name
+  rules:
+    rules.json: |-
+      {
+        "catalogs": [
+          {
+            "allow": "all"     # All users can access all catalogs
+          }
+        ],
+        "impersonation": [
+          {
+            "original_user": "admin",  # User allowed to impersonate
+            "new_user": ".*"           # Regex: can impersonate any user
+          }
+        ]
+      }
+```
 
-This configuration enables:
+### Catalog Access
 
-- **Querybook Integration**: Admin user connects and executes queries as logged-in users
-- **Audit Logging**: Queries are attributed to the actual user, not the admin account
-- **Future Access Control**: Can be extended to add user-specific catalog/schema restrictions
+```json
+"catalogs": [{"allow": "all"}]
+```
 
-The access control rules are defined in `/etc/trino/access-control/rules.json` (automatically generated from Helm values).
+- All authenticated users can access all catalogs (postgresql, iceberg, tpch)
+- No catalog-level restrictions are enforced
+- Can be extended to add user/group-specific catalog access rules
+
+### User Impersonation
+
+```json
+"impersonation": [
+  {
+    "original_user": "admin",
+    "new_user": ".*"
+  }
+]
+```
+
+#### What it does
+
+- The `admin` user can execute queries as any other user
+- `original_user`: The user performing the impersonation (must be authenticated)
+- `new_user`: Regex pattern for allowed target users (`.*` = any user)
+
+#### How it works
+
+1. Client authenticates as `admin` with password
+2. Client sends `X-Trino-User: actual_username` header
+3. Trino validates impersonation is allowed (admin → actual_username)
+4. Query executes with `actual_username` as the principal
+5. Audit logs show `actual_username`, not `admin`
+
+#### Example: Querybook Integration
+
+```python
+# Querybook connects to Trino
+connection = trino.dbapi.connect(
+    host="trino.example.com",
+    port=443,
+    user="admin",           # Authenticate as admin
+    http_scheme="https",
+    auth=trino.auth.BasicAuthentication("admin", "password")
+)
+
+# Execute query as logged-in user
+cursor = connection.cursor()
+cursor.execute("SELECT * FROM iceberg.sales",
+               http_headers={"X-Trino-User": "alice@example.com"})
+```
+
+Result: Query runs as `alice@example.com`, appears in Trino logs as executed by `alice@example.com`.
+
+**Use Cases:**
+
+- **Querybook/BI Tools**: Single admin connection, multi-user attribution
+- **Audit Logging**: Track which user executed which queries
+- **Future Access Control**: Enable per-user data access policies
+- **Query Attribution**: Correct usage statistics per user
+
+**Security Considerations:**
+
+- Only the `admin` user can impersonate others
+- Regular users cannot impersonate anyone
+- Impersonation targets can be restricted with specific regex patterns (e.g., `"new_user": ".*@company\\.com"`)
+- Consider adding group-based impersonation rules for finer control
+
+### Configuration Management
+
+- **Storage**: Rules stored in ConfigMap `trino-coordinator-access-control`
+- **Refresh**: Trino checks for changes every 60 seconds (no pod restart required)
+- **Location**: Mounted at `/etc/trino/access-control/rules.json` in coordinator pod
+- **Updates**: Modify Helm values and run `just trino::upgrade` to update rules
+
+### Verify Configuration
+
+```bash
+# View current access control rules
+kubectl exec -n trino deployment/trino-coordinator -- \
+  cat /etc/trino/access-control/rules.json
+
+# Check ConfigMap
+kubectl get configmap trino-coordinator-access-control -n trino -o yaml
+```
 
 ## Architecture
 
@@ -363,7 +567,7 @@ Data Sources:
         └─ Static credentials
 ```
 
-**Key Components**:
+### Key Components
 
 - **TLS Termination**: Traefik Ingress handles HTTPS, Trino runs HTTP-only internally
 - **Traefik Middleware**: Injects X-Forwarded-Proto, X-Forwarded-Host, X-Forwarded-Port headers for correct URL generation

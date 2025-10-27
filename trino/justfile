@@ -188,11 +188,16 @@ delete-postgres-secret:
     @kubectl delete externalsecret trino-postgres-external-secret -n ${TRINO_NAMESPACE} \
         --ignore-not-found
 
-# Setup MinIO storage for Trino (optional)
-setup-minio-storage:
+# Enable Iceberg catalog with Lakekeeper and MinIO (optional)
+enable-iceberg-catalog:
     #!/bin/bash
     set -euo pipefail
-    echo "Setting up MinIO storage for Trino..."
+    echo "Enabling Iceberg catalog with Lakekeeper integration..."
+
+    if ! kubectl get service lakekeeper -n ${LAKEKEEPER_NAMESPACE} &>/dev/null; then
+        echo "Error: Lakekeeper is not installed. Please install Lakekeeper first with 'just lakekeeper::install'"
+        exit 1
+    fi
 
     if ! kubectl get service minio -n ${MINIO_NAMESPACE} &>/dev/null; then
         echo "Error: MinIO is not installed. Please install MinIO first with 'just minio::install'"
@@ -206,11 +211,9 @@ setup-minio-storage:
     echo "Enabling service account for Trino client..."
     just keycloak::enable-service-account ${KEYCLOAK_REALM} trino
 
-    echo "Adding lakekeeper scope to Trino client..."
+    echo "Adding 'lakekeeper' scope to Trino client..."
+    echo "Note: The 'lakekeeper' client scope must be created by Lakekeeper installation first."
     just keycloak::add-scope-to-client ${KEYCLOAK_REALM} trino lakekeeper
-
-    echo "Adding lakekeeper audience mapper to Trino client..."
-    just keycloak::add-audience-mapper trino lakekeeper
 
     echo "Keycloak configuration completed"
 
@@ -236,7 +239,7 @@ setup-minio-storage:
             --from-literal=endpoint="http://minio.${MINIO_NAMESPACE}.svc.cluster.local:9000"
         echo "MinIO secret created directly in Kubernetes"
     fi
-    echo "MinIO storage setup completed"
+    echo "Iceberg catalog setup completed"
 
 # Delete MinIO secret
 delete-minio-secret:
@@ -262,8 +265,8 @@ install:
     just setup-postgres-catalog
 
     if [ -z "${TRINO_MINIO_ENABLED}" ]; then
-        if gum confirm "Setup MinIO storage (for Iceberg catalogs)?"; then
-            just setup-minio-storage
+        if gum confirm "Enable Iceberg catalog with Lakekeeper and MinIO?"; then
+            just enable-iceberg-catalog
             TRINO_MINIO_ENABLED="true"
         else
             TRINO_MINIO_ENABLED="false"
