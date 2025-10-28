@@ -348,8 +348,8 @@ The `lakekeeper` scope controls whether the JWT token includes the audience clai
 - Web UI OAuth2: User login via browser (Authorization Code Flow)
 - Iceberg REST Catalog OAuth2: Service-to-service authentication (Client Credentials Flow)
 - The `lakekeeper` scope controls the audience claim:
-  - With scope: `scope=openid profile lakekeeper` → JWT includes `"aud": "lakekeeper"`
-  - Without scope: `scope=openid profile` → JWT does not include Lakekeeper audience
+    - With scope: `scope=openid profile lakekeeper` → JWT includes `"aud": "lakekeeper"`
+    - Without scope: `scope=openid profile` → JWT does not include Lakekeeper audience
 - The `lakekeeper` scope is only used for Trino→Lakekeeper communication, not for user authentication
 
 #### Example Usage

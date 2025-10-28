@@ -16,9 +16,10 @@ export TRINO_WORKER_CPU := env("TRINO_WORKER_CPU", "2")
 export TRINO_WORKER_JVM_HEAP := env("TRINO_WORKER_JVM_HEAP", "4G")
 export TRINO_WORKER_COUNT := env("TRINO_WORKER_COUNT", "2")
 export TRINO_POSTGRES_ENABLED := env("TRINO_POSTGRES_ENABLED", "true")
-export TRINO_MINIO_ENABLED := env("TRINO_MINIO_ENABLED", "")
+export TRINO_ICEBERG_ENABLED := env("TRINO_ICEBERG_ENABLED", "")
 export POSTGRES_NAMESPACE := env("POSTGRES_NAMESPACE", "postgres")
 export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
+export LAKEKEEPER_NAMESPACE := env("LAKEKEEPER_NAMESPACE", "lakekeeper")
 
 [private]
 default:
@@ -264,12 +265,12 @@ install:
 
     just setup-postgres-catalog
 
-    if [ -z "${TRINO_MINIO_ENABLED}" ]; then
+    if [ -z "${TRINO_ICEBERG_ENABLED}" ]; then
         if gum confirm "Enable Iceberg catalog with Lakekeeper and MinIO?"; then
             just enable-iceberg-catalog
-            TRINO_MINIO_ENABLED="true"
+            TRINO_ICEBERG_ENABLED="true"
         else
-            TRINO_MINIO_ENABLED="false"
+            TRINO_ICEBERG_ENABLED="false"
         fi
     fi
 
@@ -303,13 +304,13 @@ upgrade:
 
     echo "Upgrading Trino..."
 
-    if [ -z "${TRINO_MINIO_ENABLED}" ]; then
+    if [ -z "${TRINO_ICEBERG_ENABLED}" ]; then
         if kubectl get secret trino-minio-secret -n ${TRINO_NAMESPACE} &>/dev/null; then
-            TRINO_MINIO_ENABLED="true"
-            echo "MinIO storage: enabled"
+            TRINO_ICEBERG_ENABLED="true"
+            echo "Iceberg catalog: enabled"
         else
-            TRINO_MINIO_ENABLED="false"
-            echo "MinIO storage: disabled"
+            TRINO_ICEBERG_ENABLED="false"
+            echo "Iceberg catalog: disabled"
         fi
     fi
 

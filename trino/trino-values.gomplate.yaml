@@ -92,7 +92,7 @@ catalogs:
     connector.name=tpch
     tpch.splits-per-node=4
 
-{{- if .Env.TRINO_MINIO_ENABLED }}
+{{- if .Env.TRINO_ICEBERG_ENABLED }}
   iceberg: |
     connector.name=iceberg
     iceberg.catalog.type=rest
@@ -312,7 +312,7 @@ env:
         name: trino-postgres-secret
         key: password
 {{- end }}
-{{- if .Env.TRINO_MINIO_ENABLED }}
+{{- if .Env.TRINO_ICEBERG_ENABLED }}
   - name: MINIO_ACCESS_KEY
     valueFrom:
       secretKeyRef:
