@@ -24,14 +24,12 @@ async function main() {
   invariant(username, "USERNAME is required");
   invariant(clientId, "KEYCLOAK_CLIENT_ID is required");
 
-  // Find the user
   const users = await kcAdminClient.users.find({ realm, username });
   if (users.length === 0) {
     throw new Error(`User '${username}' not found in realm '${realm}'`);
   }
   const user = users[0];
 
-  // Find the client
   const clients = await kcAdminClient.clients.find({ realm, clientId });
   if (clients.length === 0) {
     throw new Error(`Client '${clientId}' not found in realm '${realm}'`);
@@ -39,16 +37,13 @@ async function main() {
   const client = clients[0];
 
   try {
-    // Get a token for this user (impersonation)
     console.log(`Getting token for user '${username}' with client '${clientId}'...`);
 
-    // Get client secret
     const clientSecret = await kcAdminClient.clients.getClientSecret({
       realm,
       id: client.id!,
     });
 
-    // Create a new client instance for the specific realm/client
     const userClient = new KcAdminClient({
       baseUrl: `https://${process.env.KEYCLOAK_HOST}`,
       realmName: realm,
@@ -72,23 +67,21 @@ async function main() {
     console.log(`Protocol: ${client.protocol}`);
     console.log(`Public Client: ${client.publicClient}`);
 
-    // Get protocol mappers
     const mappers = await kcAdminClient.clients.listProtocolMappers({
       realm,
       id: client.id!,
     });
 
     console.log("\n=== Protocol Mappers ===");
-    mappers.forEach(mapper => {
+    mappers.forEach((mapper) => {
       console.log(`- ${mapper.name} (${mapper.protocolMapper})`);
       if (mapper.config) {
-        console.log(`  Claim: ${mapper.config['claim.name'] || 'N/A'}`);
-        console.log(`  Access Token: ${mapper.config['access.token.claim'] || 'false'}`);
-        console.log(`  ID Token: ${mapper.config['id.token.claim'] || 'false'}`);
+        console.log(`  Claim: ${mapper.config["claim.name"] || "N/A"}`);
+        console.log(`  Access Token: ${mapper.config["access.token.claim"] || "false"}`);
+        console.log(`  ID Token: ${mapper.config["id.token.claim"] || "false"}`);
       }
     });
 
-    // Show user's client roles
     const clientRoles = await kcAdminClient.users.listClientRoleMappings({
       realm,
       id: user.id!,
@@ -99,11 +92,10 @@ async function main() {
     if (clientRoles.length === 0) {
       console.log("No client roles assigned");
     } else {
-      clientRoles.forEach(role => {
+      clientRoles.forEach((role) => {
         console.log(`- ${role.name} (${role.id})`);
       });
     }
-
   } catch (error) {
     console.error(`Error: ${error}`);
   }

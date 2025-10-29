@@ -15,7 +15,9 @@ const main = async () => {
   invariant(realmNameToDelete, "KEYCLOAK_REALM_TO_DELETE environment variable is required");
 
   if (realmNameToDelete === "master") {
-    console.error("Error: Deleting the 'master' realm is a highly destructive operation and is not allowed by this script.");
+    console.error(
+      "Error: Deleting the 'master' realm is a highly destructive operation and is not allowed by this script."
+    );
     // eslint-disable-next-line unicorn/no-process-exit
     process.exit(1);
   }
@@ -45,7 +47,6 @@ const main = async () => {
     console.log(`Attempting to delete realm: '${realmNameToDelete}'...`);
     await kcAdminClient.realms.del({ realm: realmNameToDelete });
     console.log(`Realm '${realmNameToDelete}' deleted successfully.`);
-
   } catch (error) {
     console.error(`An error occurred while trying to delete realm '${realmNameToDelete}':`, error);
     const err = error as any;
@@ -58,4 +59,3 @@ const main = async () => {
 };
 
 main();
-

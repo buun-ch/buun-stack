@@ -26,32 +26,25 @@ async function main() {
   invariant(clientId, "KEYCLOAK_CLIENT_ID is required");
   invariant(roleName, "KEYCLOAK_ROLE_NAME is required");
 
-  // Find the user
   const users = await kcAdminClient.users.find({ realm, username });
-
   if (users.length === 0) {
     throw new Error(`User '${username}' not found in realm '${realm}'`);
   }
-
   const user = users[0];
 
-  // Find the client
   const clients = await kcAdminClient.clients.find({ realm, clientId });
-
   if (clients.length === 0) {
     throw new Error(`Client '${clientId}' not found in realm '${realm}'`);
   }
 
   const client = clients[0];
 
-  // Find the role
   const role = await kcAdminClient.clients.findRole({
     realm,
     id: client.id!,
     roleName,
   });
 
-  // Remove role from user
   await kcAdminClient.users.delClientRoleMappings({
     realm,
     id: user.id!,
@@ -65,7 +58,7 @@ async function main() {
   });
 
   console.log(
-    `✓ Role '${roleName}' removed from user '${username}' for client '${clientId}' in realm '${realm}'`,
+    `✓ Role '${roleName}' removed from user '${username}' for client '${clientId}' in realm '${realm}'`
   );
 }
 

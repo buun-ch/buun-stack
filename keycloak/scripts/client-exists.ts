@@ -23,15 +23,14 @@ async function main() {
   invariant(clientId, "KEYCLOAK_CLIENT_ID is required");
 
   try {
-    // Find the client by clientId
     const clients = await kcAdminClient.clients.find({ realm, clientId });
 
     if (clients.length > 0) {
       console.log(`Client '${clientId}' exists in realm '${realm}'`);
-      process.exit(0); // Success - client exists
+      process.exit(0);
     } else {
       console.log(`Client '${clientId}' does not exist in realm '${realm}'`);
-      process.exit(1); // Client doesn't exist
+      process.exit(1);
     }
   } catch (error) {
     console.error(`Error checking client existence: ${error}`);

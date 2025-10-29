@@ -26,7 +26,6 @@ const main = async () => {
   const attributeDefaultValue = process.env.ATTRIBUTE_DEFAULT_VALUE;
   const mapperName = process.env.MAPPER_NAME || `${attributeDisplayName} Mapper`;
 
-  // Parse permissions from environment variables
   const viewPermissions = process.env.ATTRIBUTE_VIEW_PERMISSIONS?.split(",") || ["admin", "user"];
   const editPermissions = process.env.ATTRIBUTE_EDIT_PERMISSIONS?.split(",") || ["admin"];
 
@@ -58,19 +57,13 @@ const main = async () => {
     });
     console.log("Authentication successful.");
 
-    // Set realm to work with
     kcAdminClient.setConfig({
       realmName,
     });
-
-    // Get current User Profile configuration
     const userProfile = await kcAdminClient.users.getProfile();
-
-    // Check if attribute already exists
     const existingAttribute = userProfile.attributes?.find(
       (attr: any) => attr.name === attributeName
     );
-
     if (existingAttribute) {
       console.log(`${attributeName} attribute already exists in User Profile.`);
     } else {
@@ -88,16 +81,13 @@ const main = async () => {
         },
       };
 
-      // Add validations if options are provided
       if (attributeOptions && attributeOptions.length > 0) {
         attributeConfig.validations = {
           options: { options: attributeOptions },
         };
       }
-
       userProfile.attributes.push(attributeConfig);
 
-      // Update User Profile
       await kcAdminClient.users.updateProfile(userProfile);
       console.log(
         `${attributeName} attribute added to User Profile successfully with admin edit permissions.`
@@ -114,14 +104,14 @@ const main = async () => {
     const clientInternalId = client[0].id;
     invariant(clientInternalId, "Client internal ID is required");
 
-    // Check if the mapper already exists
-    const mappers = await kcAdminClient.clients.listProtocolMappers({ id: clientInternalId });
+    const mappers = await kcAdminClient.clients.listProtocolMappers({
+      id: clientInternalId,
+    });
     const existingMapper = mappers.find((mapper) => mapper.name === mapperName);
 
     if (existingMapper) {
       console.log(`${mapperName} already exists.`);
     } else {
-      // Create the protocol mapper
       await kcAdminClient.clients.addProtocolMapper(
         { id: clientInternalId },
         {

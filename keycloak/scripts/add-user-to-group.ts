@@ -36,30 +36,26 @@ const main = async () => {
 
     kcAdminClient.setConfig({ realmName });
 
-    // Find user
     const users = await kcAdminClient.users.find({ username });
-    const user = users.find(u => u.username === username);
+    const user = users.find((u) => u.username === username);
     if (!user) {
       throw new Error(`User '${username}' not found`);
     }
 
-    // Find group
     const groups = await kcAdminClient.groups.find({ search: groupName });
-    const group = groups.find(g => g.name === groupName);
+    const group = groups.find((g) => g.name === groupName);
     if (!group) {
       throw new Error(`Group '${groupName}' not found`);
     }
 
-    // Check if user is already in group
     const userGroups = await kcAdminClient.users.listGroups({ id: user.id! });
-    const isAlreadyMember = userGroups.some(ug => ug.id === group.id);
-    
+    const isAlreadyMember = userGroups.some((ug) => ug.id === group.id);
+
     if (isAlreadyMember) {
       console.log(`User '${username}' is already a member of group '${groupName}'`);
       return;
     }
 
-    // Add user to group
     await kcAdminClient.users.addToGroup({
       id: user.id!,
       groupId: group.id!,

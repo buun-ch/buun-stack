@@ -24,16 +24,12 @@ async function main() {
   invariant(clientId, "KEYCLOAK_CLIENT_ID is required");
   invariant(roleName, "KEYCLOAK_ROLE_NAME is required");
 
-  // Find the client by clientId
   const clients = await kcAdminClient.clients.find({ realm, clientId });
-
   if (clients.length === 0) {
     throw new Error(`Client '${clientId}' not found in realm '${realm}'`);
   }
-
   const client = clients[0];
 
-  // Check if role already exists
   try {
     const existingRole = await kcAdminClient.clients.findRole({
       realm,
@@ -49,17 +45,13 @@ async function main() {
     console.log(`Role '${roleName}' doesn't exist, creating it...`);
   }
 
-  // Create the client role
   await kcAdminClient.clients.createRole({
     realm,
     id: client.id!,
     name: roleName,
   });
 
-  console.log(
-    `✓ Client role '${roleName}' created for client '${clientId}' in realm '${realm}'`,
-  );
+  console.log(`✓ Client role '${roleName}' created for client '${clientId}' in realm '${realm}'`);
 }
 
 main().catch(console.error);
-

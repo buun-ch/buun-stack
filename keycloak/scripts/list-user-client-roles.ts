@@ -24,18 +24,13 @@ async function main() {
   invariant(username, "USERNAME is required");
   invariant(clientId, "KEYCLOAK_CLIENT_ID is required");
 
-  // Find the user
   const users = await kcAdminClient.users.find({ realm, username });
-
   if (users.length === 0) {
     throw new Error(`User '${username}' not found in realm '${realm}'`);
   }
-
   const user = users[0];
 
-  // Find the client
   const clients = await kcAdminClient.clients.find({ realm, clientId });
-
   if (clients.length === 0) {
     throw new Error(`Client '${clientId}' not found in realm '${realm}'`);
   }
@@ -43,7 +38,6 @@ async function main() {
   const client = clients[0];
 
   try {
-    // Get user's client role mappings
     const clientRoles = await kcAdminClient.users.listClientRoleMappings({
       realm,
       id: user.id!,
@@ -63,7 +57,6 @@ async function main() {
       });
     }
 
-    // Also show available roles for reference
     const availableRoles = await kcAdminClient.clients.listRoles({
       realm,
       id: client.id!,
@@ -75,7 +68,6 @@ async function main() {
       const status = isAssigned ? "✓ assigned" : "  available";
       console.log(`  ${status}: ${role.name}`);
     });
-
   } catch (error) {
     console.error(`Error retrieving client roles: ${error}`);
     process.exit(1);

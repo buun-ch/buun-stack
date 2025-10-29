@@ -34,15 +34,12 @@ const main = async () => {
     });
     console.log("Authentication successful.");
 
-    // Set realm to work with
     kcAdminClient.setConfig({
       realmName,
     });
 
-    // Get current User Profile configuration
     const userProfile = await kcAdminClient.users.getProfile();
 
-    // Check if minioPolicy attribute already exists
     const existingAttribute = userProfile.attributes?.find(
       (attr: any) => attr.name === "minioPolicy"
     );
@@ -50,11 +47,9 @@ const main = async () => {
     if (existingAttribute) {
       console.log("minioPolicy attribute already exists in User Profile.");
     } else {
-      // Add minioPolicy attribute to User Profile with proper permissions
       if (!userProfile.attributes) {
         userProfile.attributes = [];
       }
-
       userProfile.attributes.push({
         name: "minioPolicy",
         displayName: "MinIO Policy",
@@ -67,15 +62,15 @@ const main = async () => {
         },
       });
 
-      // Update User Profile
       await kcAdminClient.users.updateProfile(userProfile);
       console.log(
         "minioPolicy attribute added to User Profile successfully with admin edit permissions."
       );
     }
 
-    // Create protocol mapper for the minioPolicy attribute if it doesn't exist
-    const minioClient = await kcAdminClient.clients.find({ clientId: minioClientId });
+    const minioClient = await kcAdminClient.clients.find({
+      clientId: minioClientId,
+    });
     if (minioClient.length === 0) {
       console.error(`Client '${minioClientId}' not found.`);
       // eslint-disable-next-line unicorn/no-process-exit
@@ -84,14 +79,14 @@ const main = async () => {
     const clientId = minioClient[0].id;
     invariant(clientId, "Client ID is required");
 
-    // Check if the mapper already exists
-    const mappers = await kcAdminClient.clients.listProtocolMappers({ id: clientId });
+    const mappers = await kcAdminClient.clients.listProtocolMappers({
+      id: clientId,
+    });
     const existingMapper = mappers.find((mapper) => mapper.name === "MinIO Policy");
 
     if (existingMapper) {
       console.log("MinIO Policy mapper already exists.");
     } else {
-      // Create the protocol mapper
       await kcAdminClient.clients.addProtocolMapper(
         { id: clientId },
         {

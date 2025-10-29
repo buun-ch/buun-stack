@@ -39,18 +39,18 @@ const main = async () => {
       const status = client.enabled ? "Enabled" : "Disabled";
       const protocol = client.protocol || "unknown";
 
-      console.log(`${(index + 1).toString().padStart(2, ' ')}. ${client.clientId}`);
+      console.log(`${(index + 1).toString().padStart(2, " ")}. ${client.clientId}`);
       console.log(`    ID: ${client.id}`);
       console.log(`    Type: ${clientType}`);
       console.log(`    Protocol: ${protocol}`);
       console.log(`    Status: ${status}`);
 
       if (client.redirectUris && client.redirectUris.length > 0) {
-        console.log(`    Redirect URIs: ${client.redirectUris.join(', ')}`);
+        console.log(`    Redirect URIs: ${client.redirectUris.join(", ")}`);
       }
 
       if (client.webOrigins && client.webOrigins.length > 0) {
-        console.log(`    Web Origins: ${client.webOrigins.join(', ')}`);
+        console.log(`    Web Origins: ${client.webOrigins.join(", ")}`);
       }
 
       console.log("");

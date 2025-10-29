@@ -23,22 +23,18 @@ async function main() {
   invariant(clientId, "KEYCLOAK_CLIENT_ID is required");
 
   try {
-    // Find the client
     const clients = await kcAdminClient.clients.find({ realm, clientId });
     if (clients.length === 0) {
       throw new Error(`Client '${clientId}' not found in realm '${realm}'`);
     }
-
     const client = clients[0];
 
-    // Get client secret
     const clientSecret = await kcAdminClient.clients.getClientSecret({
       realm,
       id: client.id!,
     });
 
     console.log(`Client '${clientId}' secret: ${clientSecret.value}`);
-
   } catch (error) {
     console.error(`Error retrieving client secret: ${error}`);
     process.exit(1);

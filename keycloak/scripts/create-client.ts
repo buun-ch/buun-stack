@@ -22,7 +22,7 @@ const main = async () => {
   const redirectUrl = process.env.KEYCLOAK_REDIRECT_URL;
   invariant(redirectUrl, "KEYCLOAK_REDIRECT_URL environment variable is required");
 
-  const redirectUris = redirectUrl.split(',').map(url => url.trim());
+  const redirectUris = redirectUrl.split(",").map((url) => url.trim());
 
   const sessionIdle = process.env.KEYCLOAK_CLIENT_SESSION_IDLE;
   const sessionMax = process.env.KEYCLOAK_CLIENT_SESSION_MAX;
@@ -53,59 +53,61 @@ const main = async () => {
       return;
     }
 
-    const isPublicClient = !clientSecret || clientSecret === '';
+    const isPublicClient = !clientSecret || clientSecret === "";
     const clientConfig: any = {
       clientId: clientId,
       secret: clientSecret,
       enabled: true,
       redirectUris: redirectUris,
       publicClient: isPublicClient,
-      directAccessGrantsEnabled: directAccessGrants === 'true',
+      directAccessGrantsEnabled: directAccessGrants === "true",
     };
 
     // Configure PKCE based on environment variable
     // KEYCLOAK_CLIENT_PKCE_METHOD can be: 'S256', 'plain', or unset/empty (no PKCE)
     clientConfig.attributes = {};
 
-    if (pkceMethod && (pkceMethod === 'S256' || pkceMethod === 'plain')) {
-      clientConfig.attributes['pkce.code.challenge.method'] = pkceMethod;
+    if (pkceMethod && (pkceMethod === "S256" || pkceMethod === "plain")) {
+      clientConfig.attributes["pkce.code.challenge.method"] = pkceMethod;
       console.log(`Setting PKCE Code Challenge Method to ${pkceMethod}`);
-    } else if (pkceMethod && pkceMethod !== '') {
-      console.warn(`Invalid PKCE method '${pkceMethod}'. Valid options: S256, plain, or empty for no PKCE`);
-      console.log('Creating client without PKCE');
+    } else if (pkceMethod && pkceMethod !== "") {
+      console.warn(
+        `Invalid PKCE method '${pkceMethod}'. Valid options: S256, plain, or empty for no PKCE`
+      );
+      console.log("Creating client without PKCE");
     } else {
-      console.log('Creating client without PKCE');
+      console.log("Creating client without PKCE");
     }
 
     // Add session timeout settings if provided
-    if (sessionIdle && sessionIdle !== '') {
-      clientConfig.attributes['client.session.idle.timeout'] = sessionIdle;
+    if (sessionIdle && sessionIdle !== "") {
+      clientConfig.attributes["client.session.idle.timeout"] = sessionIdle;
       console.log(`Setting Client Session Idle Timeout: ${sessionIdle}`);
     }
 
-    if (sessionMax && sessionMax !== '') {
-      clientConfig.attributes['client.session.max.lifespan'] = sessionMax;
+    if (sessionMax && sessionMax !== "") {
+      clientConfig.attributes["client.session.max.lifespan"] = sessionMax;
       console.log(`Setting Client Session Max Lifespan: ${sessionMax}`);
     }
 
     // Add post logout redirect URIs if provided
-    if (postLogoutRedirectUris && postLogoutRedirectUris !== '') {
+    if (postLogoutRedirectUris && postLogoutRedirectUris !== "") {
       // Split comma-separated URIs and set as array in attributes using ## separator (Keycloak format)
-      const postLogoutUris = postLogoutRedirectUris.split(',').map(uri => uri.trim());
+      const postLogoutUris = postLogoutRedirectUris.split(",").map((uri) => uri.trim());
       clientConfig.attributes = clientConfig.attributes || {};
-      clientConfig.attributes['post.logout.redirect.uris'] = postLogoutUris.join('##');
-      console.log(`Setting Post Logout Redirect URIs: ${postLogoutUris.join(', ')}`);
+      clientConfig.attributes["post.logout.redirect.uris"] = postLogoutUris.join("##");
+      console.log(`Setting Post Logout Redirect URIs: ${postLogoutUris.join(", ")}`);
     }
 
     // Add access token lifespan if provided
-    if (accessTokenLifespan && accessTokenLifespan !== '') {
+    if (accessTokenLifespan && accessTokenLifespan !== "") {
       clientConfig.attributes = clientConfig.attributes || {};
-      clientConfig.attributes['access.token.lifespan'] = accessTokenLifespan;
+      clientConfig.attributes["access.token.lifespan"] = accessTokenLifespan;
       console.log(`Setting Access Token Lifespan: ${accessTokenLifespan} seconds`);
     }
 
-    if (directAccessGrants === 'true') {
-      console.log('Enabling Direct Access Grants (Resource Owner Password Credentials)');
+    if (directAccessGrants === "true") {
+      console.log("Enabling Direct Access Grants (Resource Owner Password Credentials)");
     }
 
     const createdClient = await kcAdminClient.clients.create(clientConfig);

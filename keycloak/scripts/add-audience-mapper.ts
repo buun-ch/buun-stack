@@ -55,7 +55,9 @@ const main = async () => {
       },
     };
 
-    const existingMappers = await kcAdminClient.clients.listProtocolMappers({ id: client.id });
+    const existingMappers = await kcAdminClient.clients.listProtocolMappers({
+      id: client.id,
+    });
 
     if (existingMappers.some((mapper) => mapper.name === mapperName)) {
       console.warn(`Audience Mapper '${mapperName}' already exists for the client.`);

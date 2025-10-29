@@ -33,43 +33,41 @@ const main = async () => {
 
     kcAdminClient.setConfig({ realmName });
 
-    // Find the client
     const clients = await kcAdminClient.clients.find({ clientId });
-    const client = clients.find(c => c.clientId === clientId);
-    
+    const client = clients.find((c) => c.clientId === clientId);
     if (!client) {
       throw new Error(`Client '${clientId}' not found`);
     }
 
-    // Check if groups mapper already exists
     const existingMappers = await kcAdminClient.clients.listProtocolMappers({
       id: client.id!,
     });
 
-    const groupsMapper = existingMappers.find(mapper => 
-      mapper.name === "groups" || mapper.config?.["claim.name"] === "groups"
+    const groupsMapper = existingMappers.find(
+      (mapper) => mapper.name === "groups" || mapper.config?.["claim.name"] === "groups"
     );
-
     if (groupsMapper) {
       console.log("Groups mapper already exists for the client.");
       return;
     }
 
-    // Add groups mapper
-    await kcAdminClient.clients.addProtocolMapper({
-      id: client.id!,
-    }, {
-      name: "groups",
-      protocol: "openid-connect",
-      protocolMapper: "oidc-group-membership-mapper",
-      config: {
-        "claim.name": "groups",
-        "full.path": "false",
-        "id.token.claim": "true",
-        "access.token.claim": "true",
-        "userinfo.token.claim": "true",
+    await kcAdminClient.clients.addProtocolMapper(
+      {
+        id: client.id!,
       },
-    });
+      {
+        name: "groups",
+        protocol: "openid-connect",
+        protocolMapper: "oidc-group-membership-mapper",
+        config: {
+          "claim.name": "groups",
+          "full.path": "false",
+          "id.token.claim": "true",
+          "access.token.claim": "true",
+          "userinfo.token.claim": "true",
+        },
+      }
+    );
 
     console.log("Groups mapper added to the client.");
   } catch (error) {

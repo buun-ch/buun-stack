@@ -26,38 +26,31 @@ async function main() {
   kcAdminClient.setConfig({ realmName: realm });
 
   try {
-    // Find the profile client scope
     const clientScopes = await kcAdminClient.clientScopes.find({ realm });
-    const profileScope = clientScopes.find(scope => scope.name === 'profile');
+    const profileScope = clientScopes.find((scope) => scope.name === "profile");
 
     if (!profileScope) {
       throw new Error("Profile client scope not found");
     }
-
     console.log(`Found profile scope: ${profileScope.id}`);
 
-    // Check existing mappers in profile scope
     const existingMappers = await kcAdminClient.clientScopes.listProtocolMappers({
       realm,
       id: profileScope.id!,
     });
-
     console.log("Existing mappers in profile scope:");
-    existingMappers.forEach(mapper => {
+    existingMappers.forEach((mapper) => {
       console.log(`- ${mapper.name} (${mapper.protocolMapper})`);
     });
 
-    // Check if our client roles mapper already exists in profile scope
-    const clientRolesMapper = existingMappers.find(m =>
-      m.config?.['usermodel.clientRoleMapping.clientId'] === clientId
+    const clientRolesMapper = existingMappers.find(
+      (m) => m.config?.["usermodel.clientRoleMapping.clientId"] === clientId
     );
-
     if (clientRolesMapper) {
       console.log(`Client roles mapper already exists in profile scope: ${clientRolesMapper.name}`);
     } else {
       console.log(`Adding ${clientId} client roles mapper to profile scope...`);
 
-      // Add client roles mapper to profile scope
       await kcAdminClient.clientScopes.addProtocolMapper(
         { realm, id: profileScope.id! },
         {
@@ -70,7 +63,7 @@ async function main() {
             "access.token.claim": "true",
             "claim.name": claimName,
             "jsonType.label": "String",
-            "multivalued": "true",
+            multivalued: "true",
             "usermodel.clientRoleMapping.clientId": clientId,
           },
         }
@@ -78,7 +71,6 @@ async function main() {
 
       console.log(`✓ Added ${clientId} client roles mapper to profile scope`);
     }
-
   } catch (error) {
     console.error(`Error: ${error}`);
     process.exit(1);

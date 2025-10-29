@@ -36,39 +36,41 @@ const main = async () => {
 
     kcAdminClient.setConfig({ realmName });
 
-    // Check if group already exists
-    const existingGroups = await kcAdminClient.groups.find({ search: groupName });
-    const existingGroup = existingGroups.find(group => group.name === groupName);
-    
+    const existingGroups = await kcAdminClient.groups.find({
+      search: groupName,
+    });
+    const existingGroup = existingGroups.find((group) => group.name === groupName);
+
     if (existingGroup) {
       console.log(`Group '${groupName}' already exists with ID: ${existingGroup.id}`);
       return;
     }
 
-    // Find parent group if specified
     let parentGroupId: string | undefined;
     if (parentGroupName) {
-      const parentGroups = await kcAdminClient.groups.find({ search: parentGroupName });
-      const parentGroup = parentGroups.find(group => group.name === parentGroupName);
+      const parentGroups = await kcAdminClient.groups.find({
+        search: parentGroupName,
+      });
+      const parentGroup = parentGroups.find((group) => group.name === parentGroupName);
       if (!parentGroup) {
         throw new Error(`Parent group '${parentGroupName}' not found`);
       }
       parentGroupId = parentGroup.id;
     }
 
-    // Create group payload
     const groupPayload = {
       name: groupName,
-      ...(groupDescription && { attributes: { description: [groupDescription] } }),
+      ...(groupDescription && {
+        attributes: { description: [groupDescription] },
+      }),
     };
 
-    // Create group
-    const group = parentGroupId 
+    const group = parentGroupId
       ? await kcAdminClient.groups.createChildGroup({ id: parentGroupId }, groupPayload)
       : await kcAdminClient.groups.create(groupPayload);
-    
+
     console.log(`Group '${groupName}' created successfully with ID: ${group.id}`);
-    
+
     if (parentGroupName) {
       console.log(`Group '${groupName}' created as child of '${parentGroupName}'`);
     }

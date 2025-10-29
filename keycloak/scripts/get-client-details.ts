@@ -23,15 +23,12 @@ async function main() {
   invariant(clientId, "KEYCLOAK_CLIENT_ID is required");
 
   try {
-    // Find the client
     const clients = await kcAdminClient.clients.find({ realm, clientId });
     if (clients.length === 0) {
       throw new Error(`Client '${clientId}' not found in realm '${realm}'`);
     }
-
     const client = clients[0];
 
-    // Get full client details
     const clientDetails = await kcAdminClient.clients.findOne({
       realm,
       id: client.id!,
@@ -39,17 +36,16 @@ async function main() {
 
     console.log("=== Client Configuration ===");
     console.log(`Client ID: ${clientDetails?.clientId}`);
-    console.log(`Access Type: ${clientDetails?.publicClient ? 'public' : 'confidential'}`);
+    console.log(`Access Type: ${clientDetails?.publicClient ? "public" : "confidential"}`);
     console.log(`Client Authenticator: ${clientDetails?.clientAuthenticatorType}`);
     console.log(`Standard Flow Enabled: ${clientDetails?.standardFlowEnabled}`);
     console.log(`Direct Access Grants: ${clientDetails?.directAccessGrantsEnabled}`);
     console.log(`Service Accounts Enabled: ${clientDetails?.serviceAccountsEnabled}`);
     console.log(`Valid Redirect URIs: ${JSON.stringify(clientDetails?.redirectUris, null, 2)}`);
-    console.log(`Base URL: ${clientDetails?.baseUrl || 'Not set'}`);
-    console.log(`Root URL: ${clientDetails?.rootUrl || 'Not set'}`);
+    console.log(`Base URL: ${clientDetails?.baseUrl || "Not set"}`);
+    console.log(`Root URL: ${clientDetails?.rootUrl || "Not set"}`);
     console.log(`Web Origins: ${JSON.stringify(clientDetails?.webOrigins, null, 2)}`);
 
-    // Get client secret if confidential
     if (!clientDetails?.publicClient) {
       try {
         const clientSecret = await kcAdminClient.clients.getClientSecret({
@@ -61,7 +57,6 @@ async function main() {
         console.log(`Client Secret: Error retrieving - ${error}`);
       }
     }
-
   } catch (error) {
     console.error(`Error retrieving client details: ${error}`);
     process.exit(1);

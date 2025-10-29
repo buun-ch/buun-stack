@@ -35,12 +35,10 @@ async function main() {
       clientId: "admin-cli",
     });
 
-    // Set realm to work with
     kcAdminClient.setConfig({
       realmName,
     });
 
-    // Find the client
     const clients = await kcAdminClient.clients.find({ clientId });
     if (clients.length === 0) {
       throw new Error(`Client '${clientId}' not found in realm '${realmName}'`);
@@ -49,8 +47,9 @@ async function main() {
     const client = clients[0];
     const clientInternalId = client.id!;
 
-    // Check if the mapper already exists
-    const mappers = await kcAdminClient.clients.listProtocolMappers({ id: clientInternalId });
+    const mappers = await kcAdminClient.clients.listProtocolMappers({
+      id: clientInternalId,
+    });
     const existingMapper = mappers.find((mapper) => mapper.name === mapperName);
 
     if (existingMapper) {
@@ -58,7 +57,6 @@ async function main() {
       return;
     }
 
-    // Create the client roles protocol mapper
     await kcAdminClient.clients.addProtocolMapper(
       { id: clientInternalId },
       {
@@ -71,13 +69,15 @@ async function main() {
           "access.token.claim": "true",
           "claim.name": claimName,
           "jsonType.label": "String",
-          "multivalued": "true",
+          multivalued: "true",
           "usermodel.clientRoleMapping.clientId": clientId,
         },
       }
     );
 
-    console.log(`✓ Client roles mapper '${mapperName}' created for client '${clientId}' in realm '${realmName}'`);
+    console.log(
+      `✓ Client roles mapper '${mapperName}' created for client '${clientId}' in realm '${realmName}'`
+    );
     console.log(`  Claim name: ${claimName}`);
     console.log(`  Maps client roles from '${clientId}' to JWT token`);
   } catch (error) {

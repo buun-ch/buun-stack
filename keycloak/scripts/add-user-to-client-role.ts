@@ -27,18 +27,14 @@ async function main() {
   invariant(clientId, "KEYCLOAK_CLIENT_ID is required");
   invariant(roleName, "KEYCLOAK_ROLE_NAME is required");
 
-  // Find the user
   const users = await kcAdminClient.users.find({ realm, username });
 
   if (users.length === 0) {
     throw new Error(`User '${username}' not found in realm '${realm}'`);
   }
-
   const user = users[0];
 
-  // Find the client
   const clients = await kcAdminClient.clients.find({ realm, clientId });
-
   if (clients.length === 0) {
     throw new Error(`Client '${clientId}' not found in realm '${realm}'`);
   }
@@ -60,35 +56,28 @@ async function main() {
     });
     console.error(
       `Available roles for client '${clientId}':`,
-      allRoles.map((r) => r.name),
+      allRoles.map((r) => r.name)
     );
     throw new Error(
-      `Role '${roleName}' not found for client '${clientId}' in realm '${realm}'. Available roles: ${allRoles.map((r) => r.name).join(", ")}`,
+      `Role '${roleName}' not found for client '${clientId}' in realm '${realm}'. Available roles: ${allRoles.map((r) => r.name).join(", ")}`
     );
   }
 
   if (!role) {
-    throw new Error(
-      `Role '${roleName}' not found for client '${clientId}' in realm '${realm}'`,
-    );
+    throw new Error(`Role '${roleName}' not found for client '${clientId}' in realm '${realm}'`);
   }
 
-  // Check if user already has this role
   const existingRoles = await kcAdminClient.users.listClientRoleMappings({
     realm,
     id: user.id!,
     clientUniqueId: client.id!,
   });
-
   const hasRole = existingRoles.some((r) => r.name === roleName);
   if (hasRole) {
-    console.log(
-      `User '${username}' already has role '${roleName}' for client '${clientId}'`,
-    );
+    console.log(`User '${username}' already has role '${roleName}' for client '${clientId}'`);
     return;
   }
 
-  // Add role to user
   await kcAdminClient.users.addClientRoleMappings({
     realm,
     id: user.id!,
@@ -102,7 +91,7 @@ async function main() {
   });
 
   console.log(
-    `✓ Role '${roleName}' assigned to user '${username}' for client '${clientId}' in realm '${realm}'`,
+    `✓ Role '${roleName}' assigned to user '${username}' for client '${clientId}' in realm '${realm}'`
   );
 }
 

@@ -685,3 +685,13 @@ add-scope-to-client realm client_id scope_name:
     export KEYCLOAK_CLIENT_ID={{ client_id }}
     export SCOPE_NAME={{ scope_name }}
     dotenvx run -q -f ../.env.local -- tsx ./scripts/add-scope-to-client.ts
+
+# Get client scope details
+get-client-scope realm scope_name:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM={{ realm }}
+    export SCOPE_NAME={{ scope_name }}
+    dotenvx run -q -f ../.env.local -- tsx ./scripts/get-client-scope.ts

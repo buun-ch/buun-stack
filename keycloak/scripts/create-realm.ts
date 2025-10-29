@@ -17,7 +17,9 @@ const main = async () => {
   // Token lifespan settings (with defaults suitable for JupyterHub)
   const accessTokenLifespan = parseInt(process.env.ACCESS_TOKEN_LIFESPAN || "3600"); // 1 hour
   const refreshTokenLifespan = parseInt(process.env.REFRESH_TOKEN_LIFESPAN || "14400"); // 4 hours - changed from 30min
-  const ssoSessionMaxLifespan = parseInt(process.env.SSO_SESSION_MAX_LIFESPAN || refreshTokenLifespan.toString()); // Use refreshTokenLifespan
+  const ssoSessionMaxLifespan = parseInt(
+    process.env.SSO_SESSION_MAX_LIFESPAN || refreshTokenLifespan.toString()
+  ); // Use refreshTokenLifespan
   const ssoSessionIdleTimeout = parseInt(process.env.SSO_SESSION_IDLE_TIMEOUT || "7200"); // 2 hours
 
   const kcAdminClient = new KcAdminClient({
@@ -59,10 +61,18 @@ const main = async () => {
       clientSessionIdleTimeout: Math.min(accessTokenLifespan, ssoSessionIdleTimeout),
     });
     console.log(`Realm '${realmName}' created successfully with token settings:`);
-    console.log(`  - Access Token Lifespan: ${accessTokenLifespan} seconds (${accessTokenLifespan/60} minutes)`);
-    console.log(`  - Refresh Token Lifespan: ${refreshTokenLifespan} seconds (${refreshTokenLifespan/60} minutes)`);
-    console.log(`  - SSO Session Max: ${ssoSessionMaxLifespan} seconds (${ssoSessionMaxLifespan/60} minutes)`);
-    console.log(`  - SSO Session Idle: ${ssoSessionIdleTimeout} seconds (${ssoSessionIdleTimeout/60} minutes)`);
+    console.log(
+      `  - Access Token Lifespan: ${accessTokenLifespan} seconds (${accessTokenLifespan / 60} minutes)`
+    );
+    console.log(
+      `  - Refresh Token Lifespan: ${refreshTokenLifespan} seconds (${refreshTokenLifespan / 60} minutes)`
+    );
+    console.log(
+      `  - SSO Session Max: ${ssoSessionMaxLifespan} seconds (${ssoSessionMaxLifespan / 60} minutes)`
+    );
+    console.log(
+      `  - SSO Session Idle: ${ssoSessionIdleTimeout} seconds (${ssoSessionIdleTimeout / 60} minutes)`
+    );
   } catch (error) {
     console.error("An error occurred:", error);
     // eslint-disable-next-line unicorn/no-process-exit

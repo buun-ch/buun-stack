@@ -19,7 +19,7 @@ const main = async () => {
 
   const kcAdminClient = new KcAdminClient({
     baseUrl: `https://${keycloakHost}`,
-    realmName: 'master',
+    realmName: "master",
   });
 
   try {

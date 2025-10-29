@@ -44,8 +44,8 @@ const main = async () => {
     console.log(`=== Client Details: ${clientId} ===`);
     console.log(`ID: ${client.id}`);
     console.log(`Client ID: ${client.clientId}`);
-    console.log(`Name: ${client.name || 'N/A'}`);
-    console.log(`Description: ${client.description || 'N/A'}`);
+    console.log(`Name: ${client.name || "N/A"}`);
+    console.log(`Description: ${client.description || "N/A"}`);
     console.log(`Enabled: ${client.enabled}`);
     console.log(`Protocol: ${client.protocol}`);
     console.log(`Public Client: ${client.publicClient}`);
@@ -108,7 +108,6 @@ const main = async () => {
       console.log("");
     }
 
-    // Get protocol mappers
     const protocolMappers = await kcAdminClient.clients.listProtocolMappers({ id: client.id! });
     if (protocolMappers.length > 0) {
       console.log("Protocol Mappers:");
@@ -122,7 +121,6 @@ const main = async () => {
       });
       console.log("");
     }
-
   } catch (error) {
     console.error("An error occurred:", error);
     process.exit(1);

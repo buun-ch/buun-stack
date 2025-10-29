@@ -36,30 +36,26 @@ const main = async () => {
 
     kcAdminClient.setConfig({ realmName });
 
-    // Find user
     const users = await kcAdminClient.users.find({ username });
-    const user = users.find(u => u.username === username);
+    const user = users.find((u) => u.username === username);
     if (!user) {
       throw new Error(`User '${username}' not found`);
     }
 
-    // Find group
     const groups = await kcAdminClient.groups.find({ search: groupName });
-    const group = groups.find(g => g.name === groupName);
+    const group = groups.find((g) => g.name === groupName);
     if (!group) {
       throw new Error(`Group '${groupName}' not found`);
     }
 
-    // Check if user is in group
     const userGroups = await kcAdminClient.users.listGroups({ id: user.id! });
-    const isMember = userGroups.some(ug => ug.id === group.id);
-    
+    const isMember = userGroups.some((ug) => ug.id === group.id);
+
     if (!isMember) {
       console.log(`User '${username}' is not a member of group '${groupName}'`);
       return;
     }
 
-    // Remove user from group
     await kcAdminClient.users.delFromGroup({
       id: user.id!,
       groupId: group.id!,

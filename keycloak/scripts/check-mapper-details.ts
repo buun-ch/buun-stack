@@ -23,15 +23,11 @@ async function main() {
   invariant(clientId, "KEYCLOAK_CLIENT_ID is required");
 
   try {
-    // Find the client
     const clients = await kcAdminClient.clients.find({ realm, clientId });
     if (clients.length === 0) {
       throw new Error(`Client '${clientId}' not found in realm '${realm}'`);
     }
-
     const client = clients[0];
-
-    // Get all protocol mappers with full details
     const mappers = await kcAdminClient.clients.listProtocolMappers({
       realm,
       id: client.id!,
@@ -50,25 +46,21 @@ async function main() {
       }
     });
 
-    // Check client scope assignments
     console.log(`\n=== Client Scope Assignments ===`);
 
-    // Get default client scopes
     const defaultScopes = await kcAdminClient.clients.listDefaultClientScopes({
       realm,
       id: client.id!,
     });
 
-    console.log(`Default scopes: ${defaultScopes.map(s => s.name).join(', ')}`);
+    console.log(`Default scopes: ${defaultScopes.map((s) => s.name).join(", ")}`);
 
-    // Get optional client scopes
     const optionalScopes = await kcAdminClient.clients.listOptionalClientScopes({
       realm,
       id: client.id!,
     });
 
-    console.log(`Optional scopes: ${optionalScopes.map(s => s.name).join(', ')}`);
-
+    console.log(`Optional scopes: ${optionalScopes.map((s) => s.name).join(", ")}`);
   } catch (error) {
     console.error(`Error: ${error}`);
     process.exit(1);
