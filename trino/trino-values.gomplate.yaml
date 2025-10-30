@@ -174,15 +174,15 @@ coordinator:
 
   livenessProbe:
     initialDelaySeconds: 30
-    periodSeconds: 10
-    timeoutSeconds: 5
+    periodSeconds: 20
+    timeoutSeconds: 15
     failureThreshold: 6
     successThreshold: 1
 
   readinessProbe:
     initialDelaySeconds: 10
-    periodSeconds: 10
-    timeoutSeconds: 5
+    periodSeconds: 20
+    timeoutSeconds: 15
     failureThreshold: 6
     successThreshold: 1
 
@@ -238,15 +238,15 @@ worker:
 
   livenessProbe:
     initialDelaySeconds: 30
-    periodSeconds: 10
-    timeoutSeconds: 5
+    periodSeconds: 20
+    timeoutSeconds: 15
     failureThreshold: 6
     successThreshold: 1
 
   readinessProbe:
     initialDelaySeconds: 10
-    periodSeconds: 10
-    timeoutSeconds: 5
+    periodSeconds: 20
+    timeoutSeconds: 15
     failureThreshold: 6
     successThreshold: 1
 
