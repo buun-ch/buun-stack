@@ -69,6 +69,108 @@ TRINO_WORKER_CPU=2                      # Worker CPU
 TRINO_WORKER_COUNT=2                    # Number of workers
 ```
 
+### Memory Configuration
+
+Trino has a three-layer memory architecture that must be properly configured:
+
+#### Memory Layers
+
+1. **Kubernetes Memory** (`TRINO_WORKER_MEMORY`, `TRINO_COORDINATOR_MEMORY`)
+   - Physical memory allocated to the pod by Kubernetes
+   - Example: `1500Mi`, `2Gi`, `4Gi`
+   - This is the total memory limit for the entire container
+
+2. **JVM Heap** (`TRINO_WORKER_JVM_HEAP`, `TRINO_COORDINATOR_JVM_HEAP`)
+   - Memory available to the Java process
+   - Example: `1500M`, `2G`, `4G`
+   - Typically 70-80% of Kubernetes memory
+   - Must be less than Kubernetes memory to leave room for off-heap memory
+
+3. **Query Memory Per Node** (currently hardcoded to `1GB`)
+   - Memory Trino can use for query execution on each node
+   - Configured in `config.properties` as `query.max-memory-per-node`
+   - Must be significantly less than JVM heap to allow for heap headroom
+
+#### Memory Relationship
+
+```
+Kubernetes Memory (e.g., 1500Mi)
+  └─ JVM Heap (e.g., 1500M, ~100%)
+      └─ Query Memory (1GB) + Heap Headroom (~365MB)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+         This sum must be less than JVM Heap
+```
+
+#### Calculating Memory Requirements
+
+**Rule of thumb:**
+
+- Query Memory + Heap Headroom ≤ JVM Heap
+- Heap Headroom is approximately 30% of JVM Heap
+- Therefore: Query Memory ≤ 70% of JVM Heap
+
+**Examples:**
+
+| JVM Heap | Max Query Memory | Headroom (~30%) | Total Needed | Status |
+|----------|------------------|-----------------|--------------|--------|
+| 1000M    | 1000M            | 307M            | 1307M        | ❌ Too small |
+| 1200M    | 1000M            | 365M            | 1365M        | ❌ Too small |
+| 1500M    | 1000M            | 459M            | 1459M        | ✅ OK |
+| 2000M    | 1000M            | 612M            | 1612M        | ✅ OK |
+
+#### Recommended Configurations
+
+**Low-resource environment (limited memory):**
+
+```bash
+TRINO_WORKER_COUNT=1
+TRINO_WORKER_MEMORY=1500Mi
+TRINO_WORKER_JVM_HEAP=1500M
+# Query memory: 1GB (hardcoded)
+```
+
+**Standard environment:**
+
+```bash
+TRINO_WORKER_COUNT=2
+TRINO_WORKER_MEMORY=4Gi
+TRINO_WORKER_JVM_HEAP=4G
+# Query memory: 1GB (hardcoded)
+```
+
+**Note:** If you need to adjust query memory per node, you must modify `query.max-memory-per-node` in `trino-values.gomplate.yaml`.
+
+#### Common Memory Errors
+
+**Error: Invalid memory configuration**
+
+```
+IllegalArgumentException: Invalid memory configuration.
+The sum of max query memory per node (1073741824) and heap headroom (382520525)
+cannot be larger than the available heap memory (1275068416)
+```
+
+**Cause:** JVM heap is too small for the configured query memory.
+
+**Solution:** Either:
+
+- Increase `TRINO_WORKER_JVM_HEAP` to at least 1500M for 1GB query memory
+- Or reduce `query.max-memory-per-node` in the values template (requires code change)
+
+**Error: Pod stuck in Pending state**
+
+```
+Warning  FailedScheduling  0/1 nodes are available: 1 Insufficient memory.
+```
+
+**Cause:** Kubernetes doesn't have enough memory to schedule the pod.
+
+**Solution:** Either:
+
+- Reduce `TRINO_WORKER_MEMORY` (and correspondingly reduce `TRINO_WORKER_JVM_HEAP`)
+- Reduce `TRINO_WORKER_COUNT`
+- Free up memory by scaling down other services
+
 ## Usage
 
 ### Web UI Access
