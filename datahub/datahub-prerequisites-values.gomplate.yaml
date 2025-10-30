@@ -66,6 +66,20 @@ kafka:
     persistence:
       enabled: true
       size: "5Gi"
+    livenessProbe:
+      enabled: true
+      initialDelaySeconds: 30
+      periodSeconds: 20
+      timeoutSeconds: 15
+      failureThreshold: 6
+      successThreshold: 1
+    readinessProbe:
+      enabled: true
+      initialDelaySeconds: 5
+      periodSeconds: 20
+      timeoutSeconds: 15
+      failureThreshold: 6
+      successThreshold: 1
 
 # Schema Registry
 cp-schema-registry:
