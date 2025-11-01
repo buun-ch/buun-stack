@@ -139,6 +139,76 @@ create-oidc-client:
 delete-oidc-client:
     @just keycloak::delete-client ${KEYCLOAK_REALM} lakekeeper
 
+# Create OIDC API client for programmatic access (dlt, etc.)
+create-oidc-api-client client_name='lakekeeper-api':
+    #!/bin/bash
+    set -euo pipefail
+    echo "Creating Lakekeeper OIDC API client '{{ client_name }}' in Keycloak..."
+
+    # Ensure lakekeeper scope exists (should be created by create-oidc-client)
+    echo "Ensuring 'lakekeeper' client scope exists..."
+    just keycloak::create-client-scope ${KEYCLOAK_REALM} lakekeeper "Lakekeeper API scope"
+    just keycloak::add-audience-mapper-to-scope ${KEYCLOAK_REALM} lakekeeper lakekeeper
+
+    # Check if client already exists
+    if just keycloak::client-exists ${KEYCLOAK_REALM} {{ client_name }} &>/dev/null; then
+        echo "Client '{{ client_name }}' already exists."
+        echo "To recreate, first delete it with: just lakekeeper::delete-oidc-api-client {{ client_name }}"
+        exit 1
+    fi
+
+    # Create confidential client with service account
+    echo "Creating confidential client with service account..."
+    CLIENT_SECRET=$(just utils::random-password)
+    just keycloak::create-client \
+        realm=${KEYCLOAK_REALM} \
+        client_id={{ client_name }} \
+        redirect_url="http://localhost" \
+        client_secret="$CLIENT_SECRET"
+
+    # Enable service account for client credentials flow
+    echo "Enabling service account for client credentials flow..."
+    just keycloak::enable-service-account ${KEYCLOAK_REALM} {{ client_name }}
+
+    # Add lakekeeper scope
+    echo "Adding 'lakekeeper' scope to client..."
+    just keycloak::add-scope-to-client ${KEYCLOAK_REALM} {{ client_name }} lakekeeper
+
+    # Store credentials in Vault if available
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Storing credentials in Vault..."
+        just vault::put lakekeeper/api-client/{{ client_name }} \
+            client_id={{ client_name }} \
+            client_secret="$CLIENT_SECRET"
+    else
+        echo "External Secrets not available. Credentials not stored in Vault."
+    fi
+
+    echo ""
+    echo "OIDC API client '{{ client_name }}' created successfully"
+    echo "Client ID: {{ client_name }}"
+    echo "Client Secret: $CLIENT_SECRET"
+    echo ""
+    echo "Use these credentials for OAuth2 Client Credentials Flow:"
+    echo "  OIDC_CLIENT_ID={{ client_name }}"
+    echo "  OIDC_CLIENT_SECRET=$CLIENT_SECRET"
+    echo ""
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Credentials stored in Vault at: lakekeeper/api-client/{{ client_name }}"
+    fi
+
+# Delete OIDC API client
+delete-oidc-api-client client_name='lakekeeper-api':
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deleting Lakekeeper OIDC API client '{{ client_name }}'..."
+    just keycloak::delete-client ${KEYCLOAK_REALM} {{ client_name }}
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Deleting credentials from Vault..."
+        just vault::delete lakekeeper/api-client/{{ client_name }} || true
+    fi
+    echo "OIDC API client deleted"
+
 # Install Lakekeeper
 install:
     #!/bin/bash
@@ -154,6 +224,7 @@ install:
     just create-namespace
     just setup-database
     just create-oidc-client
+    just create-oidc-api-client
     just add-helm-repo
 
     # Helm chart will automatically create the encryption key secret

@@ -23,14 +23,88 @@ The installation automatically:
 
 - Creates PostgreSQL database and user
 - Stores credentials in Vault (if External Secrets is available) or Kubernetes Secrets
-- Creates Keycloak OIDC client with PKCE flow for secure authentication
+- Creates Keycloak OIDC client with PKCE flow for Web UI authentication
+- Creates API client (`lakekeeper-api`) for programmatic access with OAuth2 Client Credentials Flow
 - Configures audience mapper for JWT tokens
 - Runs database migrations
 - Configures Traefik ingress with TLS
 
+**IMPORTANT**: During installation, API client credentials will be displayed. Save these for programmatic access (dlt, PyIceberg, etc.).
+
 ## Access
 
 Access Lakekeeper at `https://lakekeeper.yourdomain.com` and authenticate via Keycloak.
+
+## Programmatic Access
+
+### API Client Credentials
+
+During installation, a default API client `lakekeeper-api` is automatically created for programmatic access (dlt, Python scripts, etc.).
+
+**IMPORTANT**: The client ID and secret are displayed during installation. Save these credentials securely.
+
+If you need additional API clients or lost the credentials:
+
+```bash
+# Create additional API client with custom name
+just lakekeeper::create-oidc-api-client my-app
+
+# Recreate default client (delete first, then create)
+just lakekeeper::delete-oidc-api-client lakekeeper-api
+just lakekeeper::create-oidc-api-client lakekeeper-api
+```
+
+Each API client has:
+
+- **Service account enabled** for OAuth2 Client Credentials Flow
+- **`lakekeeper` scope** with audience mapper (`aud: lakekeeper`)
+- **Client credentials** stored in Vault (if External Secrets is available)
+
+### Using API Clients
+
+#### dlt (Data Load Tool)
+
+Configure dlt to use the API client credentials:
+
+```bash
+export OIDC_CLIENT_ID=lakekeeper-api
+export OIDC_CLIENT_SECRET=<secret-from-creation>
+export ICEBERG_CATALOG_URL=http://lakekeeper.lakekeeper.svc.cluster.local:8181/catalog
+export ICEBERG_WAREHOUSE=default
+```
+
+The dlt Iceberg REST destination automatically uses these credentials for OAuth2 authentication.
+
+#### PyIceberg
+
+```python
+from pyiceberg.catalog import load_catalog
+
+catalog = load_catalog(
+    "rest_catalog",
+    **{
+        "uri": "http://lakekeeper.lakekeeper.svc.cluster.local:8181/catalog",
+        "warehouse": "default",
+        "credential": f"{client_id}:{client_secret}",  # OAuth2 format
+    }
+)
+```
+
+#### Trino Integration
+
+Trino uses its own OIDC client with service account. This is automatically configured by `just trino::enable-iceberg-catalog`. You don't need to create a separate API client for Trino.
+
+### Deleting API Clients
+
+```bash
+# Delete default API client
+just lakekeeper::delete-oidc-api-client
+
+# Delete custom-named client
+just lakekeeper::delete-oidc-api-client my-app
+```
+
+This removes the Keycloak client and Vault credentials.
 
 ## Cleanup
 
