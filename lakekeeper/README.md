@@ -35,6 +35,88 @@ The installation automatically:
 
 Access Lakekeeper at `https://lakekeeper.yourdomain.com` and authenticate via Keycloak.
 
+## Warehouse Management
+
+### Creating Warehouses with Vended Credentials
+
+Create warehouses with STS (Security Token Service) enabled for automatic temporary credential management:
+
+```bash
+# Create warehouse with default name and bucket
+just lakekeeper::create-warehouse <warehouse-name> <bucket-name>
+
+# Example: Create 'production' warehouse using 'warehouse' bucket
+just lakekeeper::create-warehouse production warehouse
+```
+
+This creates a warehouse with:
+
+- **STS enabled** for vended credentials (temporary S3 tokens)
+- **S3-compatible storage** (MinIO) with path-style access
+- **Automatic credential rotation** via MinIO STS
+
+**Prerequisites**:
+
+- MinIO bucket must exist (create with `just minio::create-bucket <bucket-name>`)
+- API client credentials must be available in Vault
+
+**Benefits of Vended Credentials**:
+
+- No need to distribute static S3 credentials to clients
+- Automatic credential expiration and rotation
+- Better security through temporary tokens
+- Centralized credential management
+
+### Creating Namespaces
+
+Namespaces organize tables within a warehouse (similar to databases in traditional systems):
+
+```bash
+# Create Iceberg namespace in a warehouse
+just lakekeeper::create-warehouse-namespace <warehouse-name> <namespace>
+
+# Example: Create 'ecommerce' namespace in 'test' warehouse
+just lakekeeper::create-warehouse-namespace test ecommerce
+```
+
+### Managing Warehouses
+
+List, view, and delete warehouses:
+
+```bash
+# List all warehouses
+just lakekeeper::list-warehouses
+
+# List all namespaces in a warehouse
+just lakekeeper::list-warehouse-namespaces <warehouse-name>
+
+# Example: List namespaces in 'test' warehouse
+just lakekeeper::list-warehouse-namespaces test
+
+# Delete a namespace from a warehouse (recursively deletes all tables)
+just lakekeeper::delete-warehouse-namespace <warehouse-name> <namespace>
+
+# Example: Delete 'ecommerce' namespace from 'test' warehouse (including all tables)
+just lakekeeper::delete-warehouse-namespace test ecommerce
+
+# Delete a warehouse (must be empty)
+just lakekeeper::delete-warehouse <warehouse-name>
+
+# Force delete a warehouse (automatically deletes all namespaces first)
+just lakekeeper::delete-warehouse <warehouse-name> true
+
+# Example: Force delete 'test' warehouse with all its namespaces
+just lakekeeper::delete-warehouse test true
+```
+
+**Important Notes**:
+
+- Namespace deletion is **recursive** - it will delete all tables and data within the namespace
+- Warehouses must be empty before deletion. If a warehouse contains namespaces, you must either:
+  1. Delete each namespace individually using `delete-warehouse-namespace`, then delete the warehouse
+  2. Use force deletion (`delete-warehouse <name> true`) to automatically delete all namespaces and their tables first
+- All deletion operations require confirmation prompts to prevent accidental data loss
+
 ## Programmatic Access
 
 ### API Client Credentials
@@ -70,12 +152,46 @@ Configure dlt to use the API client credentials:
 export OIDC_CLIENT_ID=lakekeeper-api
 export OIDC_CLIENT_SECRET=<secret-from-creation>
 export ICEBERG_CATALOG_URL=http://lakekeeper.lakekeeper.svc.cluster.local:8181/catalog
-export ICEBERG_WAREHOUSE=default
+export ICEBERG_WAREHOUSE=test  # Use warehouse with vended credentials enabled
+export KEYCLOAK_TOKEN_URL=https://auth.example.com/realms/buunstack/protocol/openid-connect/token
+export OAUTH2_SCOPE=lakekeeper  # Optional, defaults to "lakekeeper"
 ```
 
-The dlt Iceberg REST destination automatically uses these credentials for OAuth2 authentication.
+The dlt Iceberg REST destination automatically uses these credentials for OAuth2 authentication and receives temporary S3 credentials via STS (vended credentials).
+
+**Notes**:
+
+- `KEYCLOAK_TOKEN_URL` is required because Lakekeeper v0.9.x uses external OAuth2 provider (Keycloak) instead of the deprecated `/v1/oauth/tokens` endpoint.
+- `OAUTH2_SCOPE` must be set to `lakekeeper` (default) to include the audience claim in JWT tokens. PyIceberg defaults to `catalog` scope, which is not valid for Keycloak.
+- **No S3 credentials needed** when using warehouses with vended credentials enabled (STS). Lakekeeper provides temporary S3 credentials automatically.
+
+#### Legacy Mode: Static S3 Credentials
+
+If using a warehouse with `vended-credentials-enabled=false`, you need to provide static S3 credentials:
+
+```bash
+# Additional environment variables for static credentials mode
+export S3_ENDPOINT_URL=http://minio.minio.svc.cluster.local:9000
+export S3_ACCESS_KEY_ID=<minio-access-key>
+export S3_SECRET_ACCESS_KEY=<minio-secret-key>
+```
+
+To get MinIO credentials:
+
+```bash
+just vault::get minio/dlt access_key
+just vault::get minio/dlt secret_key
+```
+
+Or create a dedicated MinIO user:
+
+```bash
+just minio::create-user dlt "dlt-data"
+```
 
 #### PyIceberg
+
+With vended credentials (recommended):
 
 ```python
 from pyiceberg.catalog import load_catalog
@@ -84,8 +200,30 @@ catalog = load_catalog(
     "rest_catalog",
     **{
         "uri": "http://lakekeeper.lakekeeper.svc.cluster.local:8181/catalog",
-        "warehouse": "default",
+        "warehouse": "test",  # Use warehouse with vended credentials enabled
         "credential": f"{client_id}:{client_secret}",  # OAuth2 format
+        "oauth2-server-uri": "https://auth.example.com/realms/buunstack/protocol/openid-connect/token",
+        "scope": "lakekeeper",  # Required for Keycloak (PyIceberg defaults to "catalog")
+    }
+)
+```
+
+With static S3 credentials (legacy mode):
+
+```python
+catalog = load_catalog(
+    "rest_catalog",
+    **{
+        "uri": "http://lakekeeper.lakekeeper.svc.cluster.local:8181/catalog",
+        "warehouse": "default",
+        "credential": f"{client_id}:{client_secret}",
+        "oauth2-server-uri": "https://auth.example.com/realms/buunstack/protocol/openid-connect/token",
+        "scope": "lakekeeper",
+        # Static S3 credentials (only needed when vended credentials disabled)
+        "s3.endpoint": "http://minio.minio.svc.cluster.local:9000",
+        "s3.access-key-id": "<minio-access-key>",
+        "s3.secret-access-key": "<minio-secret-key>",
+        "s3.path-style-access": "true",
     }
 )
 ```
