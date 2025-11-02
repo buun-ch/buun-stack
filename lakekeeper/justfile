@@ -504,6 +504,77 @@ list-warehouses:
         exit 1
     fi
 
+# Get warehouse details by name
+get-warehouse warehouse_name:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Getting details for warehouse '{{ warehouse_name }}'..."
+
+    # Get API client credentials for authentication
+    CLIENT_SECRET=$(just vault::get lakekeeper/api-client/lakekeeper-api client_secret 2>/dev/null || echo "")
+    if [ -z "$CLIENT_SECRET" ]; then
+        echo "Error: Could not retrieve API client credentials"
+        echo "Please ensure 'lakekeeper-api' client exists"
+        exit 1
+    fi
+
+    # Get OAuth2 token
+    TOKEN_RESPONSE=$(curl -s -X POST "https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials" \
+        -d "client_id=lakekeeper-api" \
+        -d "client_secret=$CLIENT_SECRET" \
+        -d "scope=lakekeeper")
+
+    ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+    if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
+        echo "Error: Failed to obtain access token"
+        echo "Response: $TOKEN_RESPONSE"
+        exit 1
+    fi
+
+    # List warehouses to find the ID
+    LIST_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/management/v1/warehouse" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    LIST_HTTP_CODE=$(echo "$LIST_RESPONSE" | tail -n1)
+    LIST_BODY=$(echo "$LIST_RESPONSE" | sed '$d')
+
+    if [ "$LIST_HTTP_CODE" -ge 200 ] && [ "$LIST_HTTP_CODE" -lt 300 ]; then
+        WAREHOUSE_ID=$(echo "$LIST_BODY" | jq -r '.warehouses[] | select(.name == "{{ warehouse_name }}") | .id')
+        if [ -z "$WAREHOUSE_ID" ] || [ "$WAREHOUSE_ID" = "null" ]; then
+            echo "Error: Warehouse '{{ warehouse_name }}' not found"
+            echo "Available warehouses:"
+            echo "$LIST_BODY" | jq -r '.warehouses[] | "  - \(.name)"'
+            exit 1
+        fi
+    else
+        echo "Error: Failed to list warehouses (HTTP $LIST_HTTP_CODE)"
+        echo "Response: $LIST_BODY"
+        exit 1
+    fi
+
+    # Get warehouse details
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/management/v1/warehouse/${WAREHOUSE_ID}" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+
+    if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+        echo "Warehouse '{{ warehouse_name }}' details:"
+        echo "$BODY" | jq .
+        echo ""
+        echo "Storage Profile:"
+        echo "$BODY" | jq '.["storage-profile"]'
+    else
+        echo "Error: Failed to get warehouse details (HTTP $HTTP_CODE)"
+        echo "Response: $BODY"
+        exit 1
+    fi
+
 # Delete namespace from a warehouse
 delete-warehouse-namespace warehouse_name namespace:
     #!/bin/bash
@@ -647,6 +718,440 @@ list-warehouse-namespaces warehouse_name:
         exit 1
     fi
 
+# List all tables in a namespace
+list-tables warehouse_name namespace:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Listing tables in namespace '{{ namespace }}' of warehouse '{{ warehouse_name }}'..."
+
+    # Get API client credentials for authentication
+    CLIENT_SECRET=$(just vault::get lakekeeper/api-client/lakekeeper-api client_secret 2>/dev/null || echo "")
+    if [ -z "$CLIENT_SECRET" ]; then
+        echo "Error: Could not retrieve API client credentials"
+        echo "Please ensure 'lakekeeper-api' client exists"
+        exit 1
+    fi
+
+    # Get OAuth2 token
+    TOKEN_RESPONSE=$(curl -s -X POST "https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials" \
+        -d "client_id=lakekeeper-api" \
+        -d "client_secret=$CLIENT_SECRET" \
+        -d "scope=lakekeeper")
+
+    ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+    if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
+        echo "Error: Failed to obtain access token"
+        echo "Response: $TOKEN_RESPONSE"
+        exit 1
+    fi
+
+    # Get warehouse ID from warehouse name
+    WAREHOUSE_LIST_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/management/v1/warehouse" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    LIST_HTTP_CODE=$(echo "$WAREHOUSE_LIST_RESPONSE" | tail -n1)
+    LIST_BODY=$(echo "$WAREHOUSE_LIST_RESPONSE" | sed '$d')
+
+    if [ "$LIST_HTTP_CODE" -ge 200 ] && [ "$LIST_HTTP_CODE" -lt 300 ]; then
+        WAREHOUSE_ID=$(echo "$LIST_BODY" | jq -r '.warehouses[] | select(.name == "{{ warehouse_name }}") | .id')
+        if [ -z "$WAREHOUSE_ID" ] || [ "$WAREHOUSE_ID" = "null" ]; then
+            echo "Error: Warehouse '{{ warehouse_name }}' not found"
+            exit 1
+        fi
+    else
+        echo "Error: Failed to list warehouses (HTTP $LIST_HTTP_CODE)"
+        exit 1
+    fi
+
+    # List tables
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/{{ namespace }}/tables" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+
+    if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+        TABLE_COUNT=$(echo "$BODY" | jq '.identifiers | length')
+        echo "Tables in namespace '{{ namespace }}' ($TABLE_COUNT):"
+        echo "$BODY" | jq -r '.identifiers[] | "  - \(.namespace[0]).\(.name)"'
+    else
+        echo "Error: Failed to list tables (HTTP $HTTP_CODE)"
+        echo "Response: $BODY"
+        exit 1
+    fi
+
+# Delete a table from a namespace
+delete-table warehouse_name namespace table_name:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deleting table '{{ table_name }}' from namespace '{{ namespace }}' in warehouse '{{ warehouse_name }}'..."
+
+    # Get API client credentials for authentication
+    CLIENT_SECRET=$(just vault::get lakekeeper/api-client/lakekeeper-api client_secret 2>/dev/null || echo "")
+    if [ -z "$CLIENT_SECRET" ]; then
+        echo "Error: Could not retrieve API client credentials"
+        exit 1
+    fi
+
+    # Get OAuth2 token
+    TOKEN_RESPONSE=$(curl -s -X POST "https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials" \
+        -d "client_id=lakekeeper-api" \
+        -d "client_secret=$CLIENT_SECRET" \
+        -d "scope=lakekeeper")
+
+    ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+    if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
+        echo "Error: Failed to obtain access token"
+        exit 1
+    fi
+
+    # Get warehouse ID
+    WAREHOUSE_LIST_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/management/v1/warehouse" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    LIST_HTTP_CODE=$(echo "$WAREHOUSE_LIST_RESPONSE" | tail -n1)
+    LIST_BODY=$(echo "$WAREHOUSE_LIST_RESPONSE" | sed '$d')
+
+    if [ "$LIST_HTTP_CODE" -ge 200 ] && [ "$LIST_HTTP_CODE" -lt 300 ]; then
+        WAREHOUSE_ID=$(echo "$LIST_BODY" | jq -r '.warehouses[] | select(.name == "{{ warehouse_name }}") | .id')
+        if [ -z "$WAREHOUSE_ID" ] || [ "$WAREHOUSE_ID" = "null" ]; then
+            echo "Error: Warehouse '{{ warehouse_name }}' not found"
+            exit 1
+        fi
+    else
+        echo "Error: Failed to list warehouses (HTTP $LIST_HTTP_CODE)"
+        exit 1
+    fi
+
+    # Delete table
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/{{ namespace }}/tables/{{ table_name }}?purgeRequested=true" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+
+    if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+        echo "Table '{{ table_name }}' deleted successfully"
+    elif [ "$HTTP_CODE" = "404" ]; then
+        echo "Table '{{ table_name }}' not found"
+    else
+        echo "Error: Failed to delete table (HTTP $HTTP_CODE)"
+        echo "Response: $BODY"
+        exit 1
+    fi
+
+# List all views in a namespace
+list-views warehouse_name namespace:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Listing views in namespace '{{ namespace }}' of warehouse '{{ warehouse_name }}'..."
+
+    # Get API client credentials for authentication
+    CLIENT_SECRET=$(just vault::get lakekeeper/api-client/lakekeeper-api client_secret 2>/dev/null || echo "")
+    if [ -z "$CLIENT_SECRET" ]; then
+        echo "Error: Could not retrieve API client credentials"
+        echo "Please ensure 'lakekeeper-api' client exists"
+        exit 1
+    fi
+
+    # Get OAuth2 token
+    TOKEN_RESPONSE=$(curl -s -X POST "https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials" \
+        -d "client_id=lakekeeper-api" \
+        -d "client_secret=$CLIENT_SECRET" \
+        -d "scope=lakekeeper")
+
+    ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+    if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
+        echo "Error: Failed to obtain access token"
+        echo "Response: $TOKEN_RESPONSE"
+        exit 1
+    fi
+
+    # Get warehouse ID from warehouse name
+    WAREHOUSE_LIST_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/management/v1/warehouse" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    LIST_HTTP_CODE=$(echo "$WAREHOUSE_LIST_RESPONSE" | tail -n1)
+    LIST_BODY=$(echo "$WAREHOUSE_LIST_RESPONSE" | sed '$d')
+
+    if [ "$LIST_HTTP_CODE" -ge 200 ] && [ "$LIST_HTTP_CODE" -lt 300 ]; then
+        WAREHOUSE_ID=$(echo "$LIST_BODY" | jq -r '.warehouses[] | select(.name == "{{ warehouse_name }}") | .id')
+        if [ -z "$WAREHOUSE_ID" ] || [ "$WAREHOUSE_ID" = "null" ]; then
+            echo "Error: Warehouse '{{ warehouse_name }}' not found"
+            exit 1
+        fi
+    else
+        echo "Error: Failed to list warehouses (HTTP $LIST_HTTP_CODE)"
+        exit 1
+    fi
+
+    # List views
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/{{ namespace }}/views" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+
+    if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+        VIEW_COUNT=$(echo "$BODY" | jq '.identifiers | length')
+        echo "Views in namespace '{{ namespace }}' ($VIEW_COUNT):"
+        echo "$BODY" | jq -r '.identifiers[] | "  - \(.namespace[0]).\(.name)"'
+    else
+        echo "Error: Failed to list views (HTTP $HTTP_CODE)"
+        echo "Response: $BODY"
+        exit 1
+    fi
+
+# Delete a view from a namespace
+delete-view warehouse_name namespace view_name:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deleting view '{{ view_name }}' from namespace '{{ namespace }}' in warehouse '{{ warehouse_name }}'..."
+
+    # Get API client credentials for authentication
+    CLIENT_SECRET=$(just vault::get lakekeeper/api-client/lakekeeper-api client_secret 2>/dev/null || echo "")
+    if [ -z "$CLIENT_SECRET" ]; then
+        echo "Error: Could not retrieve API client credentials"
+        exit 1
+    fi
+
+    # Get OAuth2 token
+    TOKEN_RESPONSE=$(curl -s -X POST "https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials" \
+        -d "client_id=lakekeeper-api" \
+        -d "client_secret=$CLIENT_SECRET" \
+        -d "scope=lakekeeper")
+
+    ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+    if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
+        echo "Error: Failed to obtain access token"
+        exit 1
+    fi
+
+    # Get warehouse ID
+    WAREHOUSE_LIST_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/management/v1/warehouse" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    LIST_HTTP_CODE=$(echo "$WAREHOUSE_LIST_RESPONSE" | tail -n1)
+    LIST_BODY=$(echo "$WAREHOUSE_LIST_RESPONSE" | sed '$d')
+
+    if [ "$LIST_HTTP_CODE" -ge 200 ] && [ "$LIST_HTTP_CODE" -lt 300 ]; then
+        WAREHOUSE_ID=$(echo "$LIST_BODY" | jq -r '.warehouses[] | select(.name == "{{ warehouse_name }}") | .id')
+        if [ -z "$WAREHOUSE_ID" ] || [ "$WAREHOUSE_ID" = "null" ]; then
+            echo "Error: Warehouse '{{ warehouse_name }}' not found"
+            exit 1
+        fi
+    else
+        echo "Error: Failed to list warehouses (HTTP $LIST_HTTP_CODE)"
+        exit 1
+    fi
+
+    # Delete view
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/{{ namespace }}/views/{{ view_name }}" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+
+    if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+        echo "View '{{ view_name }}' deleted successfully"
+    elif [ "$HTTP_CODE" = "404" ]; then
+        echo "View '{{ view_name }}' not found"
+    else
+        echo "Error: Failed to delete view (HTTP $HTTP_CODE)"
+        echo "Response: $BODY"
+        exit 1
+    fi
+
+# Delete all views in a namespace (force cleanup)
+delete-all-views-in-namespace warehouse_name namespace:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deleting all views in namespace '{{ namespace }}' of warehouse '{{ warehouse_name }}'..."
+
+    # Get API client credentials
+    CLIENT_SECRET=$(just vault::get lakekeeper/api-client/lakekeeper-api client_secret 2>/dev/null || echo "")
+    if [ -z "$CLIENT_SECRET" ]; then
+        echo "Error: Could not retrieve API client credentials"
+        exit 1
+    fi
+
+    # Get OAuth2 token
+    TOKEN_RESPONSE=$(curl -s -X POST "https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials" \
+        -d "client_id=lakekeeper-api" \
+        -d "client_secret=$CLIENT_SECRET" \
+        -d "scope=lakekeeper")
+
+    ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+    if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
+        echo "Error: Failed to obtain access token"
+        exit 1
+    fi
+
+    # Get warehouse ID
+    WAREHOUSE_LIST_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/management/v1/warehouse" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    LIST_HTTP_CODE=$(echo "$WAREHOUSE_LIST_RESPONSE" | tail -n1)
+    LIST_BODY=$(echo "$WAREHOUSE_LIST_RESPONSE" | sed '$d')
+
+    if [ "$LIST_HTTP_CODE" -ge 200 ] && [ "$LIST_HTTP_CODE" -lt 300 ]; then
+        WAREHOUSE_ID=$(echo "$LIST_BODY" | jq -r '.warehouses[] | select(.name == "{{ warehouse_name }}") | .id')
+        if [ -z "$WAREHOUSE_ID" ] || [ "$WAREHOUSE_ID" = "null" ]; then
+            echo "Error: Warehouse '{{ warehouse_name }}' not found"
+            exit 1
+        fi
+    else
+        echo "Error: Failed to list warehouses"
+        exit 1
+    fi
+
+    # List views
+    VIEWS_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/{{ namespace }}/views" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    VIEWS_HTTP_CODE=$(echo "$VIEWS_RESPONSE" | tail -n1)
+    VIEWS_BODY=$(echo "$VIEWS_RESPONSE" | sed '$d')
+
+    if [ "$VIEWS_HTTP_CODE" -ge 200 ] && [ "$VIEWS_HTTP_CODE" -lt 300 ]; then
+        VIEW_NAMES=$(echo "$VIEWS_BODY" | jq -r '.identifiers[] | .name')
+        if [ -z "$VIEW_NAMES" ]; then
+            echo "No views found in namespace '{{ namespace }}'"
+        else
+            VIEW_COUNT=$(echo "$VIEW_NAMES" | wc -l | tr -d ' ')
+            echo "Found $VIEW_COUNT views to delete:"
+            echo "$VIEW_NAMES" | while read -r view; do
+                echo "  - $view"
+            done
+
+            echo "$VIEW_NAMES" | while read -r view; do
+                echo "Deleting view '$view'..."
+                DEL_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+                    "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/{{ namespace }}/views/${view}" \
+                    -H "Authorization: Bearer $ACCESS_TOKEN")
+
+                DEL_HTTP_CODE=$(echo "$DEL_RESPONSE" | tail -n1)
+                if [ "$DEL_HTTP_CODE" -ge 200 ] && [ "$DEL_HTTP_CODE" -lt 300 ]; then
+                    echo "  View '$view' deleted"
+                else
+                    DEL_BODY=$(echo "$DEL_RESPONSE" | sed '$d')
+                    echo "  Warning: Failed to delete view '$view' (HTTP $DEL_HTTP_CODE)"
+                    echo "  Response: $DEL_BODY"
+                fi
+            done
+        fi
+    else
+        echo "Error: Failed to list views (HTTP $VIEWS_HTTP_CODE)"
+        echo "Response: $VIEWS_BODY"
+        exit 1
+    fi
+
+# Delete all tables in a namespace (force cleanup)
+delete-all-tables-in-namespace warehouse_name namespace:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deleting all tables in namespace '{{ namespace }}' of warehouse '{{ warehouse_name }}'..."
+
+    # Get API client credentials
+    CLIENT_SECRET=$(just vault::get lakekeeper/api-client/lakekeeper-api client_secret 2>/dev/null || echo "")
+    if [ -z "$CLIENT_SECRET" ]; then
+        echo "Error: Could not retrieve API client credentials"
+        exit 1
+    fi
+
+    # Get OAuth2 token
+    TOKEN_RESPONSE=$(curl -s -X POST "https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials" \
+        -d "client_id=lakekeeper-api" \
+        -d "client_secret=$CLIENT_SECRET" \
+        -d "scope=lakekeeper")
+
+    ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+    if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
+        echo "Error: Failed to obtain access token"
+        exit 1
+    fi
+
+    # Get warehouse ID
+    WAREHOUSE_LIST_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/management/v1/warehouse" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    LIST_HTTP_CODE=$(echo "$WAREHOUSE_LIST_RESPONSE" | tail -n1)
+    LIST_BODY=$(echo "$WAREHOUSE_LIST_RESPONSE" | sed '$d')
+
+    if [ "$LIST_HTTP_CODE" -ge 200 ] && [ "$LIST_HTTP_CODE" -lt 300 ]; then
+        WAREHOUSE_ID=$(echo "$LIST_BODY" | jq -r '.warehouses[] | select(.name == "{{ warehouse_name }}") | .id')
+        if [ -z "$WAREHOUSE_ID" ] || [ "$WAREHOUSE_ID" = "null" ]; then
+            echo "Error: Warehouse '{{ warehouse_name }}' not found"
+            exit 1
+        fi
+    else
+        echo "Error: Failed to list warehouses"
+        exit 1
+    fi
+
+    # List tables
+    TABLES_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/{{ namespace }}/tables" \
+        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+    TABLES_HTTP_CODE=$(echo "$TABLES_RESPONSE" | tail -n1)
+    TABLES_BODY=$(echo "$TABLES_RESPONSE" | sed '$d')
+
+    if [ "$TABLES_HTTP_CODE" -ge 200 ] && [ "$TABLES_HTTP_CODE" -lt 300 ]; then
+        TABLE_NAMES=$(echo "$TABLES_BODY" | jq -r '.identifiers[] | .name')
+        if [ -z "$TABLE_NAMES" ]; then
+            echo "No tables found in namespace '{{ namespace }}'"
+        else
+            TABLE_COUNT=$(echo "$TABLE_NAMES" | wc -l | tr -d ' ')
+            echo "Found $TABLE_COUNT tables to delete:"
+            echo "$TABLE_NAMES" | while read -r table; do
+                echo "  - $table"
+            done
+
+            echo "$TABLE_NAMES" | while read -r table; do
+                echo "Deleting table '$table'..."
+                DEL_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+                    "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/{{ namespace }}/tables/${table}?purgeRequested=true" \
+                    -H "Authorization: Bearer $ACCESS_TOKEN")
+
+                DEL_HTTP_CODE=$(echo "$DEL_RESPONSE" | tail -n1)
+                if [ "$DEL_HTTP_CODE" -ge 200 ] && [ "$DEL_HTTP_CODE" -lt 300 ]; then
+                    echo "  Table '$table' deleted"
+                else
+                    DEL_BODY=$(echo "$DEL_RESPONSE" | sed '$d')
+                    echo "  Warning: Failed to delete table '$table' (HTTP $DEL_HTTP_CODE)"
+                    echo "  Response: $DEL_BODY"
+                fi
+            done
+        fi
+    else
+        echo "Error: Failed to list tables (HTTP $TABLES_HTTP_CODE)"
+        echo "Response: $TABLES_BODY"
+        exit 1
+    fi
+
 # Delete warehouse
 delete-warehouse warehouse_name force='false':
     #!/bin/bash
@@ -719,9 +1224,53 @@ delete-warehouse warehouse_name force='false':
                 done
 
                 echo "$NAMESPACES" | while read -r ns; do
-                    echo "Deleting namespace '$ns' (including all tables)..."
+                    echo "Deleting namespace '$ns' (including all tables and views)..."
+
+                    # Delete all tables first
+                    TABLES_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+                        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/${ns}/tables" \
+                        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+                    TABLES_HTTP_CODE=$(echo "$TABLES_RESPONSE" | tail -n1)
+                    TABLES_BODY=$(echo "$TABLES_RESPONSE" | sed '$d')
+
+                    if [ "$TABLES_HTTP_CODE" -ge 200 ] && [ "$TABLES_HTTP_CODE" -lt 300 ]; then
+                        TABLE_NAMES=$(echo "$TABLES_BODY" | jq -r '.identifiers[] | .name' 2>/dev/null)
+                        if [ -n "$TABLE_NAMES" ]; then
+                            TABLE_COUNT=$(echo "$TABLE_NAMES" | wc -l | tr -d ' ')
+                            echo "  Deleting $TABLE_COUNT tables..."
+                            echo "$TABLE_NAMES" | while read -r table; do
+                                curl -s -X DELETE \
+                                    "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/${ns}/tables/${table}?purgeRequested=true" \
+                                    -H "Authorization: Bearer $ACCESS_TOKEN" > /dev/null
+                            done
+                        fi
+                    fi
+
+                    # Delete all views
+                    VIEWS_RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+                        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/${ns}/views" \
+                        -H "Authorization: Bearer $ACCESS_TOKEN")
+
+                    VIEWS_HTTP_CODE=$(echo "$VIEWS_RESPONSE" | tail -n1)
+                    VIEWS_BODY=$(echo "$VIEWS_RESPONSE" | sed '$d')
+
+                    if [ "$VIEWS_HTTP_CODE" -ge 200 ] && [ "$VIEWS_HTTP_CODE" -lt 300 ]; then
+                        VIEW_NAMES=$(echo "$VIEWS_BODY" | jq -r '.identifiers[] | .name' 2>/dev/null)
+                        if [ -n "$VIEW_NAMES" ]; then
+                            VIEW_COUNT=$(echo "$VIEW_NAMES" | wc -l | tr -d ' ')
+                            echo "  Deleting $VIEW_COUNT views..."
+                            echo "$VIEW_NAMES" | while read -r view; do
+                                curl -s -X DELETE \
+                                    "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/${ns}/views/${view}" \
+                                    -H "Authorization: Bearer $ACCESS_TOKEN" > /dev/null
+                            done
+                        fi
+                    fi
+
+                    # Delete namespace
                     DEL_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
-                        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/${ns}?recursive=true" \
+                        "http://lakekeeper.${LAKEKEEPER_NAMESPACE}.svc.cluster.local:8181/catalog/v1/${WAREHOUSE_ID}/namespaces/${ns}" \
                         -H "Authorization: Bearer $ACCESS_TOKEN")
 
                     DEL_HTTP_CODE=$(echo "$DEL_RESPONSE" | tail -n1)
