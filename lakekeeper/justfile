@@ -224,7 +224,6 @@ install:
     just create-namespace
     just setup-database
     just create-oidc-client
-    just create-oidc-api-client
     just add-helm-repo
 
     # Helm chart will automatically create the encryption key secret
@@ -249,6 +248,9 @@ install:
 
     echo "Lakekeeper installation completed"
     echo "Access Lakekeeper at: https://${LAKEKEEPER_HOST}"
+
+    # Create the OIDC client for API access at the end to print credentials
+    just create-oidc-api-client
 
 # Uninstall Lakekeeper
 uninstall delete-db='true':
