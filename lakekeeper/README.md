@@ -230,7 +230,7 @@ catalog = load_catalog(
 
 #### Trino Integration
 
-Trino uses its own OIDC client with service account. This is automatically configured by `just trino::enable-iceberg-catalog`. You don't need to create a separate API client for Trino.
+Trino uses the `lakekeeper-api` OIDC client to authenticate with Lakekeeper via OAuth2 Client Credentials Flow. The `lakekeeper-api` client is automatically created during Lakekeeper installation and is shared by all applications that need programmatic access to Lakekeeper.
 
 ### Deleting API Clients
 
