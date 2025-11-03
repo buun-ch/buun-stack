@@ -17,6 +17,7 @@ export TRINO_WORKER_JVM_HEAP := env("TRINO_WORKER_JVM_HEAP", "4G")
 export TRINO_WORKER_COUNT := env("TRINO_WORKER_COUNT", "2")
 export TRINO_POSTGRES_ENABLED := env("TRINO_POSTGRES_ENABLED", "true")
 export TRINO_ICEBERG_ENABLED := env("TRINO_ICEBERG_ENABLED", "")
+export TRINO_ICEBERG_WAREHOUSE := env("TRINO_ICEBERG_WAREHOUSE", "default")
 export POSTGRES_NAMESPACE := env("POSTGRES_NAMESPACE", "postgres")
 export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export LAKEKEEPER_NAMESPACE := env("LAKEKEEPER_NAMESPACE", "lakekeeper")
@@ -194,6 +195,7 @@ enable-iceberg-catalog:
     #!/bin/bash
     set -euo pipefail
     echo "Enabling Iceberg catalog with Lakekeeper integration..."
+    echo "Vended credentials: enabled (always)"
 
     if ! kubectl get service lakekeeper -n ${LAKEKEEPER_NAMESPACE} &>/dev/null; then
         echo "Error: Lakekeeper is not installed. Please install Lakekeeper first with 'just lakekeeper::install'"
@@ -205,8 +207,6 @@ enable-iceberg-catalog:
         exit 1
     fi
 
-    just minio::create-user trino "trino-data"
-
     echo "Configuring Keycloak client for Lakekeeper integration..."
 
     echo "Enabling service account for Trino client..."
@@ -217,29 +217,8 @@ enable-iceberg-catalog:
     just keycloak::add-scope-to-client ${KEYCLOAK_REALM} trino lakekeeper
 
     echo "Keycloak configuration completed"
-
-    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
-        echo "Creating ExternalSecret for MinIO credentials..."
-        gomplate -f trino-minio-external-secret.gomplate.yaml -o trino-minio-external-secret.yaml
-        kubectl apply -f trino-minio-external-secret.yaml
-        echo "Waiting for MinIO secret to be ready..."
-        kubectl wait --for=condition=Ready externalsecret/trino-minio-external-secret \
-            -n ${TRINO_NAMESPACE} --timeout=60s
-    else
-        echo "External Secrets not available. Creating Kubernetes Secret directly..."
-        ACCESS_KEY=trino
-        SECRET_KEY=$(just vault::get trino/minio secret_key 2>/dev/null || echo "")
-        if [ -z "$SECRET_KEY" ]; then
-            echo "Error: Could not retrieve MinIO credentials. Please check Vault."
-            exit 1
-        fi
-        kubectl delete secret trino-minio-secret -n ${TRINO_NAMESPACE} --ignore-not-found
-        kubectl create secret generic trino-minio-secret -n ${TRINO_NAMESPACE} \
-            --from-literal=access_key="$ACCESS_KEY" \
-            --from-literal=secret_key="$SECRET_KEY" \
-            --from-literal=endpoint="http://minio.${MINIO_NAMESPACE}.svc.cluster.local:9000"
-        echo "MinIO secret created directly in Kubernetes"
-    fi
+    echo "Vended credentials enabled. Skipping static MinIO credentials setup."
+    echo "Lakekeeper will provide temporary S3 credentials via STS."
     echo "Iceberg catalog setup completed"
 
 # Delete MinIO secret
@@ -267,8 +246,12 @@ install:
 
     if [ -z "${TRINO_ICEBERG_ENABLED}" ]; then
         if gum confirm "Enable Iceberg catalog with Lakekeeper and MinIO?"; then
-            just enable-iceberg-catalog
             TRINO_ICEBERG_ENABLED="true"
+            WAREHOUSE_NAME=$(gum input --prompt="Warehouse name: " --width=100 \
+                --placeholder="e.g., default" --value="default")
+            TRINO_ICEBERG_WAREHOUSE="${WAREHOUSE_NAME}"
+
+            just enable-iceberg-catalog
         else
             TRINO_ICEBERG_ENABLED="false"
         fi
@@ -278,6 +261,7 @@ install:
 
     shared_secret=$(just utils::random-password)
     export TRINO_SHARED_SECRET="${shared_secret}"
+    export TRINO_ICEBERG_WAREHOUSE="${TRINO_ICEBERG_WAREHOUSE}"
 
     gomplate -f trino-values.gomplate.yaml -o trino-values.yaml
 
@@ -305,12 +289,23 @@ upgrade:
     echo "Upgrading Trino..."
 
     if [ -z "${TRINO_ICEBERG_ENABLED}" ]; then
-        if kubectl get secret trino-minio-secret -n ${TRINO_NAMESPACE} &>/dev/null; then
+        if kubectl get configmap trino-catalogs -n ${TRINO_NAMESPACE} -o jsonpath='{.data.iceberg\.properties}' &>/dev/null; then
             TRINO_ICEBERG_ENABLED="true"
             echo "Iceberg catalog: enabled"
         else
             TRINO_ICEBERG_ENABLED="false"
             echo "Iceberg catalog: disabled"
+        fi
+    fi
+
+    if [ "${TRINO_ICEBERG_ENABLED}" = "true" ]; then
+        # Extract warehouse name from existing catalog config
+        if [ -z "${TRINO_ICEBERG_WAREHOUSE}" ]; then
+            WAREHOUSE=$(kubectl get configmap trino-catalogs -n ${TRINO_NAMESPACE} \
+                -o jsonpath='{.data.iceberg\.properties}' 2>/dev/null | \
+                grep "iceberg.rest-catalog.warehouse=" | cut -d'=' -f2 || echo "default")
+            TRINO_ICEBERG_WAREHOUSE="${WAREHOUSE}"
+            echo "Warehouse: ${TRINO_ICEBERG_WAREHOUSE}"
         fi
     fi
 
@@ -324,6 +319,7 @@ upgrade:
         exit 1
     fi
     export TRINO_SHARED_SECRET="${shared_secret}"
+    export TRINO_ICEBERG_WAREHOUSE="${TRINO_ICEBERG_WAREHOUSE}"
 
     gomplate -f trino-values.gomplate.yaml -o trino-values.yaml
 

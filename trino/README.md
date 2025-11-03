@@ -93,7 +93,7 @@ Trino has a three-layer memory architecture that must be properly configured:
 
 #### Memory Relationship
 
-```
+```plain
 Kubernetes Memory (e.g., 1500Mi)
   └─ JVM Heap (e.g., 1500M, ~100%)
       └─ Query Memory (1GB) + Heap Headroom (~365MB)
@@ -144,7 +144,7 @@ TRINO_WORKER_JVM_HEAP=4G
 
 **Error: Invalid memory configuration**
 
-```
+```plain
 IllegalArgumentException: Invalid memory configuration.
 The sum of max query memory per node (1073741824) and heap headroom (382520525)
 cannot be larger than the available heap memory (1275068416)
@@ -159,7 +159,7 @@ cannot be larger than the available heap memory (1275068416)
 
 **Error: Pod stuck in Pending state**
 
-```
+```plain
 Warning  FailedScheduling  0/1 nodes are available: 1 Insufficient memory.
 ```
 
@@ -367,13 +367,15 @@ Queries Iceberg tables via Lakekeeper REST Catalog:
 - **Storage**: MinIO S3-compatible object storage
 - **REST Catalog**: Lakekeeper (Apache Iceberg REST Catalog implementation)
 - **Authentication**: OAuth2 client credentials flow with Keycloak
+- **S3 Credentials**: Always uses vended credentials (STS)
 
 #### How It Works
 
 1. Trino authenticates to Lakekeeper using OAuth2 (client credentials flow)
 2. Lakekeeper provides Iceberg table metadata from its catalog
-3. Trino reads actual data files directly from MinIO using static S3 credentials
-4. Vended credentials are disabled; Trino uses pre-configured MinIO access keys
+3. Lakekeeper also provides temporary S3 credentials (STS tokens) with each request
+4. Trino uses these temporary credentials to read data files directly from MinIO
+5. Credentials automatically expire and are refreshed as needed
 
 #### Configuration
 
@@ -384,7 +386,19 @@ The following settings are automatically configured when enabling the Iceberg ca
 - `lakekeeper` scope added to Trino client as default scope
 - Audience mapper in `lakekeeper` scope adds `aud: lakekeeper` to JWT tokens
 - S3 file system factory enabled (`fs.native-s3.enabled=true`)
-- Static MinIO credentials provided via Kubernetes secrets
+- Vended credentials enabled (`iceberg.rest-catalog.vended-credentials-enabled=true`)
+
+**Environment Variables:**
+
+- `TRINO_ICEBERG_WAREHOUSE`: Warehouse name (default: `default`)
+
+**Benefits of Vended Credentials:**
+
+- No need to distribute static S3 credentials to Trino
+- Automatic credential expiration and rotation via MinIO STS
+- Better security through temporary tokens
+- Centralized credential management through Lakekeeper
+- No static credential management required
 
 #### OAuth2 Scope and Audience
 
@@ -666,7 +680,7 @@ Data Sources:
     ├─ Metadata: Lakekeeper (REST Catalog)
     │   └─ OAuth2 → Keycloak (client credentials)
     └─ Data: MinIO (S3)
-        └─ Static credentials
+        └─ Vended credentials (STS)
 ```
 
 ### Key Components

@@ -97,20 +97,18 @@ catalogs:
     connector.name=iceberg
     iceberg.catalog.type=rest
     iceberg.rest-catalog.uri=http://lakekeeper.lakekeeper.svc.cluster.local:8181/catalog
-    iceberg.rest-catalog.warehouse=default
+    iceberg.rest-catalog.warehouse={{ .Env.TRINO_ICEBERG_WAREHOUSE }}
     iceberg.rest-catalog.security=OAUTH2
     iceberg.rest-catalog.oauth2.credential=${ENV:OAUTH2_CLIENT_ID}:${ENV:OAUTH2_CLIENT_SECRET}
     iceberg.rest-catalog.oauth2.server-uri=https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/token
     iceberg.rest-catalog.oauth2.scope=openid profile lakekeeper
     iceberg.rest-catalog.nested-namespace-enabled=true
-    iceberg.rest-catalog.vended-credentials-enabled=false
+    iceberg.rest-catalog.vended-credentials-enabled=true
     iceberg.unique-table-location=true
     fs.native-s3.enabled=true
     s3.region=us-east-1
     s3.endpoint=http://minio.{{ .Env.MINIO_NAMESPACE }}.svc.cluster.local:9000
     s3.path-style-access=true
-    s3.aws-access-key=${ENV:MINIO_ACCESS_KEY}
-    s3.aws-secret-key=${ENV:MINIO_SECRET_KEY}
 {{- end }}
 {{- else }}
 catalogs:
@@ -311,18 +309,6 @@ env:
       secretKeyRef:
         name: trino-postgres-secret
         key: password
-{{- end }}
-{{- if .Env.TRINO_ICEBERG_ENABLED }}
-  - name: MINIO_ACCESS_KEY
-    valueFrom:
-      secretKeyRef:
-        name: trino-minio-secret
-        key: access_key
-  - name: MINIO_SECRET_KEY
-    valueFrom:
-      secretKeyRef:
-        name: trino-minio-secret
-        key: secret_key
 {{- end }}
 
 envFrom: []
