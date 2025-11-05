@@ -275,6 +275,47 @@ This will:
 - Optionally delete PostgreSQL database
 - Remove Keycloak OIDC client
 
+## Troubleshooting
+
+### Error: "Project not found" when creating warehouse
+
+**Symptom:**
+
+```bash
+just lakekeeper::create-warehouse default warehouse
+# Error: Failed to create warehouse (HTTP 404)
+# Response: {"error":{"message":"Project not found","type":"ProjectNotFound","code":404}}
+```
+
+**Cause:**
+
+Lakekeeper requires **bootstrap** before creating warehouses. Bootstrap initializes the system by:
+
+- Setting the initial administrator
+- Creating the first project
+
+Warehouses must be created under a project. Without bootstrap, no project exists.
+
+**Solution:**
+
+Bootstrap Lakekeeper via Web UI:
+
+1. Access `https://<LAKEKEEPER_HOST>/ui/`
+2. Authenticate with Keycloak (use your OIDC user credentials)
+3. Follow the bootstrap wizard to:
+   - Accept terms of use
+   - Set initial administrator
+   - Create the first project
+
+**Verify Bootstrap Status:**
+
+Access the Web UI at `https://<LAKEKEEPER_HOST>/ui/`:
+
+- If bootstrap is **not complete**: Bootstrap wizard will be displayed
+- If bootstrap is **complete**: Normal UI will be displayed
+
+After bootstrap completes, you can create warehouses successfully.
+
 ## Documentation
 
 For more information, see the official documentation:
