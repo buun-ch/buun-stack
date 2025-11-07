@@ -257,14 +257,37 @@ Admin users can:
 4. Configure settings:
 
    ```plain
-   Name: Trino Iceberg
+   Name: Trino
    Metastore Loader: SqlAlchemyMetastoreLoader
-   Connection String: trino://trino.example.com:443/iceberg?SSL=true
-   Username: admin
-   Password: [from just trino::admin-password]
+   Connection String: trino://admin:<password>@trino.example.com:443/iceberg?SSL=true
    ```
 
-5. Link the Metastore to your Query Engine (Admin → Query Engines → Edit → Metastore)
+   **Important**: The Connection String must include username and password embedded in the URL format: `trino://username:password@host:port/catalog?SSL=true`
+
+5. Configure Connect_args section:
+
+   ```plain
+   Key: http_scheme
+   Value: https
+   ```
+
+   This setting ensures proper HTTPS connection handling for the Metastore loader.
+
+6. Enable Impersonate option:
+
+   ```plain
+   Impersonate: ON
+   ```
+
+   This ensures metadata is fetched as the logged-in user, consistent with query execution behavior. Each user will see tables and schemas they have access to.
+
+7. Link the Metastore to your Query Engine (Admin → Query Engines → Edit → Metastore)
+
+Trino admin password can be retrieved with:
+
+```bash
+just trino::admin-password
+```
 
 **Features**:
 
@@ -425,7 +448,7 @@ kubectl get pods -n querybook
 
 - **Metastore not loading tables**:
     - Verify Metastore configuration: Admin → Metastores → Edit
-    - Check connection string includes catalog: `trino://host:443/iceberg?SSL=true`
+    - Check connection string includes catalog: `trino://admin:password@host:443/iceberg?SSL=true`
     - Test Trino connection with admin credentials
     - Check worker pod logs for errors: `just querybook::logs worker`
 

@@ -197,70 +197,11 @@ See [MCP.md](./MCP.md) for detailed instructions on integrating Trino with Claud
 
 ### Metabase Integration
 
-Metabase connects to Trino using the JDBC driver (Starburst driver). You must use the external hostname with SSL/TLS for authenticated connections.
-
-#### Connection Configuration
-
-1. In Metabase, go to Admin → Databases → Add database
-2. Select **Database type**: Starburst
-3. Configure connection:
-
-    ```plain
-    Host: your-trino-host (e.g., trino.example.com)
-    Port: 443
-    Username: admin
-    Password: [from just trino::admin-password]
-    Catalog: postgresql  (or iceberg for Iceberg tables)
-    SSL: Yes
-    ```
-
-#### Catalog Selection
-
-- Use `postgresql` to query PostgreSQL database tables
-- Use `iceberg` to query Iceberg tables via Lakekeeper
-- You can create multiple Metabase connections, one for each catalog
+For detailed Metabase integration instructions, see [Metabase README](../metabase/README.md).
 
 ### Querybook Integration
 
-#### Connection Configuration
-
-1. In Querybook, create a new Environment and Query Engine
-2. Configure the Trino connection:
-
-    ```plain
-    Connection String: trino://your-trino-host:443?SSL=true
-    Username: admin
-    Password: [from just trino::admin-password]
-    Catalog: postgresql  (or iceberg for Iceberg tables)
-    ```
-
-3. Optional: Configure `Proxy_user_id` to enable user impersonation
-
-#### User Impersonation
-
-Querybook can execute queries as logged-in users via Trino's impersonation feature. Trino is configured with file-based access control that allows the `admin` user to impersonate any user.
-
-**Benefits:**
-
-- Querybook connects as `admin` but executes queries as the actual logged-in user
-- Proper query attribution and audit logging
-- User-specific access control (when configured)
-
-The impersonation rules are defined in `trino-values.gomplate.yaml`:
-
-```json
-{
-  "catalogs": [{"allow": "all"}],
-  "impersonation": [
-    {
-      "original_user": "admin",
-      "new_user": ".*"
-    }
-  ]
-}
-```
-
-See the [Access Control](#access-control) section for detailed impersonation configuration.
+For detailed Querybook integration instructions, see [Querybook README](../querybook/README.md).
 
 ### External Hostname Requirement
 
@@ -600,26 +541,6 @@ accessControl:
 3. Trino validates impersonation is allowed (admin → actual_username)
 4. Query executes with `actual_username` as the principal
 5. Audit logs show `actual_username`, not `admin`
-
-#### Example: Querybook Integration
-
-```python
-# Querybook connects to Trino
-connection = trino.dbapi.connect(
-    host="trino.example.com",
-    port=443,
-    user="admin",           # Authenticate as admin
-    http_scheme="https",
-    auth=trino.auth.BasicAuthentication("admin", "password")
-)
-
-# Execute query as logged-in user
-cursor = connection.cursor()
-cursor.execute("SELECT * FROM iceberg.sales",
-               http_headers={"X-Trino-User": "alice@example.com"})
-```
-
-Result: Query runs as `alice@example.com`, appears in Trino logs as executed by `alice@example.com`.
 
 **Use Cases:**
 
