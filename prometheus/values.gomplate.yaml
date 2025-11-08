@@ -60,6 +60,13 @@ prometheus:
             requests:
               storage: 50Gi
 
+    # ServiceMonitor selection
+    # Select ServiceMonitors with release label only in namespaces with enable-monitoring label
+    serviceMonitorSelectorNilUsesHelmValues: true
+    serviceMonitorNamespaceSelector:
+      matchLabels:
+        buun.channel/enable-monitoring: "true"
+
 {{- if .Env.PROMETHEUS_HOST }}
   ingress:
     enabled: true

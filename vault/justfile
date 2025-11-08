@@ -454,3 +454,7 @@ write-policy name file:
 # Login to Vault using OIDC
 login:
     @vault login -method=oidc
+
+# NOTE: Vault monitoring is not supported
+# Reason: Prometheus ServiceMonitor does not support custom HTTP headers (X-Vault-Token)
+# Alternative: Use Vault Exporter or manual Prometheus scrape_configs

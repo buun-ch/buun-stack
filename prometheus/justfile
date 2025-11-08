@@ -119,6 +119,9 @@ install: check-env
         --wait \
         -f values.yaml
 
+    # Label monitoring namespace to enable self-monitoring
+    kubectl label namespace ${PROMETHEUS_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+
     admin_password=$(just admin-password)
 
     echo ""

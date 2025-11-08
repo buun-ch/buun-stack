@@ -140,3 +140,4 @@ dist
 /custom
 /private/
 .mcp.json
+/.playwright-mcp/
