@@ -1,0 +1,127 @@
+---
+# Grafana Configuration
+grafana:
+  enabled: true
+
+  admin:
+    existingSecret: grafana-admin-credentials
+    userKey: admin-user
+    passwordKey: admin-password
+
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    hosts:
+      - {{ .Env.GRAFANA_HOST }}
+    tls:
+      - hosts:
+          - {{ .Env.GRAFANA_HOST }}
+
+  # Grafana configuration
+  grafana.ini:
+    server:
+      root_url: https://{{ .Env.GRAFANA_HOST }}
+{{- if eq (.Env.GRAFANA_OIDC_ENABLED | default "false") "true" }}
+    auth.generic_oauth:
+      enabled: true
+      name: Keycloak
+      allow_sign_up: true
+      client_id: grafana
+      client_secret: {{ .Env.GRAFANA_OIDC_CLIENT_SECRET }}
+      scopes: openid profile email groups
+      auth_url: https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/auth
+      token_url: https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/token
+      api_url: https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/userinfo
+      use_refresh_token: true
+      role_attribute_path: "contains(groups[*], 'grafana-admins') && 'Admin' || contains(groups[*], 'grafana-editors') && 'Editor' || 'Viewer'"
+      signout_redirect_url: https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/logout?post_logout_redirect_uri=https://{{ .Env.GRAFANA_HOST }}/login
+{{- end }}
+
+  # Persist Grafana data
+  persistence:
+    enabled: true
+    size: 10Gi
+
+# Prometheus Configuration
+prometheus:
+  prometheusSpec:
+    # Retention settings
+    retention: 30d
+    retentionSize: "50GB"
+
+    # Storage
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+
+{{- if .Env.PROMETHEUS_HOST }}
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    hosts:
+      - {{ .Env.PROMETHEUS_HOST }}
+    tls:
+      - hosts:
+          - {{ .Env.PROMETHEUS_HOST }}
+{{- end }}
+
+# Alertmanager Configuration
+alertmanager:
+  alertmanagerSpec:
+    # Storage
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+
+{{- if .Env.ALERTMANAGER_HOST }}
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    hosts:
+      - {{ .Env.ALERTMANAGER_HOST }}
+    tls:
+      - hosts:
+          - {{ .Env.ALERTMANAGER_HOST }}
+{{- end }}
+
+# Enable default monitoring targets
+kubeApiServer:
+  enabled: true
+
+kubelet:
+  enabled: true
+
+kubeControllerManager:
+  enabled: true
+
+coreDns:
+  enabled: true
+
+kubeEtcd:
+  enabled: true
+
+kubeScheduler:
+  enabled: true
+
+kubeProxy:
+  enabled: true
+
+kubeStateMetrics:
+  enabled: true
+
+nodeExporter:
+  enabled: true

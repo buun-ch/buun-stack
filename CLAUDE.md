@@ -57,6 +57,14 @@ just vault::setup-oidc-auth    # Configure Vault OIDC
 just k8s::setup-oidc-auth      # Enable k8s OIDC auth
 ```
 
+### Observability Stack Installation (Optional)
+
+```bash
+just prometheus::install       # Install kube-prometheus-stack (Prometheus + Grafana + Alertmanager)
+just prometheus::setup-oidc    # Configure Grafana OIDC with Keycloak
+# Future: Jaeger and OpenTelemetry Collector
+```
+
 ### Common Operations
 
 ```bash
@@ -72,6 +80,10 @@ just vault::get <path> <field>                # Retrieve secret
 just postgres::create-db <name>               # Create database
 just postgres::psql                           # PostgreSQL shell
 
+# Observability
+just prometheus::grafana-password             # Get Grafana admin password
+just keycloak::add-user-to-group <user> grafana-admins  # Grant Grafana admin access
+
 # Testing/validation
 kubectl --context <host>-oidc get nodes       # Test OIDC auth
 ```
@@ -84,6 +96,39 @@ kubectl --context <host>-oidc get nodes       # Test OIDC auth
 - **TypeScript Scripts**: `/keycloak/scripts/` contains Keycloak Admin API automation
 - **Templates**: `*.gomplate.yaml` files use environment variables from `.env.local`
 - **Custom Extensions**: `custom.just` can be created for additional workflows
+
+### Gomplate Template Pattern
+
+**Environment Variable Management:**
+- Justfile manages environment variables and their default values
+- Gomplate templates access variables using `{{ .Env.VAR }}`
+
+**Example justfile pattern:**
+```just
+# At the top of justfile - define variables with defaults
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+export GRAFANA_HOST := env("GRAFANA_HOST", "")
+
+# In recipes - export variables for gomplate
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export GRAFANA_OIDC_ENABLED="${GRAFANA_OIDC_ENABLED:-false}"
+    gomplate -f values.gomplate.yaml -o values.yaml
+```
+
+**Example gomplate template:**
+```yaml
+# values.gomplate.yaml
+namespace: {{ .Env.PROMETHEUS_NAMESPACE }}
+ingress:
+  hosts:
+    - {{ .Env.GRAFANA_HOST }}
+{{- if eq .Env.GRAFANA_OIDC_ENABLED "true" }}
+  oidc:
+    enabled: true
+{{- end }}
+```
 
 ### Authentication Flow
 

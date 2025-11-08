@@ -22,6 +22,7 @@ mod metabase
 mod minio
 mod oauth2-proxy
 mod postgres
+mod prometheus
 mod qdrant
 mod querybook
 mod superset

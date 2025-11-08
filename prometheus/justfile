@@ -1,0 +1,241 @@
+set fallback := true
+
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+export PROMETHEUS_CHART_VERSION := env("PROMETHEUS_CHART_VERSION", "79.4.0")
+export GRAFANA_HOST := env("GRAFANA_HOST", "")
+export PROMETHEUS_HOST := env("PROMETHEUS_HOST", "")
+export ALERTMANAGER_HOST := env("ALERTMANAGER_HOST", "")
+export GRAFANA_ADMIN_PASSWORD := env("GRAFANA_ADMIN_PASSWORD", "")
+export GRAFANA_OIDC_ENABLED := env("GRAFANA_OIDC_ENABLED", "false")
+export GRAFANA_OIDC_CLIENT_SECRET := env("GRAFANA_OIDC_CLIENT_SECRET", "")
+export KEYCLOAK_NAMESPACE := env("KEYCLOAK_NAMESPACE", "keycloak")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove prometheus-community
+
+# Create namespace
+create-namespace:
+    @kubectl get namespace ${PROMETHEUS_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${PROMETHEUS_NAMESPACE}
+
+# Delete namespace
+delete-namespace:
+    @kubectl delete namespace ${PROMETHEUS_NAMESPACE} --ignore-not-found
+
+# Create Grafana admin credentials
+create-credentials:
+    #!/bin/bash
+    set -euo pipefail
+    password=$(
+        gum input --prompt="Grafana admin password: " --password --width=100 \
+        --placeholder="Empty to generate a random password"
+    )
+    if [ -z "${password}" ]; then
+        password=$(just utils::random-password)
+        echo "Generated password: ${password}"
+    fi
+    just create-namespace
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Creating ExternalSecret..."
+        just put-admin-credentials-to-vault "${password}"
+
+        kubectl delete secret grafana-admin-credentials -n ${PROMETHEUS_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret grafana-admin-credentials -n ${PROMETHEUS_NAMESPACE} --ignore-not-found
+
+        gomplate -f grafana-admin-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/grafana-admin-credentials \
+            -n ${PROMETHEUS_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating secret directly..."
+        kubectl delete secret grafana-admin-credentials -n ${PROMETHEUS_NAMESPACE} --ignore-not-found
+
+        kubectl create secret generic grafana-admin-credentials -n ${PROMETHEUS_NAMESPACE} \
+            --from-literal=admin-user="admin" \
+            --from-literal=admin-password="${password}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just put-admin-credentials-to-vault "${password}"
+        fi
+    fi
+
+# Delete Grafana admin credentials
+delete-credentials:
+    @kubectl delete secret grafana-admin-credentials -n ${PROMETHEUS_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret grafana-admin-credentials -n ${PROMETHEUS_NAMESPACE} --ignore-not-found
+
+# Put admin credentials to Vault
+put-admin-credentials-to-vault password:
+    @just vault::put grafana/admin password={{ password }}
+    @echo "Admin credentials stored in Vault under 'grafana/admin'."
+
+# Delete admin credentials from Vault
+delete-admin-credentials-from-vault:
+    @just vault::delete grafana/admin
+    @echo "Admin credentials deleted from Vault."
+
+# Get Grafana admin password from secret
+admin-password:
+    @kubectl get secret -n ${PROMETHEUS_NAMESPACE} grafana-admin-credentials \
+        -o jsonpath="{.data.admin-password}" | base64 --decode
+    @echo
+
+# Install kube-prometheus-stack
+install: check-env
+    #!/bin/bash
+    set -euo pipefail
+    just create-namespace
+    just add-helm-repo
+
+    # Create credentials if not exists
+    if ! kubectl get secret grafana-admin-credentials -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        just create-credentials
+    fi
+
+    export GRAFANA_OIDC_ENABLED="${GRAFANA_OIDC_ENABLED:-false}"
+    export GRAFANA_OIDC_CLIENT_SECRET="${GRAFANA_OIDC_CLIENT_SECRET:-}"
+
+    gomplate -f values.gomplate.yaml -o values.yaml
+    helm upgrade --cleanup-on-fail --install kube-prometheus-stack \
+        prometheus-community/kube-prometheus-stack \
+        --version ${PROMETHEUS_CHART_VERSION} \
+        -n ${PROMETHEUS_NAMESPACE} \
+        --wait \
+        -f values.yaml
+
+    admin_password=$(just admin-password)
+
+    echo ""
+    echo "=== kube-prometheus-stack installed ==="
+    echo "Components installed:"
+    echo "  - Prometheus Operator"
+    echo "  - Prometheus"
+    echo "  - Grafana"
+    echo "  - Alertmanager"
+    echo "  - Node Exporter"
+    echo "  - Kube State Metrics"
+    echo ""
+    echo "Grafana URL: https://${GRAFANA_HOST}"
+    echo "Grafana admin user: admin"
+    echo "Grafana admin password: ${admin_password}"
+    echo ""
+    echo "To setup Keycloak OIDC authentication for Grafana:"
+    echo "  just prometheus::setup-oidc"
+
+# Uninstall kube-prometheus-stack
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} --ignore-not-found --wait
+    # Clean up CRDs
+    kubectl delete crd \
+        alertmanagerconfigs.monitoring.coreos.com \
+        alertmanagers.monitoring.coreos.com \
+        podmonitors.monitoring.coreos.com \
+        probes.monitoring.coreos.com \
+        prometheusagents.monitoring.coreos.com \
+        prometheuses.monitoring.coreos.com \
+        prometheusrules.monitoring.coreos.com \
+        scrapeconfigs.monitoring.coreos.com \
+        servicemonitors.monitoring.coreos.com \
+        thanosrulers.monitoring.coreos.com \
+        --ignore-not-found
+    just delete-namespace
+
+# Setup Keycloak OIDC authentication for Grafana
+setup-oidc:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up Keycloak OIDC authentication for Grafana..."
+
+    # Create Keycloak client for Grafana
+    just keycloak::delete-client "${KEYCLOAK_REALM}" "grafana" || true
+    oidc_client_secret=$(just utils::random-password)
+    redirect_urls="https://${GRAFANA_HOST}/login/generic_oauth"
+    just keycloak::create-client \
+        realm="${KEYCLOAK_REALM}" \
+        client_id="grafana" \
+        redirect_url="${redirect_urls}" \
+        client_secret="${oidc_client_secret}"
+    just keycloak::add-groups-mapper "grafana"
+    echo "✓ Keycloak client 'grafana' created"
+
+    # Create admin group if it doesn't exist
+    just keycloak::create-group "grafana-admins" "" "Grafana administrators group" || true
+
+    # Update Helm values with OIDC configuration
+    export GRAFANA_OIDC_CLIENT_SECRET="${oidc_client_secret}"
+    export GRAFANA_OIDC_ENABLED="true"
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    # Upgrade Helm release with new values
+    helm upgrade kube-prometheus-stack \
+        prometheus-community/kube-prometheus-stack \
+        --version ${PROMETHEUS_CHART_VERSION} \
+        -n ${PROMETHEUS_NAMESPACE} \
+        --wait \
+        -f values.yaml
+
+    echo ""
+    echo "=== OIDC Setup Complete ==="
+    echo "Grafana is now configured to use Keycloak for authentication"
+    echo ""
+    echo "To grant admin access to a user:"
+    echo "  just keycloak::add-user-to-group <username> grafana-admins"
+    echo ""
+    echo "Grafana URL: https://${GRAFANA_HOST}"
+
+# Disable OIDC authentication
+disable-oidc:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Disabling Keycloak OIDC authentication for Grafana..."
+
+    # Update Helm values to disable OIDC
+    export GRAFANA_OIDC_ENABLED="false"
+    export GRAFANA_OIDC_CLIENT_SECRET=""
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    # Upgrade Helm release with new values
+    helm upgrade kube-prometheus-stack \
+        prometheus-community/kube-prometheus-stack \
+        --version ${PROMETHEUS_CHART_VERSION} \
+        -n ${PROMETHEUS_NAMESPACE} \
+        --wait \
+        -f values.yaml
+
+    echo "✓ OIDC authentication disabled"
+
+# Get Grafana admin password
+grafana-password:
+    @just admin-password
+
+# Check the environment
+[private]
+check-env:
+    #!/bin/bash
+    set -euo pipefail
+    if [ -z "${GRAFANA_HOST}" ]; then
+        while [ -z "${GRAFANA_HOST}" ]; do
+            GRAFANA_HOST=$(
+                gum input --prompt="Grafana host: " --width=100 --placeholder="grafana.example.com"
+            )
+        done
+        just env::set GRAFANA_HOST="${GRAFANA_HOST}"
+    fi
