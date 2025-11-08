@@ -695,3 +695,63 @@ get-client-scope realm scope_name:
     export KEYCLOAK_REALM={{ realm }}
     export SCOPE_NAME={{ scope_name }}
     dotenvx run -q -f ../.env.local -- tsx ./scripts/get-client-scope.ts
+
+# Enable Prometheus monitoring
+enable-monitoring:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Enabling Prometheus monitoring for Keycloak..."
+
+    # Label namespace to enable monitoring
+    kubectl label namespace ${KEYCLOAK_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+
+    # Enable metrics in Keycloak CR
+    kubectl patch keycloak keycloak -n ${KEYCLOAK_NAMESPACE} --type=json -p '[
+        {
+            "op": "add",
+            "path": "/spec/additionalOptions/-",
+            "value": {
+                "name": "metrics-enabled",
+                "value": "true"
+            }
+        }
+    ]'
+
+    echo "Waiting for Keycloak to restart with metrics enabled..."
+    kubectl wait --for=condition=Ready keycloak/keycloak -n ${KEYCLOAK_NAMESPACE} --timeout=600s
+
+    # Create ServiceMonitor
+    echo "Creating ServiceMonitor..."
+    gomplate -f keycloak-servicemonitor.gomplate.yaml | kubectl apply -f -
+
+    kubectl get servicemonitor keycloak -n ${KEYCLOAK_NAMESPACE}
+    echo "✓ Keycloak monitoring enabled"
+
+# Disable Prometheus monitoring
+disable-monitoring:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Disabling Prometheus monitoring for Keycloak..."
+
+    # Delete ServiceMonitor
+    kubectl delete servicemonitor keycloak -n ${KEYCLOAK_NAMESPACE} --ignore-not-found
+
+    # Remove metrics option from Keycloak CR
+    kubectl patch keycloak keycloak -n ${KEYCLOAK_NAMESPACE} --type=json -p '[
+        {
+            "op": "remove",
+            "path": "/spec/additionalOptions",
+            "value": null
+        }
+    ]'
+    kubectl patch keycloak keycloak -n ${KEYCLOAK_NAMESPACE} --type=merge -p '{"spec":{"additionalOptions":[
+        {"name":"http-enabled","value":"true"},
+        {"name":"hostname-strict","value":"false"},
+        {"name":"hostname-strict-https","value":"false"},
+        {"name":"proxy","value":"edge"}
+    ]}}'
+
+    # Remove namespace label
+    kubectl label namespace ${KEYCLOAK_NAMESPACE} buun.channel/enable-monitoring-
+
+    echo "✓ Keycloak monitoring disabled"

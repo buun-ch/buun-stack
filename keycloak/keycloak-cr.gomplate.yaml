@@ -47,6 +47,8 @@ spec:
       value: "false"
     - name: proxy
       value: edge
+    - name: metrics-enabled
+      value: "true"
 
   # Bootstrap admin configuration
   bootstrapAdmin:

@@ -1,0 +1,22 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: keycloak
+  namespace: {{ .Env.KEYCLOAK_NAMESPACE }}
+  labels:
+    app: keycloak
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: keycloak
+  endpoints:
+    - port: management
+      path: /metrics
+      interval: 30s
+      scheme: http
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: 'vendor_(.*)'
+          targetLabel: __name__
+          replacement: 'keycloak_$1'
