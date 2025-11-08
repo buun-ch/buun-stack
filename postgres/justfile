@@ -606,3 +606,38 @@ restore db_name file:
         "pg_restore --clean --if-exists \
         -d postgresql://$(just postgres::admin-username):$(just postgres::admin-password)@localhost/{{ db_name }} \
         /var/lib/postgresql/data/db.dump"
+
+# Enable Prometheus monitoring
+enable-monitoring:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Enabling Prometheus PodMonitor for PostgreSQL cluster..."
+
+    # Label namespace to enable monitoring
+    kubectl label namespace ${CNPG_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+
+    # Enable PodMonitor
+    kubectl patch cluster postgres-cluster -n ${CNPG_NAMESPACE} --type=merge -p '{"spec":{"monitoring":{"enablePodMonitor":true}}}'
+
+    echo "Waiting for PodMonitor to be created..."
+    sleep 3
+
+    # Add release label to PodMonitor
+    kubectl label podmonitor postgres-cluster -n ${CNPG_NAMESPACE} release=kube-prometheus-stack --overwrite
+
+    kubectl get podmonitor -n ${CNPG_NAMESPACE} -l cnpg.io/cluster=postgres-cluster
+    echo "✓ PostgreSQL monitoring enabled"
+
+# Disable Prometheus monitoring
+disable-monitoring:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Disabling Prometheus PodMonitor for PostgreSQL cluster..."
+
+    # Disable PodMonitor
+    kubectl patch cluster postgres-cluster -n ${CNPG_NAMESPACE} --type=merge -p '{"spec":{"monitoring":{"enablePodMonitor":false}}}'
+
+    # Remove namespace label
+    kubectl label namespace ${CNPG_NAMESPACE} buun.channel/enable-monitoring- --ignore-not-found
+
+    echo "✓ PostgreSQL monitoring disabled"
