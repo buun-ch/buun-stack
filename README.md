@@ -27,6 +27,11 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
     - Automatically syncs secrets from Vault to Kubernetes Secrets
     - Provides secure secret rotation and lifecycle management
 
+### Observability (Optional)
+
+- **[Prometheus](https://prometheus.io/)**: Metrics collection and alerting
+- **[Grafana](https://grafana.com/)**: Metrics visualization and dashboards
+
 ### Storage (Optional)
 
 - **[Longhorn](https://longhorn.io/)**: Distributed block storage
@@ -126,6 +131,18 @@ Production-ready relational database:
 - **High Availability**: Clustered deployment with CloudNativePG
 - **pgvector Extension**: Vector similarity search for AI/ML workloads
 - **Multi-Tenant**: Shared database for Keycloak and applications
+
+### Prometheus and Grafana
+
+Comprehensive monitoring and observability stack:
+
+- **Metrics Collection**: Prometheus server with Prometheus Operator
+- **Visualization**: Grafana with customizable dashboards
+- **Alerting**: Alertmanager for alert routing and management
+- **Namespace-Based Control**: Explicit monitoring via labels
+- **OIDC Integration**: Optional Keycloak authentication for Grafana
+
+[📖 See Prometheus Documentation](./prometheus/README.md)
 
 ### External Secrets Operator
 
@@ -352,6 +369,7 @@ kubectl --context yourpc-oidc get nodes
 # Web interfaces
 # Vault: https://vault.yourdomain.com
 # Keycloak: https://auth.yourdomain.com
+# Grafana: https://grafana.yourdomain.com
 # Trino: https://trino.yourdomain.com
 # Querybook: https://querybook.yourdomain.com
 # Superset: https://superset.yourdomain.com
