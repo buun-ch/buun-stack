@@ -151,6 +151,7 @@ RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_
     feature-engine \
     kreuzberg \
     langfuse \
+    mlflow \
     pydantic-ai \
     ragas \
     smolagents \
