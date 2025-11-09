@@ -435,7 +435,7 @@ Demonstrates Salesforce data ingestion into an Iceberg data lake:
 - **Orchestration** with Dagster or Apache Airflow
 - **Query** with Trino and visualize in Superset/Metabase
 
-Key technologies: dlt, PyIceberg, Lakekeeper, Trino, MinIO
+Key technologies: dlt, Iceberg, Lakekeeper, Trino, MinIO
 
 ### E-commerce Lakehouse Analytics
 
@@ -449,13 +449,9 @@ Full-stack e-commerce application with integrated lakehouse analytics:
 - **Trino** queries across all data layers (raw, staging, marts)
 - **Superset/Metabase** for dashboards and business intelligence
 
-Key technologies: Next.js, Payload CMS, dlt, dbt, Iceberg, Trino, Superset, PostgreSQL
+Key technologies: Next.js, Payload CMS, dlt, dbt, Iceberg, Lakekeeper, Trino, Superset, Metabase
 
 Both projects demonstrate the medallion architecture (raw → staging → marts) and showcase how buun-stack components work together for production data workflows.
-
-## Troubleshooting
-
-- Check logs: `kubectl logs -n <namespace> <pod-name>`
 
 ## License
 
