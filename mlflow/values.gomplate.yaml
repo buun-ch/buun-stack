@@ -60,6 +60,8 @@ log:
 # Use oidc-auth-fastapi for FastAPI/ASGI compatibility with Uvicorn
 extraArgs:
   appName: "oidc-auth-fastapi"
+  # Limit to 1 worker to avoid /mlflow/metrics directory creation conflicts
+  workers: "1"
   # Allow connections from external hostname and Kubernetes internal access
   allowedHosts: "{{ .Env.MLFLOW_HOST }},{{ .Env.MLFLOW_HOST }}:443,mlflow.{{ .Env.MLFLOW_NAMESPACE }}.svc.cluster.local,mlflow.{{ .Env.MLFLOW_NAMESPACE }}.svc.cluster.local:5000,*"
 
