@@ -40,6 +40,7 @@ create-user-and-db username='' db_name='' password='':
 ```
 
 **Important Notes:**
+
 - Parameters must be passed in the exact order they appear in the recipe definition
 - Named parameter syntax in the recipe definition is only for documentation
 - Always quote parameters that contain special characters or spaces
@@ -100,10 +101,12 @@ kubectl --context <host>-oidc get nodes       # Test OIDC auth
 ### Gomplate Template Pattern
 
 **Environment Variable Management:**
+
 - Justfile manages environment variables and their default values
 - Gomplate templates access variables using `{{ .Env.VAR }}`
 
 **Example justfile pattern:**
+
 ```just
 # At the top of justfile - define variables with defaults
 export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
@@ -118,6 +121,7 @@ install:
 ```
 
 **Example gomplate template:**
+
 ```yaml
 # values.gomplate.yaml
 namespace: {{ .Env.PROMETHEUS_NAMESPACE }}
@@ -129,6 +133,53 @@ ingress:
     enabled: true
 {{- end }}
 ```
+
+### Prometheus ServiceMonitor Pattern
+
+```just
+export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+
+install:
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            fi
+        fi
+    else
+        MONITORING_ENABLED="false"
+    fi
+    # ... helm install
+
+    if [ "${MONITORING_ENABLED}" = "true" ]; then
+        kubectl label namespace ${NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+        gomplate -f servicemonitor.gomplate.yaml | kubectl apply -f -
+    fi
+```
+
+ServiceMonitor template (`servicemonitor.gomplate.yaml`):
+```yaml
+{{- if eq .Env.MONITORING_ENABLED "true" }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: my-service
+  namespace: {{ .Env.NAMESPACE }}
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: my-service
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+{{- end }}
+```
+
+**Requirements:** (1) Namespace label `buun.channel/enable-monitoring=true`, (2) ServiceMonitor label `release=kube-prometheus-stack`, (3) Deploy after helm install.
 
 ### Authentication Flow
 

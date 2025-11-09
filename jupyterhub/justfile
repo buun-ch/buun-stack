@@ -35,6 +35,8 @@ export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export VAULT_HOST := env("VAULT_HOST", "")
 export VAULT_ADDR := "https://" + VAULT_HOST
+export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
 
 [private]
 default:
@@ -76,6 +78,18 @@ install root_token='':
         export JUPYTERHUB_CRYPT_KEY=$(just utils::random-password)
         echo "JUPYTERHUB_CRYPT_KEY=${JUPYTERHUB_CRYPT_KEY}" >> ../../.env.local
         echo "✓ JUPYTERHUB_CRYPT_KEY generated and saved to .env.local"
+    fi
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring (ServiceMonitor)?"; then
+                MONITORING_ENABLED="true"
+            else
+                MONITORING_ENABLED="false"
+            fi
+        fi
+    else
+        MONITORING_ENABLED="false"
     fi
 
     just create-namespace
@@ -185,6 +199,14 @@ install root_token='':
         --timeout=20m -f jupyterhub-values.yaml
     # wait deployments manually because `helm upgrade --wait` does not work for JupyterHub
     just k8s::wait-deployments-ready ${JUPYTERHUB_NAMESPACE} hub proxy
+
+    if [ "${MONITORING_ENABLED}" = "true" ]; then
+        echo "Enabling Prometheus monitoring for namespace ${JUPYTERHUB_NAMESPACE}..."
+        kubectl label namespace ${JUPYTERHUB_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+        echo "Deploying ServiceMonitor for Prometheus..."
+        gomplate -f jupyterhub-servicemonitor.gomplate.yaml | kubectl apply -f -
+        echo "✓ ServiceMonitor deployed"
+    fi
 
 # Uninstall JupyterHub
 uninstall:

@@ -1,0 +1,22 @@
+{{- if eq .Env.MONITORING_ENABLED "true" }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: jupyterhub-hub
+  namespace: {{ .Env.JUPYTERHUB_NAMESPACE }}
+  labels:
+    app.kubernetes.io/name: jupyterhub
+    app.kubernetes.io/component: hub
+    release: kube-prometheus-stack
+spec:
+  jobLabel: jupyterhub-hub
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jupyterhub
+      app.kubernetes.io/component: hub
+  endpoints:
+    - port: hub
+      path: /hub/metrics
+      interval: 30s
+      scrapeTimeout: 10s
+{{- end }}

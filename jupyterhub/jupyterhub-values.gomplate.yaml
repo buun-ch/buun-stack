@@ -39,6 +39,7 @@ hub:
     JupyterHub:
       authenticator_class: generic-oauth
       admin_access: false
+      authenticate_prometheus: false
 
     Authenticator:
       enable_auth_state: true
@@ -131,6 +132,19 @@ hub:
 
   podSecurityContext:
     fsGroup: {{ .Env.JUPYTER_FSGID }}
+
+  networkPolicy:
+    ingress:
+      - from:
+          - podSelector:
+              matchLabels:
+                hub.jupyter.org/network-access-hub: "true"
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: {{ .Env.PROMETHEUS_NAMESPACE }}
+        ports:
+          - port: http
+            protocol: TCP
 
 proxy:
   service:
