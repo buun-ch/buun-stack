@@ -1,0 +1,293 @@
+set fallback := true
+
+export MLFLOW_NAMESPACE := env("MLFLOW_NAMESPACE", "mlflow")
+export MLFLOW_CHART_VERSION := env("MLFLOW_CHART_VERSION", "1.8.0")
+export MLFLOW_HOST := env("MLFLOW_HOST", "")
+export POSTGRES_NAMESPACE := env("POSTGRES_NAMESPACE", "postgres")
+export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add community-charts https://community-charts.github.io/helm-charts
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove community-charts
+
+# Create namespace
+create-namespace:
+    @kubectl get namespace ${MLFLOW_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${MLFLOW_NAMESPACE}
+
+# Delete namespace
+delete-namespace:
+    @kubectl delete namespace ${MLFLOW_NAMESPACE} --ignore-not-found
+
+# Setup PostgreSQL database and user for MLflow
+setup-postgres-db:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up PostgreSQL database for MLflow..."
+
+    if just postgres::db-exists mlflow &>/dev/null; then
+        echo "Database 'mlflow' already exists."
+    else
+        echo "Creating new database 'mlflow'..."
+        just postgres::create-db mlflow
+    fi
+
+    if just postgres::user-exists mlflow &>/dev/null; then
+        echo "User 'mlflow' already exists."
+        if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            if db_password=$(just vault::get mlflow/postgres password 2>/dev/null); then
+                echo "Using existing password from Vault."
+            else
+                echo "Generating new password and updating Vault..."
+                db_password=$(just utils::random-password)
+                just postgres::psql -c "ALTER USER mlflow WITH PASSWORD '${db_password}';"
+            fi
+        else
+            echo "Generating new password for existing user..."
+            db_password=$(just utils::random-password)
+            just postgres::psql -c "ALTER USER mlflow WITH PASSWORD '${db_password}';"
+        fi
+    else
+        echo "Creating new user 'mlflow'..."
+        db_password=$(just utils::random-password)
+        just postgres::create-user mlflow "${db_password}"
+    fi
+
+    echo "Ensuring database permissions..."
+    just postgres::grant mlflow mlflow
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing credentials in Vault..."
+        just vault::put mlflow/postgres username=mlflow password="${db_password}"
+        echo "PostgreSQL credentials stored in Vault"
+    else
+        echo "External Secrets not available. Password will be stored in Kubernetes Secret only."
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put mlflow/postgres username=mlflow password="${db_password}"
+            echo "PostgreSQL credentials also stored in Vault for backup"
+        fi
+    fi
+    echo "PostgreSQL setup completed"
+
+# Create PostgreSQL credentials secret
+create-db-secret:
+    #!/bin/bash
+    set -euo pipefail
+    just create-namespace
+    echo "Creating PostgreSQL credentials secret..."
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Creating ExternalSecret for PostgreSQL credentials..."
+        kubectl delete secret mlflow-db-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret mlflow-db-external-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+
+        gomplate -f mlflow-db-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/mlflow-db-external-secret \
+            -n ${MLFLOW_NAMESPACE} --timeout=60s
+        echo "ExternalSecret synced successfully"
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        db_username=$(just vault::get mlflow/postgres username 2>/dev/null || echo "mlflow")
+        db_password=$(just vault::get mlflow/postgres password 2>/dev/null)
+
+        if [ -z "${db_password}" ]; then
+            echo "Error: PostgreSQL password not found in Vault"
+            echo "Please run 'just mlflow::setup-postgres-db' first"
+            exit 1
+        fi
+
+        kubectl delete secret mlflow-db-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+        kubectl create secret generic mlflow-db-secret -n ${MLFLOW_NAMESPACE} \
+            --from-literal=username="${db_username}" \
+            --from-literal=password="${db_password}"
+        echo "Kubernetes Secret created"
+    fi
+
+# Delete PostgreSQL secret
+delete-db-secret:
+    @kubectl delete secret mlflow-db-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret mlflow-db-external-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+
+# Create MinIO/S3 credentials secret
+create-s3-secret:
+    #!/bin/bash
+    set -euo pipefail
+    just create-namespace
+    echo "Creating MinIO/S3 credentials secret..."
+
+    if ! kubectl get secret minio -n ${MINIO_NAMESPACE} &>/dev/null; then
+        echo "Error: MinIO root credentials not found"
+        echo "Please install MinIO first with 'just minio::install'"
+        exit 1
+    fi
+
+    accesskey=$(kubectl get secret minio -n ${MINIO_NAMESPACE} \
+        -o jsonpath='{.data.rootUser}' | base64 --decode)
+    secretkey=$(kubectl get secret minio -n ${MINIO_NAMESPACE} \
+        -o jsonpath='{.data.rootPassword}' | base64 --decode)
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Creating ExternalSecret for MinIO credentials..."
+        just vault::put mlflow/s3 accesskey="${accesskey}" secretkey="${secretkey}"
+
+        kubectl delete secret mlflow-s3-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret mlflow-s3-external-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+
+        gomplate -f mlflow-s3-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/mlflow-s3-external-secret \
+            -n ${MLFLOW_NAMESPACE} --timeout=60s
+        echo "ExternalSecret synced successfully"
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret mlflow-s3-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+        kubectl create secret generic mlflow-s3-secret -n ${MLFLOW_NAMESPACE} \
+            --from-literal=AWS_ACCESS_KEY_ID="${accesskey}" \
+            --from-literal=AWS_SECRET_ACCESS_KEY="${secretkey}"
+        echo "Kubernetes Secret created"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put mlflow/s3 accesskey="${accesskey}" secretkey="${secretkey}"
+            echo "MinIO credentials also stored in Vault for backup"
+        fi
+    fi
+
+# Delete MinIO/S3 secret
+delete-s3-secret:
+    @kubectl delete secret mlflow-s3-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret mlflow-s3-external-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+
+# Install MLflow
+install: check-env
+    #!/bin/bash
+    set -euo pipefail
+    echo "Installing MLflow..."
+    just create-namespace
+
+    if ! kubectl get service postgres-cluster-rw -n ${POSTGRES_NAMESPACE} &>/dev/null; then
+        echo "Error: PostgreSQL cluster not found"
+        echo "Please install PostgreSQL first with 'just postgres::install'"
+        exit 1
+    fi
+
+    if ! kubectl get service minio -n ${MINIO_NAMESPACE} &>/dev/null; then
+        echo "Error: MinIO not found"
+        echo "Please install MinIO first with 'just minio::install'"
+        exit 1
+    fi
+
+    just setup-postgres-db
+    just create-db-secret
+    just create-s3-secret
+
+    # Create mlflow bucket in MinIO if it doesn't exist
+    if ! just minio::bucket-exists mlflow; then
+        echo "Creating 'mlflow' bucket in MinIO..."
+        just minio::create-bucket mlflow
+    else
+        echo "Bucket 'mlflow' already exists"
+    fi
+
+    just add-helm-repo
+
+    echo "Generating Helm values..."
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    echo "Installing MLflow Helm chart from Community Charts..."
+    helm upgrade --cleanup-on-fail --install mlflow \
+        community-charts/mlflow \
+        --version ${MLFLOW_CHART_VERSION} \
+        -n ${MLFLOW_NAMESPACE} \
+        --wait \
+        --timeout=10m \
+        -f values.yaml
+
+    echo ""
+    echo "=== MLflow installed ==="
+    echo "MLflow URL: https://${MLFLOW_HOST}"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Configure OAuth2 Proxy for authentication (recommended)"
+    echo "  2. Access MLflow UI at https://${MLFLOW_HOST}"
+
+# Upgrade MLflow
+upgrade: check-env
+    #!/bin/bash
+    set -euo pipefail
+    echo "Upgrading MLflow..."
+
+    echo "Generating Helm values..."
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    echo "Upgrading MLflow Helm chart from Community Charts..."
+    helm upgrade mlflow \
+        community-charts/mlflow \
+        --version ${MLFLOW_CHART_VERSION} \
+        -n ${MLFLOW_NAMESPACE} \
+        --wait \
+        --timeout=10m \
+        -f values.yaml
+
+    echo "MLflow upgraded successfully"
+    echo "Access MLflow at: https://${MLFLOW_HOST}"
+
+# Uninstall MLflow
+uninstall delete-db='true':
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling MLflow..."
+    helm uninstall mlflow -n ${MLFLOW_NAMESPACE} --ignore-not-found
+    just delete-db-secret
+    just delete-s3-secret
+    just delete-namespace
+    if [ "{{ delete-db }}" = "true" ]; then
+        just postgres::delete-db mlflow || true
+        just postgres::delete-user mlflow || true
+    fi
+    echo "MLflow uninstalled"
+
+# Clean up all MLflow resources
+cleanup:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete the MLflow database, user, and all secrets."
+    if gum confirm "Are you sure you want to proceed?"; then
+        echo "Cleaning up MLflow resources..."
+        just postgres::delete-db mlflow || true
+        just postgres::delete-user mlflow || true
+        just vault::delete mlflow/postgres || true
+        just vault::delete mlflow/s3 || true
+        echo "Cleanup completed"
+    else
+        echo "Cleanup cancelled"
+    fi
+
+# Check the environment
+[private]
+check-env:
+    #!/bin/bash
+    set -euo pipefail
+    if [ -z "${MLFLOW_HOST}" ]; then
+        while [ -z "${MLFLOW_HOST}" ]; do
+            MLFLOW_HOST=$(
+                gum input --prompt="MLflow host (FQDN): " --width=100 \
+                --placeholder="e.g., mlflow.example.com"
+            )
+        done
+        just env::set MLFLOW_HOST="${MLFLOW_HOST}"
+    fi

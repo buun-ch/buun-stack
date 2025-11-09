@@ -1,0 +1,108 @@
+---
+# Replica count
+replicaCount: 1
+
+# Image configuration (Community Charts uses burakince/mlflow)
+image:
+  repository: burakince/mlflow
+  pullPolicy: IfNotPresent
+  tag: "3.6.0"  # MLflow 3.6.0
+
+# Backend store configuration (PostgreSQL)
+backendStore:
+  # Enable database migration
+  databaseMigration: true
+  # Enable database connection check
+  databaseConnectionCheck: true
+
+  postgres:
+    enabled: true
+    host: "postgres-cluster-rw.{{ .Env.POSTGRES_NAMESPACE }}.svc.cluster.local"
+    port: 5432
+    database: "mlflow"
+    driver: ""
+
+  # Use existing Kubernetes secret for database credentials
+  existingDatabaseSecret:
+    name: "mlflow-db-secret"
+    usernameKey: "username"
+    passwordKey: "password"
+
+# Artifact root configuration (MinIO/S3)
+artifactRoot:
+  # Enable proxied artifact storage
+  proxiedArtifactStorage: true
+
+  s3:
+    enabled: true
+    bucket: "mlflow"
+    path: ""
+
+    # Use existing Kubernetes secret for S3 credentials
+    existingSecret:
+      name: "mlflow-s3-secret"
+      keyOfAccessKeyId: "AWS_ACCESS_KEY_ID"
+      keyOfSecretAccessKey: "AWS_SECRET_ACCESS_KEY"
+
+# Extra environment variables for S3/MinIO configuration
+extraEnvVars:
+  MLFLOW_S3_ENDPOINT_URL: "http://minio.{{ .Env.MINIO_NAMESPACE }}.svc.cluster.local:9000"
+  MLFLOW_S3_IGNORE_TLS: "true"
+  # Disable security middleware when using Gunicorn (env var approach)
+  MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE: "true"
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 5000
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: "traefik"
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: {{ .Env.MLFLOW_HOST }}
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - {{ .Env.MLFLOW_HOST }}
+
+# ServiceMonitor for Prometheus
+serviceMonitor:
+  enabled: true
+  useServicePort: false
+  namespace: "{{ .Env.PROMETHEUS_NAMESPACE }}"
+  interval: 30s
+  telemetryPath: /metrics
+  labels:
+    prometheus: kube-prometheus
+  timeout: 10s
+
+# Resource limits
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 100m
+    memory: 512Mi
+
+# Security context
+podSecurityContext:
+  fsGroup: 1001
+  fsGroupChangePolicy: "OnRootMismatch"
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  privileged: false
+  runAsUser: 1001
+  runAsGroup: 1001

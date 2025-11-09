@@ -19,6 +19,7 @@ mod k8s
 mod lakekeeper
 mod longhorn
 mod metabase
+mod mlflow
 mod minio
 mod oauth2-proxy
 mod postgres
