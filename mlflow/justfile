@@ -300,7 +300,8 @@ install:
             auth_db_uri="${auth_db_uri}"
 
         kubectl delete secret mlflow-oidc-config -n ${MLFLOW_NAMESPACE} --ignore-not-found
-        kubectl delete externalsecret mlflow-oidc-external-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret mlflow-oidc-external-secret -n ${MLFLOW_NAMESPACE} \
+            --ignore-not-found
 
         export OIDC_CLIENT_SECRET="${oidc_client_secret}"
         gomplate -f mlflow-oidc-external-secret.gomplate.yaml | kubectl apply -f -
@@ -324,9 +325,7 @@ install:
 
         # Store in Vault for backup if available
         if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
-            just vault::put "mlflow/oidc" \
-                client_id="mlflow" \
-                client_secret="${oidc_client_secret}" \
+            just vault::put "mlflow/oidc" client_id="mlflow" client_secret="${oidc_client_secret}" \
                 auth_db_uri="${auth_db_uri}"
         fi
     fi
@@ -336,13 +335,8 @@ install:
     gomplate -f values.gomplate.yaml -o values.yaml
 
     echo "Installing MLflow Helm chart from Community Charts with OIDC..."
-    helm upgrade --cleanup-on-fail --install mlflow \
-        community-charts/mlflow \
-        --version ${MLFLOW_CHART_VERSION} \
-        -n ${MLFLOW_NAMESPACE} \
-        --wait \
-        --timeout=10m \
-        -f values.yaml
+    helm upgrade --cleanup-on-fail --install mlflow community-charts/mlflow \
+        --version ${MLFLOW_CHART_VERSION} -n ${MLFLOW_NAMESPACE} --wait --timeout=10m -f values.yaml
 
     echo ""
     echo "=== MLflow installed with OIDC authentication ==="
@@ -379,13 +373,8 @@ upgrade:
     gomplate -f values.gomplate.yaml -o values.yaml
 
     echo "Upgrading MLflow Helm chart from Community Charts..."
-    helm upgrade mlflow \
-        community-charts/mlflow \
-        --version ${MLFLOW_CHART_VERSION} \
-        -n ${MLFLOW_NAMESPACE} \
-        --wait \
-        --timeout=10m \
-        -f values.yaml
+    helm upgrade mlflow community-charts/mlflow \
+        --version ${MLFLOW_CHART_VERSION} -n ${MLFLOW_NAMESPACE} --wait --timeout=10m -f values.yaml
 
     echo "MLflow upgraded successfully"
     echo "Access MLflow at: https://${MLFLOW_HOST}"
@@ -399,7 +388,8 @@ uninstall delete-db='true':
     just delete-db-secret
     just delete-s3-secret
     kubectl delete secret mlflow-oidc-config -n ${MLFLOW_NAMESPACE} --ignore-not-found
-    kubectl delete externalsecret mlflow-oidc-external-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+    kubectl delete externalsecret mlflow-oidc-external-secret -n ${MLFLOW_NAMESPACE} \
+        --ignore-not-found
     just delete-namespace
     if [ "{{ delete-db }}" = "true" ]; then
         just postgres::delete-db mlflow || true
