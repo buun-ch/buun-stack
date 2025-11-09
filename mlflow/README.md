@@ -15,6 +15,8 @@ This module deploys MLflow using the Community Charts Helm chart with:
 - **Group-based access control** via Keycloak groups
 - **Prometheus metrics** for monitoring
 
+> **⚠️ Authentication Note**: This deployment uses `mlflow-oidc-auth` which replaces MLflow's standard authentication. For programmatic access, use HTTP Basic Auth with `MLFLOW_TRACKING_USERNAME` (full email) and `MLFLOW_TRACKING_PASSWORD` (access token from UI). See [Authentication for API Access](#authentication-for-api-access) for details.
+
 ## Prerequisites
 
 - Kubernetes cluster (k3s)
@@ -156,9 +158,13 @@ with mlflow.start_run():
 
 #### Authentication for API Access
 
-For programmatic access (Python scripts, notebooks, CI/CD), you need to create an access key.
+**IMPORTANT**: mlflow-oidc-auth replaces MLflow's standard token authentication system entirely. The "tokens" created in the Web UI are actually passwords for HTTP Basic Authentication, not Bearer tokens.
 
-**Step 1: Create Access Key via Web UI**
+For programmatic access (Python scripts, notebooks, CI/CD), use one of the following methods:
+
+##### Method 1: HTTP Basic Authentication with Access Token (Recommended)
+
+**Step 1: Create Access Token via Web UI**
 
 1. Navigate to `https://your-mlflow-host/` and log in via Keycloak
 2. You will be redirected to the MLflow Permission Manager UI
@@ -166,25 +172,22 @@ For programmatic access (Python scripts, notebooks, CI/CD), you need to create a
 4. In the dialog that appears:
    - Select an expiration date (maximum 1 year from today)
    - Click **"Request Token"**
-5. Copy the generated access key from the "Access Key" field
+5. Copy the generated access token (e.g., `PRI6u33USGwyxlzYqWzVwPrG`)
 6. Store it securely (you won't be able to retrieve it again)
 
-**Step 2: Use Access Key in Python**
+**Step 2: Use Access Token in Python**
 
-Set the access key as an environment variable or in your Python code:
+The access token is used as a **password** with HTTP Basic Authentication. Your username must be your **full email address** (e.g., `user@domain.com`):
 
 ```python
 import os
 import mlflow
 
-# Method 1: Set environment variable (recommended)
-os.environ["MLFLOW_TRACKING_TOKEN"] = "your-access-key-here"
-os.environ["MLFLOW_TRACKING_URI"] = "https://mlflow.example.com"
+# IMPORTANT: Username must be your full email address (as registered in Keycloak)
+os.environ["MLFLOW_TRACKING_USERNAME"] = "user@domain.com"
+os.environ["MLFLOW_TRACKING_PASSWORD"] = "your-access-token-here"  # Token from Web UI
 
-# Method 2: Set tracking URI directly
 mlflow.set_tracking_uri("https://mlflow.example.com")
-
-# Now you can use MLflow client
 mlflow.set_experiment("my-experiment")
 
 with mlflow.start_run():
@@ -203,8 +206,11 @@ from sklearn.datasets import load_iris
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
-# Configure MLflow
-os.environ["MLFLOW_TRACKING_TOKEN"] = "your-access-key-here"
+# Configure MLflow authentication
+# Username MUST be your full email address (e.g., user@domain.com)
+os.environ["MLFLOW_TRACKING_USERNAME"] = "user@domain.com"
+os.environ["MLFLOW_TRACKING_PASSWORD"] = "your-access-token-here"
+
 mlflow.set_tracking_uri("https://mlflow.example.com")
 mlflow.set_experiment("iris-classification")
 
@@ -229,8 +235,9 @@ with mlflow.start_run():
     accuracy = accuracy_score(y_test, y_pred)
     mlflow.log_metric("accuracy", accuracy)
 
-    # Log model
-    mlflow.sklearn.log_model(clf, "model")
+    # Log model with input example for signature inference
+    input_example = X_train[:5]
+    mlflow.sklearn.log_model(sk_model=clf, name="model", input_example=input_example)
 
     print(f"Model logged with accuracy: {accuracy}")
 ```
@@ -241,7 +248,8 @@ Create a `.env` file in your project:
 
 ```bash
 MLFLOW_TRACKING_URI=https://mlflow.example.com
-MLFLOW_TRACKING_TOKEN=your-access-key-here
+MLFLOW_TRACKING_USERNAME=user@domain.com
+MLFLOW_TRACKING_PASSWORD=your-access-token-here
 ```
 
 Load it in your Python code:
@@ -250,20 +258,52 @@ Load it in your Python code:
 from dotenv import load_dotenv
 import mlflow
 
-load_dotenv()  # Loads MLFLOW_TRACKING_URI and MLFLOW_TRACKING_TOKEN
+load_dotenv()  # Loads credentials from .env file
 
 mlflow.set_experiment("my-experiment")
 with mlflow.start_run():
     mlflow.log_param("param1", 5)
 ```
 
+##### Method 2: JWT Bearer Token from Keycloak
+
+For advanced use cases, you can obtain a JWT token directly from Keycloak:
+
+```python
+import os
+import requests
+import mlflow
+
+# Get JWT token from Keycloak
+token_response = requests.post(
+    "https://auth.example.com/realms/buunstack/protocol/openid-connect/token",
+    data={
+        'grant_type': 'password',
+        'client_id': 'mlflow',
+        'client_secret': 'your-client-secret',  # From Vault
+        'username': 'user@domain.com',
+        'password': 'your-keycloak-password',
+        'scope': 'openid profile email groups'
+    },
+    verify=False
+)
+
+access_token = token_response.json()['access_token']
+os.environ["MLFLOW_TRACKING_TOKEN"] = access_token
+
+mlflow.set_tracking_uri("https://mlflow.example.com")
+mlflow.set_experiment("my-experiment")
+```
+
 **Important Notes**
 
-- Access keys have an expiration date (max 1 year)
-- Store access keys securely (use environment variables or secret management)
-- Never commit access keys to version control
-- Each user should create their own access key
-- Expired keys need to be regenerated via the Web UI
+- **Username format**: Must be your full email address (e.g., `user@domain.com`), not just the username
+- **Access tokens expire**: Maximum lifetime is 1 year, needs regeneration via Web UI
+- **Token is a password**: The Web UI "token" is used with Basic Auth, not as a Bearer token
+- **MLflow standard tokens don't work**: mlflow-oidc-auth replaces MLflow's built-in authentication
+- **Security**: Store credentials in environment variables or secret management systems
+- **Never commit**: Don't commit credentials to version control
+- **Per-user tokens**: Each user should create and use their own access token
 
 ### Model Registry
 
@@ -326,12 +366,15 @@ MLflow Server (HTTP inside cluster)
 
 ## Authentication
 
+**IMPORTANT**: This MLflow deployment uses `mlflow-oidc-auth` plugin, which replaces MLflow's standard authentication system. MLflow's built-in token authentication does not work with this setup.
+
 ### User Login (OIDC)
 
 - Users authenticate via Keycloak
 - Standard OIDC flow with Authorization Code grant
 - Group membership retrieved from `groups` claim in UserInfo
 - Users automatically created on first login
+- Username is stored as full email address (e.g., `user@domain.com`)
 
 ### Access Control
 

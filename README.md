@@ -40,6 +40,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 ### Data & Analytics (Optional)
 
 - **[JupyterHub](https://jupyter.org/hub)**: Interactive computing with collaborative notebooks
+- **[MLflow](https://mlflow.org/)**: Machine learning lifecycle management with experiment tracking and model registry
 - **[Trino](https://trino.io/)**: Distributed SQL query engine for querying multiple data sources
 - **[Querybook](https://www.querybook.org/)**: Big data querying UI with notebook interface
 - **[ClickHouse](https://clickhouse.com/)**: High-performance columnar analytics database
@@ -169,6 +170,16 @@ Multi-user platform for interactive computing:
 - **Collaborative**: Shared computing environment for teams
 
 [📖 See JupyterHub Documentation](./jupyterhub/README.md)
+
+### MLflow
+
+Machine learning lifecycle management platform:
+
+- **Experiment Tracking**: Log parameters, metrics, and artifacts for ML experiments
+- **Model Registry**: Version and manage ML models with deployment lifecycle
+- **Keycloak Authentication**: OAuth2 integration with group-based access control
+
+[📖 See MLflow Documentation](./mlflow/README.md)
 
 ### Apache Superset
 
@@ -376,6 +387,7 @@ kubectl --context yourpc-oidc get nodes
 # Metabase: https://metabase.yourdomain.com
 # Airflow: https://airflow.yourdomain.com
 # JupyterHub: https://jupyter.yourdomain.com
+# MLflow: https://mlflow.yourdomain.com
 ```
 
 ## Customization
