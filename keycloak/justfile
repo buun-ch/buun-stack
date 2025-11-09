@@ -269,6 +269,16 @@ add-audience-mapper-to-scope realm scope_name audience:
     export KEYCLOAK_AUDIENCE={{ audience }}
     dotenvx run -q -f ../.env.local -- tsx ./scripts/add-audience-mapper-to-scope.ts
 
+# Add groups mapper to client scope
+add-groups-mapper-to-scope realm scope_name:
+    #!/bin/bash
+    set -euo pipefail
+    export KEYCLOAK_ADMIN_USER=$(just admin-username)
+    export KEYCLOAK_ADMIN_PASSWORD=$(just admin-password)
+    export KEYCLOAK_REALM={{ realm }}
+    export SCOPE_NAME={{ scope_name }}
+    dotenvx run -q -f ../.env.local -- tsx ./scripts/add-groups-mapper-to-scope.ts
+
 # Delete Keycloak client
 delete-client realm client_id:
     #!/bin/bash
