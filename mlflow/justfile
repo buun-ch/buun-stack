@@ -334,9 +334,19 @@ install:
     echo "Generating Helm values with OIDC enabled..."
     gomplate -f values.gomplate.yaml -o values.yaml
 
+    echo "Creating Traefik Middleware..."
+    gomplate -f mlflow-middleware.gomplate.yaml -o mlflow-middleware.yaml
+    kubectl apply -f mlflow-middleware.yaml
+
     echo "Installing MLflow Helm chart from Community Charts with OIDC..."
     helm upgrade --cleanup-on-fail --install mlflow community-charts/mlflow \
         --version ${MLFLOW_CHART_VERSION} -n ${MLFLOW_NAMESPACE} --wait --timeout=10m -f values.yaml
+
+    if [ "${MONITORING_ENABLED}" = "true" ]; then
+        echo "Enabling Prometheus monitoring for namespace ${MLFLOW_NAMESPACE}..."
+        kubectl label namespace ${MLFLOW_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+        echo "✓ Monitoring enabled"
+    fi
 
     echo ""
     echo "=== MLflow installed with OIDC authentication ==="
@@ -372,6 +382,10 @@ upgrade:
     echo "Generating Helm values..."
     gomplate -f values.gomplate.yaml -o values.yaml
 
+    echo "Creating Traefik Middleware..."
+    gomplate -f mlflow-middleware.gomplate.yaml -o mlflow-middleware.yaml
+    kubectl apply -f mlflow-middleware.yaml
+
     echo "Upgrading MLflow Helm chart from Community Charts..."
     helm upgrade mlflow community-charts/mlflow \
         --version ${MLFLOW_CHART_VERSION} -n ${MLFLOW_NAMESPACE} --wait --timeout=10m -f values.yaml
@@ -390,6 +404,7 @@ uninstall delete-db='true':
     kubectl delete secret mlflow-oidc-config -n ${MLFLOW_NAMESPACE} --ignore-not-found
     kubectl delete externalsecret mlflow-oidc-external-secret -n ${MLFLOW_NAMESPACE} \
         --ignore-not-found
+    kubectl delete middleware mlflow-headers -n ${MLFLOW_NAMESPACE} --ignore-not-found
     just delete-namespace
     if [ "{{ delete-db }}" = "true" ]; then
         just postgres::delete-db mlflow || true

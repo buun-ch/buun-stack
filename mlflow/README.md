@@ -156,16 +156,114 @@ with mlflow.start_run():
 
 #### Authentication for API Access
 
-For programmatic access, create an access token:
+For programmatic access (Python scripts, notebooks, CI/CD), you need to create an access key.
 
-1. Log in to MLflow UI
-2. Navigate to Permissions UI → Create access token
-3. Use token in your code:
+**Step 1: Create Access Key via Web UI**
+
+1. Navigate to `https://your-mlflow-host/` and log in via Keycloak
+2. You will be redirected to the MLflow Permission Manager UI
+3. Click the **"Create access key"** button at the top of the page
+4. In the dialog that appears:
+   - Select an expiration date (maximum 1 year from today)
+   - Click **"Request Token"**
+5. Copy the generated access key from the "Access Key" field
+6. Store it securely (you won't be able to retrieve it again)
+
+**Step 2: Use Access Key in Python**
+
+Set the access key as an environment variable or in your Python code:
 
 ```python
 import os
-os.environ["MLFLOW_TRACKING_TOKEN"] = "your-token"
+import mlflow
+
+# Method 1: Set environment variable (recommended)
+os.environ["MLFLOW_TRACKING_TOKEN"] = "your-access-key-here"
+os.environ["MLFLOW_TRACKING_URI"] = "https://mlflow.example.com"
+
+# Method 2: Set tracking URI directly
+mlflow.set_tracking_uri("https://mlflow.example.com")
+
+# Now you can use MLflow client
+mlflow.set_experiment("my-experiment")
+
+with mlflow.start_run():
+    mlflow.log_param("alpha", 0.5)
+    mlflow.log_metric("rmse", 0.786)
 ```
+
+**Complete Example**
+
+```python
+import os
+import mlflow
+import mlflow.sklearn
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.datasets import load_iris
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+
+# Configure MLflow
+os.environ["MLFLOW_TRACKING_TOKEN"] = "your-access-key-here"
+mlflow.set_tracking_uri("https://mlflow.example.com")
+mlflow.set_experiment("iris-classification")
+
+# Load data
+X, y = load_iris(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+# Train and log model
+with mlflow.start_run():
+    # Log parameters
+    n_estimators = 100
+    max_depth = 5
+    mlflow.log_param("n_estimators", n_estimators)
+    mlflow.log_param("max_depth", max_depth)
+
+    # Train model
+    clf = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth)
+    clf.fit(X_train, y_train)
+
+    # Log metrics
+    y_pred = clf.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    mlflow.log_metric("accuracy", accuracy)
+
+    # Log model
+    mlflow.sklearn.log_model(clf, "model")
+
+    print(f"Model logged with accuracy: {accuracy}")
+```
+
+**Using .env File (Recommended)**
+
+Create a `.env` file in your project:
+
+```bash
+MLFLOW_TRACKING_URI=https://mlflow.example.com
+MLFLOW_TRACKING_TOKEN=your-access-key-here
+```
+
+Load it in your Python code:
+
+```python
+from dotenv import load_dotenv
+import mlflow
+
+load_dotenv()  # Loads MLFLOW_TRACKING_URI and MLFLOW_TRACKING_TOKEN
+
+mlflow.set_experiment("my-experiment")
+with mlflow.start_run():
+    mlflow.log_param("param1", 5)
+```
+
+**Important Notes**
+
+- Access keys have an expiration date (max 1 year)
+- Store access keys securely (use environment variables or secret management)
+- Never commit access keys to version control
+- Each user should create their own access key
+- Expired keys need to be regenerated via the Web UI
 
 ### Model Registry
 
