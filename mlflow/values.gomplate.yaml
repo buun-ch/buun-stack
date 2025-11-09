@@ -2,11 +2,18 @@
 # Replica count
 replicaCount: 1
 
-# Image configuration (Community Charts uses burakince/mlflow)
+# Image configuration
+{{- if eq (.Env.MLFLOW_OIDC_ENABLED | default "false") "true" }}
+image:
+  repository: {{ .Env.IMAGE_REGISTRY }}/mlflow
+  pullPolicy: {{ .Env.MLFLOW_IMAGE_PULL_POLICY }}
+  tag: "{{ .Env.MLFLOW_IMAGE_TAG }}"  # Custom MLflow with OIDC
+{{- else }}
 image:
   repository: burakince/mlflow
-  pullPolicy: IfNotPresent
+  pullPolicy: {{ .Env.MLFLOW_IMAGE_PULL_POLICY }}
   tag: "3.6.0"  # MLflow 3.6.0
+{{- end }}
 
 # Backend store configuration (PostgreSQL)
 backendStore:
@@ -44,12 +51,49 @@ artifactRoot:
       keyOfAccessKeyId: "AWS_ACCESS_KEY_ID"
       keyOfSecretAccessKey: "AWS_SECRET_ACCESS_KEY"
 
+{{- if eq (.Env.MLFLOW_OIDC_ENABLED | default "false") "true" }}
+# Disable MLflow logging to prevent gunicornOpts auto-injection
+log:
+  enabled: false
+
+# A map of arguments to pass to the `mlflow server` command (OIDC enabled)
+# Use oidc-auth-fastapi for FastAPI/ASGI compatibility with Uvicorn
+extraArgs:
+  appName: "oidc-auth-fastapi"
+  # Allow connections from external hostname (with and without port)
+  allowedHosts: "{{ .Env.MLFLOW_HOST }},{{ .Env.MLFLOW_HOST }}:443"
+
+# Extra secrets for OIDC configuration
+extraSecretNamesForEnvFrom:
+  - mlflow-oidc-config
+
+# Extra environment variables for OIDC and S3/MinIO configuration
+extraEnvVars:
+  MLFLOW_S3_ENDPOINT_URL: "http://minio.{{ .Env.MINIO_NAMESPACE }}.svc.cluster.local:9000"
+  MLFLOW_S3_IGNORE_TLS: "true"
+  # OIDC Configuration - mlflow-oidc-auth uses OIDC Discovery
+  OIDC_DISCOVERY_URL: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/.well-known/openid-configuration"
+  OIDC_REDIRECT_URI: "https://{{ .Env.MLFLOW_HOST }}/callback"
+  OIDC_SCOPE: "openid profile email groups"
+  OIDC_PROVIDER_DISPLAY_NAME: "Keycloak"
+  # OIDC attribute mapping
+  OIDC_GROUPS_ATTRIBUTE: "groups"
+  # Group configuration - required for access control
+  OIDC_ADMIN_GROUP_NAME: "mlflow-admins"
+  OIDC_GROUP_NAME: "mlflow-admins,mlflow-users"
+  # Default permission for new resources
+  DEFAULT_MLFLOW_PERMISSION: "MANAGE"
+  # Session configuration - use cachelib with filesystem backend
+  SESSION_TYPE: "cachelib"
+  SESSION_CACHE_DIR: "/tmp/session"
+{{- else }}
 # Extra environment variables for S3/MinIO configuration
 extraEnvVars:
   MLFLOW_S3_ENDPOINT_URL: "http://minio.{{ .Env.MINIO_NAMESPACE }}.svc.cluster.local:9000"
   MLFLOW_S3_IGNORE_TLS: "true"
   # Disable security middleware when using Gunicorn (env var approach)
   MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE: "true"
+{{- end }}
 
 # Service configuration
 service:
@@ -73,7 +117,7 @@ ingress:
 
 # ServiceMonitor for Prometheus
 serviceMonitor:
-  enabled: true
+  enabled: {{ .Env.MONITORING_ENABLED }}
   useServicePort: false
   namespace: "{{ .Env.PROMETHEUS_NAMESPACE }}"
   interval: 30s

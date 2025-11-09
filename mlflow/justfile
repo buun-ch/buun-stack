@@ -3,11 +3,18 @@ set fallback := true
 export MLFLOW_NAMESPACE := env("MLFLOW_NAMESPACE", "mlflow")
 export MLFLOW_CHART_VERSION := env("MLFLOW_CHART_VERSION", "1.8.0")
 export MLFLOW_HOST := env("MLFLOW_HOST", "")
+export IMAGE_REGISTRY := env("IMAGE_REGISTRY", "localhost:30500")
+export MLFLOW_IMAGE_TAG := env("MLFLOW_IMAGE_TAG", "3.6.0-oidc")
+export MLFLOW_IMAGE_PULL_POLICY := env("MLFLOW_IMAGE_PULL_POLICY", "IfNotPresent")
+export MLFLOW_OIDC_ENABLED := env("MLFLOW_OIDC_ENABLED", "true")
 export POSTGRES_NAMESPACE := env("POSTGRES_NAMESPACE", "postgres")
 export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
 export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 
 [private]
 default:
@@ -21,6 +28,26 @@ add-helm-repo:
 # Remove Helm repository
 remove-helm-repo:
     helm repo remove community-charts
+
+# Build custom MLflow image with OIDC auth plugin
+build-image:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Building MLflow image with OIDC auth plugin..."
+    cd image
+    docker build -t ${IMAGE_REGISTRY}/mlflow:${MLFLOW_IMAGE_TAG} .
+    echo "Image built: ${IMAGE_REGISTRY}/mlflow:${MLFLOW_IMAGE_TAG}"
+
+# Push custom MLflow image to registry
+push-image:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Pushing MLflow image to registry..."
+    docker push ${IMAGE_REGISTRY}/mlflow:${MLFLOW_IMAGE_TAG}
+    echo "Image pushed: ${IMAGE_REGISTRY}/mlflow:${MLFLOW_IMAGE_TAG}"
+
+# Build and push custom MLflow image
+build-and-push-image: build-image push-image
 
 # Create namespace
 create-namespace:
@@ -67,6 +94,16 @@ setup-postgres-db:
 
     echo "Ensuring database permissions..."
     just postgres::grant mlflow mlflow
+
+    # Create mlflow_auth database for OIDC user management
+    if just postgres::db-exists mlflow_auth &>/dev/null; then
+        echo "Database 'mlflow_auth' already exists."
+    else
+        echo "Creating new database 'mlflow_auth' for OIDC authentication..."
+        just postgres::create-db mlflow_auth
+    fi
+    echo "Granting permissions on mlflow_auth to mlflow user..."
+    just postgres::grant mlflow_auth mlflow
 
     if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
         echo "External Secrets available. Storing credentials in Vault..."
@@ -173,7 +210,7 @@ delete-s3-secret:
     @kubectl delete externalsecret mlflow-s3-external-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
 
 # Install MLflow
-install: check-env
+install:
     #!/bin/bash
     set -euo pipefail
     echo "Installing MLflow..."
@@ -191,11 +228,30 @@ install: check-env
         exit 1
     fi
 
+    if [ -z "${MLFLOW_HOST}" ]; then
+        while [ -z "${MLFLOW_HOST}" ]; do
+            MLFLOW_HOST=$(
+                gum input --prompt="MLflow host (FQDN): " --width=100 \
+                --placeholder="e.g., mlflow.example.com"
+            )
+        done
+    fi
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring (ServiceMonitor)?"; then
+                MONITORING_ENABLED="true"
+            else
+                MONITORING_ENABLED="false"
+            fi
+        fi
+    else
+        MONITORING_ENABLED="false"
+    fi
+
     just setup-postgres-db
     just create-db-secret
     just create-s3-secret
 
-    # Create mlflow bucket in MinIO if it doesn't exist
     if ! just minio::bucket-exists mlflow; then
         echo "Creating 'mlflow' bucket in MinIO..."
         just minio::create-bucket mlflow
@@ -205,10 +261,81 @@ install: check-env
 
     just add-helm-repo
 
-    echo "Generating Helm values..."
+    just keycloak::delete-client "${KEYCLOAK_REALM}" "mlflow" || true
+    oidc_client_secret=$(just utils::random-password)
+    redirect_urls="https://${MLFLOW_HOST}/callback"
+    just keycloak::create-client \
+        realm="${KEYCLOAK_REALM}" \
+        client_id="mlflow" \
+        redirect_url="${redirect_urls}" \
+        client_secret="${oidc_client_secret}"
+    echo "✓ Keycloak client 'mlflow' created"
+
+    if ! just keycloak::get-client-scope "${KEYCLOAK_REALM}" groups &>/dev/null; then
+        just keycloak::create-client-scope "${KEYCLOAK_REALM}" groups "User group memberships"
+        just keycloak::add-groups-mapper-to-scope "${KEYCLOAK_REALM}" groups
+        echo "✓ Groups client scope created"
+    else
+        echo "✓ Groups client scope already exists"
+    fi
+    just keycloak::add-scope-to-client "${KEYCLOAK_REALM}" mlflow groups
+    echo "✓ Groups scope added to mlflow client"
+
+    echo "Setting up MLflow groups..."
+    just keycloak::create-group mlflow-admins "" "MLflow administrators with full access" || true
+    just keycloak::create-group mlflow-users "" "MLflow users with basic access" || true
+    echo "✓ MLflow groups configured"
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Storing OIDC config in Vault..."
+
+        # Get PostgreSQL credentials for auth database
+        db_username=$(just vault::get mlflow/postgres username)
+        db_password=$(just vault::get mlflow/postgres password)
+        auth_db_uri="postgresql://${db_username}:${db_password}@postgres-cluster-rw.${POSTGRES_NAMESPACE}.svc.cluster.local:5432/mlflow_auth"
+
+        just vault::put "mlflow/oidc" \
+            client_id="mlflow" \
+            client_secret="${oidc_client_secret}" \
+            auth_db_uri="${auth_db_uri}"
+
+        kubectl delete secret mlflow-oidc-config -n ${MLFLOW_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret mlflow-oidc-external-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
+
+        export OIDC_CLIENT_SECRET="${oidc_client_secret}"
+        gomplate -f mlflow-oidc-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/mlflow-oidc-external-secret \
+            -n ${MLFLOW_NAMESPACE} --timeout=60s
+    else
+        echo "Creating Kubernetes secret directly..."
+
+        # Get PostgreSQL credentials for auth database
+        db_username=$(just vault::get mlflow/postgres username 2>/dev/null || echo "mlflow")
+        db_password=$(just vault::get mlflow/postgres password)
+        auth_db_uri="postgresql://${db_username}:${db_password}@postgres-cluster-rw.${POSTGRES_NAMESPACE}.svc.cluster.local:5432/mlflow_auth"
+
+        kubectl delete secret mlflow-oidc-config -n ${MLFLOW_NAMESPACE} --ignore-not-found
+        kubectl create secret generic mlflow-oidc-config -n ${MLFLOW_NAMESPACE} \
+            --from-literal=OIDC_CLIENT_ID="mlflow" \
+            --from-literal=OIDC_CLIENT_SECRET="${oidc_client_secret}" \
+            --from-literal=OIDC_USERS_DB_URI="${auth_db_uri}"
+
+        # Store in Vault for backup if available
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put "mlflow/oidc" \
+                client_id="mlflow" \
+                client_secret="${oidc_client_secret}" \
+                auth_db_uri="${auth_db_uri}"
+        fi
+    fi
+
+    export MLFLOW_OIDC_ENABLED="true"
+    echo "Generating Helm values with OIDC enabled..."
     gomplate -f values.gomplate.yaml -o values.yaml
 
-    echo "Installing MLflow Helm chart from Community Charts..."
+    echo "Installing MLflow Helm chart from Community Charts with OIDC..."
     helm upgrade --cleanup-on-fail --install mlflow \
         community-charts/mlflow \
         --version ${MLFLOW_CHART_VERSION} \
@@ -218,18 +345,35 @@ install: check-env
         -f values.yaml
 
     echo ""
-    echo "=== MLflow installed ==="
+    echo "=== MLflow installed with OIDC authentication ==="
     echo "MLflow URL: https://${MLFLOW_HOST}"
     echo ""
-    echo "Next steps:"
-    echo "  1. Configure OAuth2 Proxy for authentication (recommended)"
-    echo "  2. Access MLflow UI at https://${MLFLOW_HOST}"
+    echo "OIDC authentication is enabled using Keycloak"
+    echo "Users can sign in with their Keycloak credentials"
 
 # Upgrade MLflow
-upgrade: check-env
+upgrade:
     #!/bin/bash
     set -euo pipefail
-    echo "Upgrading MLflow..."
+    if [ -z "${MLFLOW_HOST}" ]; then
+        while [ -z "${MLFLOW_HOST}" ]; do
+            MLFLOW_HOST=$(
+                gum input --prompt="MLflow host (FQDN): " --width=100 \
+                --placeholder="e.g., mlflow.example.com"
+            )
+        done
+    fi
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring (ServiceMonitor)?"; then
+                MONITORING_ENABLED="true"
+            else
+                MONITORING_ENABLED="false"
+            fi
+        fi
+    else
+        MONITORING_ENABLED="false"
+    fi
 
     echo "Generating Helm values..."
     gomplate -f values.gomplate.yaml -o values.yaml
@@ -254,11 +398,14 @@ uninstall delete-db='true':
     helm uninstall mlflow -n ${MLFLOW_NAMESPACE} --ignore-not-found
     just delete-db-secret
     just delete-s3-secret
+    kubectl delete secret mlflow-oidc-config -n ${MLFLOW_NAMESPACE} --ignore-not-found
+    kubectl delete externalsecret mlflow-oidc-external-secret -n ${MLFLOW_NAMESPACE} --ignore-not-found
     just delete-namespace
     if [ "{{ delete-db }}" = "true" ]; then
         just postgres::delete-db mlflow || true
         just postgres::delete-user mlflow || true
     fi
+    just keycloak::delete-client "${KEYCLOAK_REALM}" "mlflow" || true
     echo "MLflow uninstalled"
 
 # Clean up all MLflow resources
@@ -272,22 +419,9 @@ cleanup:
         just postgres::delete-user mlflow || true
         just vault::delete mlflow/postgres || true
         just vault::delete mlflow/s3 || true
+        just vault::delete mlflow/oidc || true
+        just keycloak::delete-client "${KEYCLOAK_REALM}" "mlflow" || true
         echo "Cleanup completed"
     else
         echo "Cleanup cancelled"
-    fi
-
-# Check the environment
-[private]
-check-env:
-    #!/bin/bash
-    set -euo pipefail
-    if [ -z "${MLFLOW_HOST}" ]; then
-        while [ -z "${MLFLOW_HOST}" ]; do
-            MLFLOW_HOST=$(
-                gum input --prompt="MLflow host (FQDN): " --width=100 \
-                --placeholder="e.g., mlflow.example.com"
-            )
-        done
-        just env::set MLFLOW_HOST="${MLFLOW_HOST}"
     fi

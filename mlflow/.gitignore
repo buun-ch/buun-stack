@@ -1,3 +1,5 @@
 values.yaml
 mlflow-db-external-secret.yaml
 mlflow-s3-external-secret.yaml
+mlflow-oidc-config.yaml
+image/.buildx-cache
