@@ -481,12 +481,11 @@ Key technologies: MLflow, KServe, MinIO, JupyterHub
 Demonstrates Salesforce data ingestion into an Iceberg data lake:
 
 - **dlt** extracts data from Salesforce API (Account, Contact, Opportunity, etc.)
-- **Custom Iceberg destination** loads data into Lakekeeper REST Catalog
-- **Automatic schema conversion** from dlt to Iceberg with PyArrow
+    - **Custom Iceberg destination** loads data into Lakekeeper REST Catalog
+    - **Automatic schema conversion** from dlt to Iceberg with PyArrow
 - **Orchestration** with Dagster or Apache Airflow
-- **Query** with Trino and visualize in Superset/Metabase
 
-Key technologies: dlt, Iceberg, Lakekeeper, Trino, MinIO
+Key technologies: dlt, Iceberg, Lakekeeper, MinIO
 
 ### E-commerce Lakehouse Analytics
 
