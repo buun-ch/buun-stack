@@ -1,0 +1,240 @@
+configUrl: null
+
+dashboard:
+    replicas: 1
+    port: 8080
+
+    service:
+        type: ClusterIP
+        annotations: {}
+
+{{- if eq .Env.FAIRWINDS_POLARIS_INGRESS_ENABLED "true" }}
+    ingress:
+        enabled: true
+        ingressClassName: traefik
+        hosts:
+            - {{ .Env.FAIRWINDS_POLARIS_HOST }}
+{{- else }}
+    ingress:
+        enabled: false
+{{- end }}
+
+    resources:
+        limits:
+            cpu: 500m
+            memory: 512Mi
+        requests:
+            cpu: 100m
+            memory: 128Mi
+
+webhook:
+    enable: false
+
+# Audit job runs a one-time audit. This is used internally at Fairwinds, and is not needed for dashboard mode.
+audit:
+    enable: false
+    outputURL: ""
+
+config:
+    checks:
+        # Security
+        hostIPCSet: danger
+        hostPIDSet: danger
+        notReadOnlyRootFilesystem: warning
+        privilegeEscalationAllowed: danger
+        runAsRootAllowed: warning
+        runAsPrivileged: danger
+        insecureCapabilities: warning
+        dangerousCapabilities: danger
+
+        # Efficiency
+        cpuRequestsMissing: warning
+        cpuLimitsMissing: warning
+        memoryRequestsMissing: warning
+        memoryLimitsMissing: warning
+
+        # Reliability
+        tagNotSpecified: danger
+        pullPolicyNotAlways: ignore
+        readinessProbeMissing: warning
+        livenessProbeMissing: warning
+        deploymentMissingReplicas: ignore
+        priorityClassNotSet: ignore
+
+        # Network
+        hostNetworkSet: warning
+        hostPortSet: warning
+        missingNetworkPolicy: warning
+
+    exemptions:
+        - controllerNames:
+              - kube-apiserver
+              - kube-proxy
+              - kube-scheduler
+              - etcd-manager-events
+              - kube-controller-manager
+              - kube-dns
+              - etcd-manager-main
+          rules:
+              - hostPortSet
+              - hostNetworkSet
+              - readinessProbeMissing
+              - livenessProbeMissing
+              - cpuRequestsMissing
+              - cpuLimitsMissing
+              - memoryRequestsMissing
+              - memoryLimitsMissing
+              - runAsRootAllowed
+              - runAsPrivileged
+              - notReadOnlyRootFilesystem
+              - hostPIDSet
+
+        - controllerNames:
+              - kube-flannel-ds
+          rules:
+              - notReadOnlyRootFilesystem
+              - runAsRootAllowed
+              - notReadOnlyRootFilesystem
+              - readinessProbeMissing
+              - livenessProbeMissing
+              - cpuLimitsMissing
+
+        - controllerNames:
+              - cert-manager
+          rules:
+              - notReadOnlyRootFilesystem
+              - runAsRootAllowed
+              - readinessProbeMissing
+              - livenessProbeMissing
+
+        - controllerNames:
+              - cluster-autoscaler
+          rules:
+              - notReadOnlyRootFilesystem
+              - runAsRootAllowed
+              - readinessProbeMissing
+
+        - controllerNames:
+              - vpa
+          rules:
+              - runAsRootAllowed
+              - readinessProbeMissing
+              - livenessProbeMissing
+              - notReadOnlyRootFilesystem
+
+        - controllerNames:
+              - datadog
+          rules:
+              - runAsRootAllowed
+              - readinessProbeMissing
+              - livenessProbeMissing
+              - notReadOnlyRootFilesystem
+
+        - controllerNames:
+              - nginx-ingress-controller
+          rules:
+              - privilegeEscalationAllowed
+              - insecureCapabilities
+              - runAsRootAllowed
+
+        - controllerNames:
+              - dns-controller
+              - datadog-datadog
+              - kube-flannel-ds
+              - kube2iam
+              - aws-iam-authenticator
+              - datadog
+              - kube2iam
+          rules:
+              - hostNetworkSet
+
+        - controllerNames:
+              - aws-iam-authenticator
+              - aws-cluster-autoscaler
+              - kube-state-metrics
+              - dns-controller
+              - external-dns
+              - dnsmasq
+              - autoscaler
+              - kubernetes-dashboard
+              - install-cni
+              - kube2iam
+          rules:
+              - readinessProbeMissing
+              - livenessProbeMissing
+
+        - controllerNames:
+              - aws-iam-authenticator
+              - nginx-ingress-default-backend
+              - aws-cluster-autoscaler
+              - kube-state-metrics
+              - dns-controller
+              - external-dns
+              - kubedns
+              - dnsmasq
+              - autoscaler
+              - tiller
+              - kube2iam
+          rules:
+              - runAsRootAllowed
+
+        - controllerNames:
+              - aws-iam-authenticator
+              - nginx-ingress-controller
+              - nginx-ingress-default-backend
+              - aws-cluster-autoscaler
+              - kube-state-metrics
+              - dns-controller
+              - external-dns
+              - kubedns
+              - dnsmasq
+              - autoscaler
+              - tiller
+              - kube2iam
+          rules:
+              - notReadOnlyRootFilesystem
+
+        - controllerNames:
+              - cert-manager
+              - dns-controller
+              - kubedns
+              - dnsmasq
+              - autoscaler
+              - insights-agent-goldilocks-vpa-install
+              - datadog
+          rules:
+              - cpuRequestsMissing
+              - cpuLimitsMissing
+              - memoryRequestsMissing
+              - memoryLimitsMissing
+
+        - controllerNames:
+              - kube2iam
+              - kube-flannel-ds
+          rules:
+              - runAsPrivileged
+
+        - controllerNames:
+              - kube-hunter
+          rules:
+              - hostPIDSet
+
+        - controllerNames:
+              - polaris
+              - kube-hunter
+              - goldilocks
+              - insights-agent-goldilocks-vpa-install
+          rules:
+              - notReadOnlyRootFilesystem
+
+        - controllerNames:
+              - insights-agent-goldilocks-controller
+          rules:
+              - livenessProbeMissing
+              - readinessProbeMissing
+
+        - controllerNames:
+              - insights-agent-goldilocks-vpa-install
+              - kube-hunter
+          rules:
+              - runAsRootAllowed

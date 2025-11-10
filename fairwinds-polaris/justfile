@@ -1,0 +1,163 @@
+set fallback := true
+
+export FAIRWINDS_POLARIS_NAMESPACE := env("FAIRWINDS_POLARIS_NAMESPACE", "fairwinds-polaris")
+export FAIRWINDS_POLARIS_CHART_VERSION := env("FAIRWINDS_POLARIS_CHART_VERSION", "5.19.0")
+export FAIRWINDS_POLARIS_HOST := env("FAIRWINDS_POLARIS_HOST", "")
+export FAIRWINDS_POLARIS_INGRESS_ENABLED := env("FAIRWINDS_POLARIS_INGRESS_ENABLED", "false")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add fairwinds-stable https://charts.fairwinds.com/stable
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove fairwinds-stable
+
+# Create namespace
+create-namespace:
+    @kubectl get namespace ${FAIRWINDS_POLARIS_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${FAIRWINDS_POLARIS_NAMESPACE}
+
+# Delete namespace
+delete-namespace:
+    @kubectl delete namespace ${FAIRWINDS_POLARIS_NAMESPACE} --ignore-not-found
+
+# Install Fairwinds Polaris
+install:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Installing Fairwinds Polaris..."
+    just create-namespace
+    just add-helm-repo
+
+    enable_ingress="false"
+    enable_oauth2="false"
+
+    if gum confirm "Enable Ingress for external access?"; then
+        if [ -z "${FAIRWINDS_POLARIS_HOST}" ]; then
+            while [ -z "${FAIRWINDS_POLARIS_HOST}" ]; do
+                FAIRWINDS_POLARIS_HOST=$(
+                    gum input --prompt="Fairwinds Polaris host (FQDN): " --width=100 \
+                    --placeholder="e.g., fairwinds-polaris.example.com"
+                )
+            done
+            just env::set FAIRWINDS_POLARIS_HOST="${FAIRWINDS_POLARIS_HOST}"
+        fi
+
+        if gum confirm "Enable OAuth2 Proxy authentication with Keycloak?"; then
+            enable_oauth2="true"
+            enable_ingress="false"
+            echo "Creating OAuth2 Proxy for Fairwinds Polaris..."
+            just oauth2-proxy::setup-for-app \
+                polaris \
+                "${FAIRWINDS_POLARIS_HOST}" \
+                "${FAIRWINDS_POLARIS_NAMESPACE}" \
+                "polaris-dashboard.${FAIRWINDS_POLARIS_NAMESPACE}.svc.cluster.local:80"
+        else
+            enable_ingress="true"
+        fi
+    fi
+
+    export FAIRWINDS_POLARIS_INGRESS_ENABLED="${enable_ingress}"
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    helm upgrade --cleanup-on-fail --install polaris \
+        fairwinds-stable/polaris \
+        --version ${FAIRWINDS_POLARIS_CHART_VERSION} \
+        -n ${FAIRWINDS_POLARIS_NAMESPACE} \
+        --wait \
+        -f values.yaml
+
+    echo ""
+    echo "=== Fairwinds Polaris installed ==="
+    if [ "${enable_ingress}" = "true" ]; then
+        echo "Fairwinds Polaris URL: https://${FAIRWINDS_POLARIS_HOST}"
+        if [ "${enable_oauth2}" = "true" ]; then
+            echo "Authentication: OAuth2 Proxy with Keycloak"
+            echo "Users can sign in with their Keycloak credentials"
+        else
+            echo "Authentication: None (consider using OAuth2 Proxy for production)"
+        fi
+    else
+        echo "Fairwinds Polaris dashboard is running in namespace: ${FAIRWINDS_POLARIS_NAMESPACE}"
+        echo ""
+        echo "To access the dashboard, run:"
+        echo "  just fairwinds-polaris::port-forward"
+        echo ""
+        echo "Then open http://localhost:8080 in your browser"
+    fi
+
+# Upgrade Fairwinds Polaris
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Upgrading Fairwinds Polaris..."
+
+    if helm get values polaris -n ${FAIRWINDS_POLARIS_NAMESPACE} -o json | jq -e '.dashboard.ingress.enabled == true' &>/dev/null; then
+        export FAIRWINDS_POLARIS_INGRESS_ENABLED="true"
+        if [ -z "${FAIRWINDS_POLARIS_HOST}" ]; then
+            FAIRWINDS_POLARIS_HOST=$(helm get values polaris -n ${FAIRWINDS_POLARIS_NAMESPACE} -o json | \
+                jq -r '.dashboard.ingress.hosts[0].host // empty')
+            if [ -z "${FAIRWINDS_POLARIS_HOST}" ]; then
+                while [ -z "${FAIRWINDS_POLARIS_HOST}" ]; do
+                    FAIRWINDS_POLARIS_HOST=$(
+                        gum input --prompt="Fairwinds Polaris host (FQDN): " --width=100 \
+                        --placeholder="e.g., fairwinds-polaris.example.com"
+                    )
+                done
+            fi
+        fi
+    else
+        export FAIRWINDS_POLARIS_INGRESS_ENABLED="false"
+    fi
+
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    helm upgrade polaris \
+        fairwinds-stable/polaris \
+        --version ${FAIRWINDS_POLARIS_CHART_VERSION} \
+        -n ${FAIRWINDS_POLARIS_NAMESPACE} \
+        --wait \
+        -f values.yaml
+
+    echo "Fairwinds Polaris upgraded successfully"
+
+# Uninstall Fairwinds Polaris
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling Fairwinds Polaris..."
+    helm uninstall polaris -n ${FAIRWINDS_POLARIS_NAMESPACE} --ignore-not-found
+    kubectl delete ingressroute polaris -n ${FAIRWINDS_POLARIS_NAMESPACE} --ignore-not-found
+    just oauth2-proxy::remove-for-app polaris ${FAIRWINDS_POLARIS_NAMESPACE} || true
+    just delete-namespace
+    echo "Fairwinds Polaris uninstalled"
+
+# Port forward to Fairwinds Polaris dashboard
+port-forward port='8080':
+    kubectl port-forward --namespace ${FAIRWINDS_POLARIS_NAMESPACE} svc/polaris-dashboard {{ port }}:80
+
+# Show Fairwinds Polaris audit results
+audit:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Fetching Fairwinds Polaris audit results..."
+    kubectl get validatingwebhookconfigurations polaris-webhook -o json 2>/dev/null | \
+        jq -r '.webhooks[0].clientConfig.caBundle' | base64 -d > /tmp/polaris-ca.crt || true
+
+    if kubectl get svc polaris-dashboard -n ${FAIRWINDS_POLARIS_NAMESPACE} &>/dev/null; then
+        kubectl port-forward -n ${FAIRWINDS_POLARIS_NAMESPACE} svc/polaris-dashboard 18080:80 &
+        PF_PID=$!
+        sleep 2
+        curl -s http://localhost:18080/results.json | jq '.' || echo "Dashboard not ready yet"
+        kill $PF_PID 2>/dev/null || true
+    else
+        echo "Fairwinds Polaris dashboard service not found. Please install Polaris first."
+    fi

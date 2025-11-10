@@ -21,6 +21,7 @@ mod longhorn
 mod metabase
 mod mlflow
 mod minio
+mod fairwinds-polaris
 mod oauth2-proxy
 mod postgres
 mod prometheus
