@@ -42,6 +42,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 
 - **[JupyterHub](https://jupyter.org/hub)**: Interactive computing with collaborative notebooks
 - **[MLflow](https://mlflow.org/)**: Machine learning lifecycle management with experiment tracking and model registry
+- **[KServe](https://kserve.github.io/)**: Model serving platform for deploying ML models on Kubernetes
 - **[Trino](https://trino.io/)**: Distributed SQL query engine for querying multiple data sources
 - **[Querybook](https://www.querybook.org/)**: Big data querying UI with notebook interface
 - **[ClickHouse](https://clickhouse.com/)**: High-performance columnar analytics database
@@ -182,6 +183,17 @@ Machine learning lifecycle management platform:
 - **Keycloak Authentication**: OAuth2 integration with group-based access control
 
 [📖 See MLflow Documentation](./mlflow/README.md)
+
+### KServe
+
+Model serving platform for deploying ML models on Kubernetes:
+
+- **Multi-Framework Support**: TensorFlow, PyTorch, scikit-learn, XGBoost, MLflow, and more
+- **MLflow Integration**: Deploy models directly from MLflow Model Registry
+- **Inference Protocols**: REST and gRPC with v2 Open Inference Protocol
+- **RawDeployment Mode**: Uses native Kubernetes Deployments without Knative dependency
+
+[📖 See KServe Documentation](./kserve/README.md)
 
 ### Apache Superset
 
@@ -449,6 +461,18 @@ The `custom.just` file is automatically imported by the main Justfile if it exis
 ## Demo Projects
 
 The following demo projects showcase end-to-end data workflows using buun-stack:
+
+### ML Model Serving with MLflow and KServe
+
+[**examples/kserve-mlflow-iris**](./examples/kserve-mlflow-iris/README.md)
+
+End-to-end machine learning workflow demonstrating JupyterHub, MLflow, and KServe integration:
+
+- **JupyterHub** for model training and testing
+- **MLflow** for experiment tracking and model registry
+- **KServe** for model deployment and inference
+
+Key technologies: MLflow, KServe, MinIO, JupyterHub
 
 ### Salesforce to Iceberg REST Catalog
 
