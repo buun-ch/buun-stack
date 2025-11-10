@@ -31,6 +31,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 
 - **[Prometheus](https://prometheus.io/)**: Metrics collection and alerting
 - **[Grafana](https://grafana.com/)**: Metrics visualization and dashboards
+- **[Goldilocks](https://goldilocks.docs.fairwinds.com/)**: Resource recommendation dashboard powered by VPA
 
 ### Storage (Optional)
 
@@ -55,9 +56,10 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - **[Dagster](https://dagster.io/)**: Modern data orchestration platform
 - **[Apache Airflow](https://airflow.apache.org/)**: Workflow orchestration and task scheduling
 
-### Security (Optional)
+### Security & Compliance (Optional)
 
 - **[OAuth2 Proxy](https://oauth2-proxy.github.io/oauth2-proxy/)**: Authentication proxy for adding Keycloak authentication
+- **[Fairwinds Polaris](https://polaris.docs.fairwinds.com/)**: Kubernetes configuration validation and security auditing
 
 ## Quick Start
 
@@ -280,6 +282,31 @@ Modern data orchestration platform:
 - **Testing & Validation**: Data quality checks and pipeline testing
 
 [📖 See Dagster Documentation](./dagster/README.md)
+
+### Fairwinds Polaris
+
+Kubernetes configuration validation and best practices auditing:
+
+- **Security Checks**: Validates security configurations against best practices
+- **Efficiency Analysis**: Identifies missing resource requests and limits
+- **Real-time Auditing**: Continuous cluster configuration scanning
+- **Dashboard Interface**: Visual reporting of issues by severity
+
+[📖 See Fairwinds Polaris Documentation](./fairwinds-polaris/README.md)
+
+### Goldilocks
+
+Resource recommendation dashboard for right-sizing workloads:
+
+- **VPA Integration**: Powered by Vertical Pod Autoscaler for metrics-based recommendations
+- **Visual Dashboard**: User-friendly interface for viewing resource recommendations
+- **QoS Guidance**: Recommendations for Guaranteed, Burstable, and BestEffort classes
+- **Monitoring-Only Mode**: Observes workloads without automatic scaling
+- **Namespace-Based**: Enable monitoring per namespace with labels
+
+[📖 See Goldilocks Documentation](./goldilocks/README.md)
+
+[📖 See VPA Documentation](./vpa/README.md)
 
 ## Common Operations
 
