@@ -1,0 +1,161 @@
+set fallback := true
+
+export GOLDILOCKS_NAMESPACE := env("GOLDILOCKS_NAMESPACE", "goldilocks")
+export VPA_NAMESPACE := env("VPA_NAMESPACE", "vpa")
+export GOLDILOCKS_HOST := env("GOLDILOCKS_HOST", "")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add fairwinds-stable https://charts.fairwinds.com/stable
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove fairwinds-stable
+
+# Create namespace
+create-namespace:
+    @kubectl get namespace ${GOLDILOCKS_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${GOLDILOCKS_NAMESPACE}
+
+# Delete namespace
+delete-namespace:
+    @kubectl delete namespace ${GOLDILOCKS_NAMESPACE} --ignore-not-found
+
+# Setup OAuth2 Proxy for Goldilocks authentication
+setup-oauth2-proxy:
+    #!/bin/bash
+    set -euo pipefail
+    export GOLDILOCKS_HOST=${GOLDILOCKS_HOST:-}
+    while [ -z "${GOLDILOCKS_HOST}" ]; do
+        GOLDILOCKS_HOST=$(
+            gum input --prompt="Goldilocks host (FQDN): " --width=100 \
+            --placeholder="e.g., goldilocks.example.com"
+        )
+    done
+    echo "Setting up OAuth2 Proxy for Goldilocks..."
+    just oauth2-proxy::setup-for-app goldilocks "${GOLDILOCKS_HOST}" "${GOLDILOCKS_NAMESPACE}" "goldilocks-dashboard:80"
+    echo "OAuth2 Proxy setup completed"
+
+# Install OAuth2 Proxy for Goldilocks authentication
+install-oauth2-proxy:
+    just setup-oauth2-proxy
+
+# Remove OAuth2 Proxy
+remove-oauth2-proxy:
+    just oauth2-proxy::remove-for-app goldilocks ${GOLDILOCKS_NAMESPACE}
+
+# Install Goldilocks
+install:
+    #!/bin/bash
+    set -euo pipefail
+
+    # Check if VPA is installed
+    if ! helm status vpa -n ${VPA_NAMESPACE} &>/dev/null; then
+        echo "Error: VPA is not installed."
+        echo "Please install VPA first using: just vpa::install"
+        exit 1
+    fi
+
+    if [ -z "${GOLDILOCKS_HOST}" ]; then
+        while [ -z "${GOLDILOCKS_HOST}" ]; do
+            GOLDILOCKS_HOST=$(
+                gum input --prompt="Goldilocks host (FQDN): " --width=100 \
+                --placeholder="e.g., goldilocks.example.com"
+            )
+        done
+        just env::set GOLDILOCKS_HOST="${GOLDILOCKS_HOST}"
+    fi
+
+    just add-helm-repo
+    just create-namespace
+
+    # Generate values.yaml from template
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    # Install Goldilocks with Helm
+    helm upgrade --install goldilocks fairwinds-stable/goldilocks \
+        --namespace ${GOLDILOCKS_NAMESPACE} \
+        --values values.yaml \
+        --wait
+
+    echo "Goldilocks installed successfully in namespace: ${GOLDILOCKS_NAMESPACE}"
+    echo ""
+    echo "To enable monitoring for a namespace, add a label:"
+    echo "  kubectl label namespace <namespace> goldilocks.fairwinds.com/enabled=true"
+    echo ""
+
+    if gum confirm "Set up Keycloak authentication with OAuth2 proxy?"; then
+        export GOLDILOCKS_HOST="${GOLDILOCKS_HOST}"
+        just setup-oauth2-proxy
+    else
+        echo "Access Goldilocks at: https://${GOLDILOCKS_HOST}"
+        echo "Post-installation notes:"
+        echo "   • Run 'just goldilocks::setup-oauth2-proxy' later to enable Keycloak authentication"
+    fi
+
+# Uninstall Goldilocks
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+
+    if ! helm status goldilocks -n ${GOLDILOCKS_NAMESPACE} &>/dev/null; then
+        echo "Goldilocks is not installed."
+        exit 0
+    fi
+
+    if command -v gum &>/dev/null; then
+        if ! gum confirm "Are you sure you want to uninstall Goldilocks?"; then
+            echo "Uninstall cancelled."
+            exit 0
+        fi
+    else
+        read -p "Are you sure you want to uninstall Goldilocks? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Uninstall cancelled."
+            exit 0
+        fi
+    fi
+
+    echo "Uninstalling Goldilocks..."
+    just remove-oauth2-proxy
+    helm uninstall goldilocks -n ${GOLDILOCKS_NAMESPACE}
+    just delete-namespace
+
+    echo "Goldilocks uninstalled successfully."
+
+# Show Goldilocks status
+status:
+    @echo "=== Goldilocks Components ==="
+    @kubectl get pods -n ${GOLDILOCKS_NAMESPACE} 2>/dev/null || echo "Goldilocks not installed"
+    @echo ""
+    @echo "=== Monitored Namespaces ==="
+    @kubectl get namespaces -l goldilocks.fairwinds.com/enabled=true 2>/dev/null || echo "No namespaces labeled for monitoring"
+
+# Enable monitoring for a namespace
+enable-namespace namespace:
+    @kubectl label namespace {{ namespace }} goldilocks.fairwinds.com/enabled=true --overwrite
+    @echo "Monitoring enabled for namespace: {{ namespace }}"
+
+# Disable monitoring for a namespace
+disable-namespace namespace:
+    @kubectl label namespace {{ namespace }} goldilocks.fairwinds.com/enabled- --ignore-not-found
+    @echo "Monitoring disabled for namespace: {{ namespace }}"
+
+# Show controller logs
+logs-controller:
+    kubectl logs -n ${GOLDILOCKS_NAMESPACE} -l app.kubernetes.io/component=controller -f
+
+# Show dashboard logs
+logs-dashboard:
+    kubectl logs -n ${GOLDILOCKS_NAMESPACE} -l app.kubernetes.io/component=dashboard -f
+
+# Port-forward to dashboard
+port-forward:
+    kubectl -n ${GOLDILOCKS_NAMESPACE} port-forward svc/goldilocks-dashboard 8080:80

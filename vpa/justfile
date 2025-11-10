@@ -1,0 +1,89 @@
+set fallback := true
+
+export VPA_NAMESPACE := env("VPA_NAMESPACE", "vpa")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+export PROMETHEUS_ADDRESS := env("PROMETHEUS_ADDRESS", "http://kube-prometheus-stack-prometheus." + PROMETHEUS_NAMESPACE + ".svc:9090")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add fairwinds-stable https://charts.fairwinds.com/stable
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove fairwinds-stable
+
+# Create namespace
+create-namespace:
+    @kubectl get namespace ${VPA_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${VPA_NAMESPACE}
+
+# Delete namespace
+delete-namespace:
+    @kubectl delete namespace ${VPA_NAMESPACE} --ignore-not-found
+
+# Install Vertical Pod Autoscaler
+install:
+    #!/bin/bash
+    set -euo pipefail
+
+    # Check if Prometheus is installed
+    if ! helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        echo "Error: Prometheus (kube-prometheus-stack) is not installed."
+        echo "Please install Prometheus first using: just prometheus::install"
+        exit 1
+    fi
+
+    just add-helm-repo
+    just create-namespace
+
+    # Generate values.yaml from template
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    # Install VPA with Helm
+    helm upgrade --install vpa fairwinds-stable/vpa --namespace ${VPA_NAMESPACE} \
+        --values values.yaml --wait
+
+    echo "VPA installed successfully in namespace: ${VPA_NAMESPACE}"
+    echo ""
+    echo "To verify installation:"
+    echo "  kubectl get pods -n ${VPA_NAMESPACE}"
+    echo "  kubectl get vpa -A"
+
+# Uninstall Vertical Pod Autoscaler
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+
+    if ! helm status vpa -n ${VPA_NAMESPACE} &>/dev/null; then
+        echo "VPA is not installed."
+        exit 0
+    fi
+
+    if command -v gum &>/dev/null; then
+        if ! gum confirm "Are you sure you want to uninstall VPA?"; then
+            echo "Uninstall cancelled."
+            exit 0
+        fi
+    else
+        read -p "Are you sure you want to uninstall VPA? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Uninstall cancelled."
+            exit 0
+        fi
+    fi
+
+    helm uninstall vpa -n ${VPA_NAMESPACE}
+
+    # Delete VPA CRDs
+    kubectl delete crd verticalpodautoscalercheckpoints.autoscaling.k8s.io --ignore-not-found
+    kubectl delete crd verticalpodautoscalers.autoscaling.k8s.io --ignore-not-found
+
+    just delete-namespace
+
+    echo "VPA uninstalled successfully."

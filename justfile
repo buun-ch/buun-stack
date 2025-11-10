@@ -13,6 +13,7 @@ mod dagster
 mod datahub
 mod env
 mod external-secrets
+mod goldilocks
 mod keycloak
 mod jupyterhub
 mod k8s
@@ -31,5 +32,6 @@ mod superset
 mod trino
 mod utils
 mod vault
+mod vpa
 
 import? "custom.just"

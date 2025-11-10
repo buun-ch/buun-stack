@@ -1,0 +1,48 @@
+controller:
+  enabled: true
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+dashboard:
+  enabled: true
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  # Ingress is managed by oauth2-proxy
+  ingress:
+    enabled: false
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL

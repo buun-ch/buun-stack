@@ -1,0 +1,59 @@
+# Fairwinds VPA Helm chart values
+# Optimized for resource monitoring with Prometheus + Goldilocks
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  automountServiceAccountToken: true
+
+recommender:
+  enabled: true
+  replicaCount: 1
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 500Mi
+    limits:
+      cpu: 200m
+      memory: 1Gi
+
+  extraArgs:
+    v: '4' # Verbose logging level
+    pod-recommendation-min-cpu-millicores: 15
+    pod-recommendation-min-memory-mb: 100
+    storage: prometheus
+    prometheus-address: '{{ .Env.PROMETHEUS_ADDRESS }}'
+
+  podMonitor:
+    enabled: true
+
+updater:
+  enabled: false
+  # Disabled for monitoring-only mode
+  # The updater component automatically applies VPA recommendations to pods
+  # Enable this only if you want automatic pod resource updates
+
+admissionController:
+  enabled: false
+  # Disabled for monitoring-only mode
+  # The admission controller validates and mutates pod resources at creation time
+  # Enable this only if you want automatic resource enforcement
+
+metrics-server:
+  enabled: false
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
