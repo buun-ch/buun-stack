@@ -1,0 +1,84 @@
+# KServe Helm Chart Values
+# Generated using gomplate
+
+kserve:
+    version: v0.16.0
+
+    controller:
+        # Deployment mode: "Standard" for RawDeployment (no Knative), "Knative" for Serverless
+        deploymentMode: {{ .Env.KSERVE_DEPLOYMENT_MODE }}
+
+        gateway:
+            domain: {{ .Env.KSERVE_DOMAIN }}
+            {{- if eq .Env.KSERVE_DEPLOYMENT_MODE "Standard" }}
+            ingressGateway:
+                className: traefik
+            {{- end }}
+
+        # Enable Prometheus metrics
+        {{- if eq .Env.MONITORING_ENABLED "true" }}
+        metrics:
+            port: 8080
+        podAnnotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "8080"
+            prometheus.io/path: "/metrics"
+        {{- end }}
+
+    # Storage initializer configuration
+    storage:
+        s3:
+            enabled: true
+            {{- if ne .Env.MINIO_NAMESPACE "" }}
+            endpoint: "minio.{{ .Env.MINIO_NAMESPACE }}.svc.cluster.local:9000"
+            useHttps: false
+            region: "us-east-1"
+            verifySSL: false
+            useVirtualBucket: false
+            useAnonymousCredential: false
+            {{- end }}
+        storageInitializer:
+            resources:
+                requests:
+                    memory: "100Mi"
+                    cpu: "100m"
+                limits:
+                    memory: "1Gi"
+                    cpu: "1"
+
+    # Model agent configuration
+    agent:
+        image: kserve/agent
+        tag: v0.16.0
+
+    # Router configuration
+    router:
+        image: kserve/router
+        tag: v0.16.0
+
+    # Serving runtimes - enable commonly used ones
+    servingRuntimes:
+        sklearn:
+            enabled: true
+        xgboost:
+            enabled: true
+        mlserver:
+            enabled: true
+        triton:
+            enabled: true
+        tensorflow:
+            enabled: true
+        pytorch:
+            enabled: true
+        huggingfaceserver:
+            enabled: true
+
+{{- if eq .Env.MONITORING_ENABLED "true" }}
+# ServiceMonitor for Prometheus metrics collection
+serviceMonitor:
+    enabled: true
+    namespace: {{ .Env.KSERVE_NAMESPACE }}
+    labels:
+        release: kube-prometheus-stack
+    interval: 30s
+{{- end }}

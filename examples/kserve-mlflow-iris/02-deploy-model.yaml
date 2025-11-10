@@ -1,0 +1,44 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: iris-classifier
+  namespace: kserve
+  annotations:
+    serving.kserve.io/secretName: kserve-s3-credentials
+spec:
+  predictor:
+    model:
+      modelFormat:
+        name: mlflow
+        version: "2"
+      storageUri: s3://mlflow/EXPERIMENT_ID/models/MODEL_ID/artifacts
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "512Mi"
+        limits:
+          cpu: "1000m"
+          memory: "1Gi"
+---
+# Alternative: Using SKLearn Server (does not install requirements.txt)
+# apiVersion: serving.kserve.io/v1beta1
+# kind: InferenceService
+# metadata:
+#   name: iris-classifier
+#   namespace: kserve
+#   annotations:
+#     serving.kserve.io/secretName: kserve-s3-credentials
+# spec:
+#   predictor:
+#     model:
+#       modelFormat:
+#         name: sklearn
+#         version: "1"
+#       storageUri: s3://mlflow/EXPERIMENT_ID/models/MODEL_ID/artifacts
+#       resources:
+#         requests:
+#           cpu: "100m"
+#           memory: "256Mi"
+#         limits:
+#           cpu: "500m"
+#           memory: "512Mi"

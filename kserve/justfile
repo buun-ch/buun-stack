@@ -1,0 +1,264 @@
+set fallback := true
+
+export KSERVE_NAMESPACE := env("KSERVE_NAMESPACE", "kserve")
+export KSERVE_CHART_VERSION := env("KSERVE_CHART_VERSION", "v0.16.0")
+export KSERVE_DEPLOYMENT_MODE := env("KSERVE_DEPLOYMENT_MODE", "RawDeployment")
+export KSERVE_DOMAIN := env("KSERVE_DOMAIN", "cluster.local")
+export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Create namespace
+create-namespace:
+    @kubectl get namespace ${KSERVE_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${KSERVE_NAMESPACE}
+
+# Delete namespace
+delete-namespace:
+    @kubectl delete namespace ${KSERVE_NAMESPACE} --ignore-not-found
+
+# Install KServe CRDs
+install-crds:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Installing KServe CRDs..."
+    helm upgrade --cleanup-on-fail --install kserve-crd oci://ghcr.io/kserve/charts/kserve-crd \
+        --version ${KSERVE_CHART_VERSION} -n ${KSERVE_NAMESPACE} --create-namespace --wait
+    echo "KServe CRDs installed successfully"
+
+# Uninstall KServe CRDs
+uninstall-crds:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling KServe CRDs..."
+    helm uninstall kserve-crd -n ${KSERVE_NAMESPACE} --ignore-not-found
+    echo "KServe CRDs uninstalled"
+
+# Setup S3 storage secret for model storage
+setup-storage:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up S3 storage secret for KServe..."
+    just create-namespace
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Creating ExternalSecret..."
+        echo "Using MinIO credentials from Vault (minio/admin)..."
+
+        kubectl delete secret kserve-s3-credentials -n ${KSERVE_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret kserve-s3-external-secret -n ${KSERVE_NAMESPACE} --ignore-not-found
+
+        gomplate -f storage-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/kserve-s3-external-secret \
+            -n ${KSERVE_NAMESPACE} --timeout=60s
+        echo "ExternalSecret synced successfully"
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+
+        if ! kubectl get secret minio -n ${MINIO_NAMESPACE} &>/dev/null; then
+            echo "Error: MinIO root credentials not found"
+            echo "Please install MinIO first with 'just minio::install'"
+            exit 1
+        fi
+
+        accesskey=$(kubectl get secret minio -n ${MINIO_NAMESPACE} \
+            -o jsonpath='{.data.rootUser}' | base64 --decode)
+        secretkey=$(kubectl get secret minio -n ${MINIO_NAMESPACE} \
+            -o jsonpath='{.data.rootPassword}' | base64 --decode)
+
+        kubectl delete secret kserve-s3-credentials -n ${KSERVE_NAMESPACE} --ignore-not-found
+
+        kubectl create secret generic kserve-s3-credentials -n ${KSERVE_NAMESPACE} \
+            --from-literal=AWS_ACCESS_KEY_ID="${accesskey}" \
+            --from-literal=AWS_SECRET_ACCESS_KEY="${secretkey}"
+
+        kubectl annotate secret kserve-s3-credentials -n ${KSERVE_NAMESPACE} \
+            serving.kserve.io/s3-endpoint="minio.${MINIO_NAMESPACE}.svc.cluster.local:9000" \
+            serving.kserve.io/s3-usehttps="0" \
+            serving.kserve.io/s3-region="us-east-1" \
+            serving.kserve.io/s3-useanoncredential="false" \
+            --overwrite
+        echo "Kubernetes Secret created"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put kserve/storage accesskey="${accesskey}" secretkey="${secretkey}"
+            echo "Storage credentials also stored in Vault for backup"
+        fi
+    fi
+
+    echo "S3 storage secret created successfully"
+
+# Delete storage secret
+delete-storage:
+    @kubectl delete secret kserve-s3-credentials -n ${KSERVE_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret kserve-s3-external-secret -n ${KSERVE_NAMESPACE} --ignore-not-found
+
+# Install KServe
+install:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Installing KServe..."
+    just create-namespace
+
+    # Check cert-manager prerequisite
+    if ! kubectl get namespace cert-manager &>/dev/null; then
+        echo "Error: cert-manager is not installed"
+        echo "Please install cert-manager first with 'just cert-manager::install'"
+        exit 1
+    fi
+
+    echo "Waiting for cert-manager webhook to be ready..."
+    kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=webhook \
+        -n cert-manager --timeout=300s
+    echo "cert-manager webhook is ready"
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring (ServiceMonitor)?"; then
+                MONITORING_ENABLED="true"
+            else
+                MONITORING_ENABLED="false"
+            fi
+        fi
+    else
+        MONITORING_ENABLED="false"
+    fi
+
+    just install-crds
+
+    if kubectl get service minio -n ${MINIO_NAMESPACE} &>/dev/null; then
+        echo "MinIO detected. Setting up S3 storage..."
+        just setup-storage
+    else
+        echo "MinIO not found. Skipping S3 storage setup."
+        echo "Models will need to use other storage options."
+    fi
+
+    echo "Generating Helm values..."
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    echo "Installing KServe controller..."
+    helm upgrade --cleanup-on-fail --install kserve \
+        oci://ghcr.io/kserve/charts/kserve --version ${KSERVE_CHART_VERSION} \
+        -n ${KSERVE_NAMESPACE} --wait --timeout=10m -f values.yaml
+
+    if [ "${MONITORING_ENABLED}" = "true" ]; then
+        echo "Enabling Prometheus monitoring for namespace ${KSERVE_NAMESPACE}..."
+        kubectl label namespace ${KSERVE_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+        echo "✓ Monitoring enabled"
+    fi
+
+    echo ""
+    echo "=== KServe installed ==="
+    echo "Namespace: ${KSERVE_NAMESPACE}"
+    echo "Deployment mode: ${KSERVE_DEPLOYMENT_MODE}"
+    echo "Domain: ${KSERVE_DOMAIN}"
+    echo ""
+    echo "To deploy an inference service, create an InferenceService resource"
+    echo "See: https://kserve.github.io/website/latest/get_started/first_isvc/"
+
+# Upgrade KServe
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Upgrading KServe..."
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring (ServiceMonitor)?"; then
+                MONITORING_ENABLED="true"
+            else
+                MONITORING_ENABLED="false"
+            fi
+        fi
+    else
+        MONITORING_ENABLED="false"
+    fi
+
+    echo "Upgrading KServe CRDs..."
+    just install-crds
+
+    echo "Generating Helm values..."
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    echo "Upgrading KServe controller..."
+    helm upgrade kserve oci://ghcr.io/kserve/charts/kserve \
+        --version ${KSERVE_CHART_VERSION} -n ${KSERVE_NAMESPACE} --wait --timeout=10m \
+        -f values.yaml
+
+    echo "KServe upgraded successfully"
+
+# Uninstall KServe
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling KServe..."
+    helm uninstall kserve -n ${KSERVE_NAMESPACE} --ignore-not-found
+    just uninstall-crds
+    just delete-storage
+    just delete-namespace
+    echo "KServe uninstalled"
+
+# Get KServe controller logs
+logs:
+    @kubectl logs -n ${KSERVE_NAMESPACE} -l control-plane=kserve-controller-manager --tail=100 -f
+
+# Get status of KServe components
+status:
+    #!/bin/bash
+    set -euo pipefail
+    echo "=== KServe Components Status ==="
+    echo ""
+    echo "Namespace: ${KSERVE_NAMESPACE}"
+    echo ""
+    echo "Pods:"
+    kubectl get pods -n ${KSERVE_NAMESPACE}
+    echo ""
+    echo "Services:"
+    kubectl get services -n ${KSERVE_NAMESPACE}
+    echo ""
+    echo "InferenceServices:"
+    kubectl get inferenceservices -A
+
+# Convert MLflow artifact path to KServe storageUri
+storage-uri artifact_path='':
+    #!/bin/bash
+    set -euo pipefail
+
+    if [ -z "{{ artifact_path }}" ]; then
+        read -p "Enter MLflow artifact path from Model Registry (e.g., mlflow-artifacts:/2/models/MODEL_ID/artifacts): " artifact_path
+    else
+        artifact_path="{{ artifact_path }}"
+    fi
+
+    # Convert mlflow-artifacts:/ to s3://mlflow/
+    storage_uri="${artifact_path/mlflow-artifacts:/s3://mlflow}"
+
+    # Remove trailing filename if present (e.g., MLmodel, model.pkl)
+    if [[ "$storage_uri" == */artifacts/* ]] && [[ "$storage_uri" != */artifacts ]]; then
+        # Remove filename after /artifacts/
+        storage_uri=$(echo "$storage_uri" | sed 's|/artifacts/.*|/artifacts|')
+    fi
+
+    # Check if this is a run-based path (not model registry path)
+    if [[ "$storage_uri" =~ s3://mlflow/[0-9]+/[a-f0-9]{32}/artifacts ]]; then
+        echo "Warning: This appears to be a run-based path, not a model registry path."
+        echo "KServe requires the model registry path which can be found in:"
+        echo "  MLflow UI → Models → [Model Name] → [Version] → artifact_path"
+        echo ""
+        echo "Expected format: mlflow-artifacts:/EXPERIMENT_ID/models/MODEL_ID/artifacts"
+        echo "Your input: $artifact_path"
+        echo ""
+        echo "Output (may not work): $storage_uri"
+        exit 1
+    fi
+
+    echo "$storage_uri"

@@ -586,6 +586,19 @@ docker run --rm localhost:30500/mlflow:3.6.0-oidc mlflow --version
 
 **Note**: All Docker commands run on the remote host specified by `DOCKER_HOST`.
 
+## Examples
+
+### Iris Classification with KServe
+
+A complete end-to-end example demonstrating the integration of JupyterHub, MLflow, and KServe:
+
+- Train an Iris classification model in JupyterHub
+- Register the model to MLflow Model Registry
+- Deploy the model with KServe InferenceService
+- Test inference from JupyterHub notebooks and Kubernetes Jobs
+
+See: [`examples/kserve-mlflow-iris`](../examples/kserve-mlflow-iris/README.md)
+
 ## Custom Image
 
 ### Dockerfile

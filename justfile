@@ -7,6 +7,7 @@ default:
     @just --list --unsorted --list-submodules
 
 mod airflow
+mod cert-manager
 mod ch-ui
 mod clickhouse
 mod dagster
@@ -17,6 +18,7 @@ mod goldilocks
 mod keycloak
 mod jupyterhub
 mod k8s
+mod kserve
 mod lakekeeper
 mod longhorn
 mod metabase

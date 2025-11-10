@@ -1,0 +1,91 @@
+set fallback := true
+
+export CERT_MANAGER_NAMESPACE := env("CERT_MANAGER_NAMESPACE", "cert-manager")
+export CERT_MANAGER_CHART_VERSION := env("CERT_MANAGER_CHART_VERSION", "v1.19.1")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Create namespace
+create-namespace:
+    @kubectl get namespace ${CERT_MANAGER_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${CERT_MANAGER_NAMESPACE}
+
+# Delete namespace
+delete-namespace:
+    @kubectl delete namespace ${CERT_MANAGER_NAMESPACE} --ignore-not-found
+
+# Install cert-manager
+install:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Installing cert-manager..."
+    just create-namespace
+
+    echo "Installing cert-manager from OCI registry..."
+    helm upgrade --cleanup-on-fail --install cert-manager \
+        oci://quay.io/jetstack/charts/cert-manager --version ${CERT_MANAGER_CHART_VERSION} \
+        -n ${CERT_MANAGER_NAMESPACE} --set crds.enabled=true --wait --timeout=5m
+
+    echo "Waiting for cert-manager webhook to be ready..."
+    kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=webhook \
+        -n ${CERT_MANAGER_NAMESPACE} --timeout=300s
+
+    echo "Verifying cert-manager webhook is functional..."
+    sleep 10
+
+    echo ""
+    echo "=== cert-manager installed ==="
+    echo "Namespace: ${CERT_MANAGER_NAMESPACE}"
+    echo "Version: ${CERT_MANAGER_CHART_VERSION}"
+    echo ""
+    echo "cert-manager provides TLS certificate management for Kubernetes"
+
+# Upgrade cert-manager
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Upgrading cert-manager..."
+
+    echo "Upgrading cert-manager from OCI registry..."
+    helm upgrade cert-manager oci://quay.io/jetstack/charts/cert-manager \
+        --version ${CERT_MANAGER_CHART_VERSION} -n ${CERT_MANAGER_NAMESPACE} \
+        --set crds.enabled=true --wait --timeout=5m
+
+    echo "cert-manager upgraded successfully"
+
+# Uninstall cert-manager
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Uninstalling cert-manager..."
+    helm uninstall cert-manager -n ${CERT_MANAGER_NAMESPACE} --ignore-not-found --wait
+    echo "Deleting cert-manager CRDs..."
+    kubectl delete crd \
+        certificates.cert-manager.io \
+        certificaterequests.cert-manager.io \
+        challenges.acme.cert-manager.io \
+        clusterissuers.cert-manager.io \
+        issuers.cert-manager.io \
+        orders.acme.cert-manager.io \
+        --ignore-not-found
+    just delete-namespace
+    echo "cert-manager uninstalled"
+
+# Get status of cert-manager components
+status:
+    #!/bin/bash
+    set -euo pipefail
+    echo "=== cert-manager Components Status ==="
+    echo ""
+    echo "Namespace: ${CERT_MANAGER_NAMESPACE}"
+    echo ""
+    echo "Pods:"
+    kubectl get pods -n ${CERT_MANAGER_NAMESPACE}
+    echo ""
+    echo "Services:"
+    kubectl get services -n ${CERT_MANAGER_NAMESPACE}
+    echo ""
+    echo "CRDs:"
+    kubectl get crd | grep cert-manager.io
