@@ -19,6 +19,7 @@ mod keycloak
 mod jupyterhub
 mod k8s
 mod kserve
+mod langfuse
 mod lakekeeper
 mod longhorn
 mod metabase

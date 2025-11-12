@@ -1,0 +1,509 @@
+set fallback := true
+
+export LANGFUSE_NAMESPACE := env("LANGFUSE_NAMESPACE", "langfuse")
+export LANGFUSE_CHART_VERSION := env("LANGFUSE_CHART_VERSION", "1.5.10")
+export LANGFUSE_HOST := env("LANGFUSE_HOST", "")
+export LANGFUSE_OIDC_CLIENT_ID := env("LANGFUSE_OIDC_CLIENT_ID", "langfuse")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export MINIO_HOST := env("MINIO_HOST", "")
+export MINIO_USER := "langfuse"
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add langfuse https://langfuse.github.io/langfuse-k8s
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove langfuse
+
+# Create Langfuse namespace
+create-namespace:
+    kubectl get namespace ${LANGFUSE_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${LANGFUSE_NAMESPACE}
+
+# Delete Langfuse namespace
+delete-namespace:
+    kubectl delete namespace ${LANGFUSE_NAMESPACE} --ignore-not-found
+
+# Install Langfuse
+install:
+    #!/bin/bash
+    set -euo pipefail
+
+    just create-namespace
+    just create-keycloak-user
+
+    # Create PostgreSQL user and database with auto-generated password
+    if ! just postgres::user-exists langfuse &>/dev/null; then
+        PG_PASSWORD=$(just utils::random-password)
+        just postgres::create-user-and-db langfuse langfuse "${PG_PASSWORD}"
+        # Store password in Vault for later retrieval
+        just vault::put postgres/user/langfuse username=langfuse password="${PG_PASSWORD}"
+    else
+        echo "PostgreSQL user langfuse already exists, skipping creation"
+        if ! just postgres::db-exists langfuse &>/dev/null; then
+            just postgres::create-db langfuse
+        fi
+    fi
+
+    # Check if ClickHouse is installed (required)
+    if ! helm list -n clickhouse 2>/dev/null | grep -q clickhouse; then
+        echo "Error: ClickHouse is not installed. Please install ClickHouse first:"
+        echo "  just clickhouse::install"
+        exit 1
+    fi
+    just create-clickhouse-user
+    just create-clickhouse-secret
+
+    # Check if MinIO is installed (required)
+    if ! helm list -n minio 2>/dev/null | grep -q minio; then
+        echo "Error: MinIO is not installed. Please install MinIO first:"
+        echo "  just minio::install"
+        exit 1
+    fi
+    if ! just minio::user-exists langfuse &>/dev/null; then
+        just minio::create-user langfuse langfuse
+    else
+        echo "MinIO user langfuse already exists, skipping creation"
+    fi
+    just create-salt
+    just create-nextauth-secret
+    just create-redis-password
+    just create-keycloak-client
+    just create-secrets
+
+    just add-helm-repo
+    export MINIO_HOST=$(kubectl get ingress -n minio minio -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
+    LANGFUSE_SALT=$(just salt) \
+        NEXTAUTH_SECRET=$(just nextauth-secret) \
+        gomplate -f langfuse-values.gomplate.yaml -o langfuse-values.yaml
+    helm upgrade --install langfuse langfuse/langfuse \
+        --version ${LANGFUSE_CHART_VERSION} -n ${LANGFUSE_NAMESPACE} --wait \
+        -f langfuse-values.yaml
+
+# Uninstall Langfuse
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall langfuse -n ${LANGFUSE_NAMESPACE} --wait --ignore-not-found
+    kubectl delete namespace ${LANGFUSE_NAMESPACE} --ignore-not-found
+
+    # Clean up Keycloak client and Vault secrets to avoid stale credentials
+    just delete-keycloak-client || true
+
+    echo "Langfuse uninstalled successfully"
+    echo ""
+    echo "Note: The following resources were NOT deleted:"
+    echo "  - PostgreSQL user and database (langfuse)"
+    echo "  - ClickHouse user and database (langfuse)"
+    echo "  - MinIO user and bucket (langfuse)"
+    echo "  - Keycloak user (langfuse)"
+    echo ""
+    echo "To delete these resources, run:"
+    echo "  just langfuse::delete-postgres-user-and-db"
+    echo "  just langfuse::delete-clickhouse-user"
+    echo "  just langfuse::delete-minio-user"
+    echo "  just langfuse::delete-keycloak-user"
+
+# Create all secrets (PostgreSQL, Keycloak, MinIO, Redis)
+create-secrets:
+    #!/bin/bash
+    set -euo pipefail
+
+    # Get PostgreSQL credentials
+    pg_host="postgres-cluster-rw.postgres"
+    pg_port="5432"
+    pg_user="langfuse"
+    pg_password=$(just vault::get postgres/user/langfuse password)
+    pg_database="langfuse"
+    database_url="postgresql://${pg_user}:${pg_password}@${pg_host}:${pg_port}/${pg_database}"
+
+    # Get OAuth client secret
+    # Prioritize temporary secret (freshly created) over Vault (potentially stale)
+    if kubectl get secret langfuse-oauth-temp -n ${LANGFUSE_NAMESPACE} &>/dev/null; then
+        oauth_client_id=$(kubectl get secret langfuse-oauth-temp -n ${LANGFUSE_NAMESPACE} \
+            -o jsonpath='{.data.client_id}' | base64 -d)
+        oauth_client_secret=$(kubectl get secret langfuse-oauth-temp -n ${LANGFUSE_NAMESPACE} \
+            -o jsonpath='{.data.client_secret}' | base64 -d)
+    elif helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null && \
+         just vault::get keycloak/client/langfuse client_secret &>/dev/null; then
+        oauth_client_id=$(just vault::get keycloak/client/langfuse client_id)
+        oauth_client_secret=$(just vault::get keycloak/client/langfuse client_secret)
+    else
+        echo "Error: Cannot retrieve OAuth client secret. Please run 'just langfuse::create-keycloak-client' first."
+        exit 1
+    fi
+
+    # Get Redis password
+    redis_password=$(just vault::get langfuse/redis secret)
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Storing secrets in Vault..."
+
+        # Store PostgreSQL credentials in Vault
+        just vault::put langfuse/postgres \
+            username="${pg_user}" \
+            password="${pg_password}" \
+            url="${database_url}"
+
+        # Store OAuth credentials in Vault
+        just vault::put keycloak/client/langfuse \
+            client_id="${oauth_client_id}" \
+            client_secret="${oauth_client_secret}"
+
+        # Redis password is already in Vault (created by create-redis-password)
+
+        # MinIO credentials are already in Vault (created by create-minio-service-account)
+
+        # Delete existing secrets and ExternalSecrets
+        kubectl delete secret postgres-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret postgres-auth-external-secret -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl delete secret keycloak-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret keycloak-auth-external-secret -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl delete secret redis-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret redis-auth-external-secret -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+
+        # Create ExternalSecrets
+        gomplate -f postgres-auth-external-secret.gomplate.yaml | kubectl apply -f -
+        kubectl apply -n ${LANGFUSE_NAMESPACE} -f keycloak-auth-external-secret.yaml
+        kubectl apply -n ${LANGFUSE_NAMESPACE} -f redis-auth-external-secret.yaml
+        kubectl delete secret minio-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret minio-auth-external-secret -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl apply -n ${LANGFUSE_NAMESPACE} -f minio-auth-external-secret.yaml
+
+        echo "Waiting for ExternalSecrets to sync..."
+        kubectl wait --for=condition=Ready externalsecret/postgres-auth-external-secret \
+            -n ${LANGFUSE_NAMESPACE} --timeout=60s
+        kubectl wait --for=condition=Ready externalsecret/keycloak-auth-external-secret \
+            -n ${LANGFUSE_NAMESPACE} --timeout=60s
+        kubectl wait --for=condition=Ready externalsecret/redis-auth-external-secret \
+            -n ${LANGFUSE_NAMESPACE} --timeout=60s
+        kubectl wait --for=condition=Ready externalsecret/minio-auth-external-secret \
+            -n ${LANGFUSE_NAMESPACE} --timeout=60s
+
+        echo "ExternalSecrets created successfully"
+    else
+        echo "External Secrets Operator not found. Creating Kubernetes Secrets directly..."
+
+        # Create PostgreSQL Secret
+        kubectl delete secret postgres-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl create secret generic postgres-auth -n ${LANGFUSE_NAMESPACE} \
+            --from-literal=username="${pg_user}" \
+            --from-literal=password="${pg_password}" \
+            --from-literal=url="${database_url}"
+
+        # Create Keycloak OAuth Secret
+        kubectl delete secret keycloak-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl create secret generic keycloak-auth -n ${LANGFUSE_NAMESPACE} \
+            --from-literal=client_id="${oauth_client_id}" \
+            --from-literal=client_secret="${oauth_client_secret}"
+
+        # Create Redis Secret
+        kubectl delete secret redis-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl create secret generic redis-auth -n ${LANGFUSE_NAMESPACE} \
+            --from-literal=secret="${redis_password}"
+
+        # Create MinIO Secret
+        minio_access_key=$(just vault::get langfuse/minio access_key)
+        minio_secret_key=$(just vault::get langfuse/minio secret_key)
+        kubectl delete secret minio-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl create secret generic minio-auth -n ${LANGFUSE_NAMESPACE} \
+            --from-literal=access_key="${minio_access_key}" \
+            --from-literal=secret_key="${minio_secret_key}"
+
+        # Store credentials in Vault if available (backup for admin credentials)
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put langfuse/postgres \
+                username="${pg_user}" \
+                password="${pg_password}" \
+                url="${database_url}"
+            just vault::put keycloak/client/langfuse \
+                client_id="${oauth_client_id}" \
+                client_secret="${oauth_client_secret}"
+        fi
+
+        echo "Kubernetes Secrets created successfully"
+    fi
+
+    # Clean up temporary OAuth secret
+    kubectl delete secret langfuse-oauth-temp -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+
+# Print Postgres password (from Kubernetes Secret)
+postgres-password:
+    @kubectl get secret postgres-auth -n ${LANGFUSE_NAMESPACE} \
+        -o jsonpath='{.data.password}' | base64 -d
+    @echo
+
+# Print Postgres password (from Vault)
+postgres-password-from-vault:
+    @just vault::get postgres/user/langfuse password
+
+# Delete PostgreSQL user and database
+delete-postgres-user-and-db:
+    #!/bin/bash
+    set -euo pipefail
+    if just postgres::user-exists langfuse &>/dev/null; then
+        just postgres::delete-user-and-db langfuse langfuse
+    else
+        echo "PostgreSQL user langfuse does not exist, skipping deletion"
+    fi
+    if just vault::exist postgres/user/langfuse &>/dev/null; then
+        just vault::delete postgres/user/langfuse
+    fi
+
+# Create ClickHouse user and database (for external ClickHouse)
+create-clickhouse-user:
+    #!/bin/bash
+    set -euo pipefail
+
+    # Create database if it doesn't exist
+    if ! just clickhouse::db-exists langfuse &>/dev/null; then
+        just clickhouse::create-db langfuse
+        echo "ClickHouse database 'langfuse' created"
+    else
+        echo "ClickHouse database 'langfuse' already exists"
+    fi
+
+    # Create user if it doesn't exist
+    if just clickhouse::user-exists langfuse &>/dev/null; then
+        echo "ClickHouse user langfuse already exists"
+        # Ensure privileges are granted even if user already exists
+        just clickhouse::grant langfuse langfuse
+        exit
+    fi
+
+    PASSWORD=$(just utils::random-password)
+    just vault::put clickhouse/user/langfuse username=langfuse password="${PASSWORD}"
+
+    # Create user and grant privileges
+    just clickhouse::create-user langfuse "${PASSWORD}"
+    just clickhouse::grant langfuse langfuse
+
+# Delete ClickHouse user and database (for external ClickHouse)
+delete-clickhouse-user:
+    #!/bin/bash
+    set -euo pipefail
+    if ! just clickhouse::user-exists langfuse &>/dev/null; then
+        echo "ClickHouse user langfuse does not exist, skipping deletion"
+        exit
+    fi
+    just clickhouse::delete-user langfuse
+    if just clickhouse::db-exists langfuse &>/dev/null; then
+        just clickhouse::delete-db langfuse
+    fi
+    just vault::delete clickhouse/user/langfuse
+
+# Create ClickHouse auth secret
+create-clickhouse-secret:
+    #!/bin/bash
+    set -euo pipefail
+    if kubectl get secret clickhouse-auth -n ${LANGFUSE_NAMESPACE} &>/dev/null; then
+        echo "ClickHouse auth secret already exists"
+        exit
+    fi
+
+    # for external ClickHouse
+    PASSWORD=$(just vault::get clickhouse/user/langfuse password)
+
+    # for internal ClickHouse
+    # PASSWORD=$(just utils::random-password)
+    # just vault::put clickhouse/user/langfuse username=langfuse password="${PASSWORD}"
+
+    kubectl create secret generic clickhouse-auth -n ${LANGFUSE_NAMESPACE} \
+        --from-literal=password="${PASSWORD}"
+
+# Delete ClickHouse auth secret
+delete-clickhouse-secret:
+    kubectl delete secret clickhouse-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+
+# Print ClickHouse password
+clickhouse-password:
+    @kubectl get secret clickhouse-auth -n ${LANGFUSE_NAMESPACE} \
+        -o jsonpath='{.data.password}' | base64 -d
+    @echo
+
+check-clickhouse-privilege:
+    kubectl exec -it clickhouse-pod -n clickhouse -- \
+        clickhouse-client --user=langfuse --password=$(just clickhouse-password) \
+        --query "SHOW GRANTS FOR langfuse"
+
+# Delete MinIO user and bucket
+delete-minio-user:
+    #!/bin/bash
+    set -euo pipefail
+    if ! just minio::user-exists langfuse &>/dev/null; then
+        echo "MinIO user langfuse does not exist, skipping deletion"
+        exit
+    fi
+    just minio::delete-user langfuse
+    if just vault::exist langfuse/minio &>/dev/null; then
+        just vault::delete langfuse/minio
+    fi
+
+# Create Keycloak user
+create-keycloak-user:
+    #!/bin/bash
+    set -euo pipefail
+    if just keycloak::user-exists langfuse &>/dev/null; then
+        echo "Keycloak user langfuse already exists, skipping creation"
+        exit
+    fi
+    PASSWORD=$(just utils::random-password)
+    just vault::put keycloak/user/langfuse username=langfuse password="${PASSWORD}"
+    just keycloak::create-system-user langfuse "${PASSWORD}"
+
+# Delete keycloak user
+delete-keycloak-user:
+    #!/bin/bash
+    set -euo pipefail
+    if ! just keycloak::user-exists langfuse &>/dev/null; then
+        echo "Keycloak user langfuse does not exist, skipping deletion"
+        exit
+    fi
+    just keycloak::delete-user langfuse
+    just vault::delete keycloak/user/langfuse
+
+# Create Langfuse salt
+create-salt:
+    #!/bin/bash
+    set -euo pipefail
+    if just vault::exist langfuse/salt &>/dev/null; then
+        echo "Salt for Langfuse already exists, skipping creation"
+        exit
+    fi
+    SALT=$(just utils::random-password)
+    just vault::put langfuse/salt value="${SALT}"
+
+# Delete Langfuse salt
+delete-salt:
+    #!/bin/bash
+    set -euo pipefail
+    if ! just vault::exist langfuse/salt &>/dev/null; then
+        echo "Salt for Langfuse does not exist, skipping deletion"
+        exit
+    fi
+    just vault::delete langfuse/salt
+
+# Print Langfuse salt
+salt:
+    #!/bin/bash
+    set -euo pipefail
+    if ! just vault::exist langfuse/salt &>/dev/null; then
+        echo "Salt for Langfuse does not exist" >&2
+        exit 1
+    fi
+    just vault::get langfuse/salt value
+
+# Create NextAuth secret
+create-nextauth-secret:
+    #!/bin/bash
+    set -euo pipefail
+    if just vault::exist langfuse/nextauth &>/dev/null; then
+        echo "Langfuse NextAuth secret already exists, skipping creation"
+        exit
+    fi
+    SECRET=$(just utils::random-password)
+    just vault::put langfuse/nextauth secret="${SECRET}"
+
+# Delete NextAuth secret
+delete-nextauth-secret:
+    #!/bin/bash
+    set -euo pipefail
+    if ! just vault::exist langfuse/nextauth &>/dev/null; then
+        echo "Langfuse NextAuth secret does not exist, skipping deletion"
+        exit
+    fi
+    just vault::delete langfuse/nextauth
+
+# Print NextAuth secret
+nextauth-secret:
+    #!/bin/bash
+    set -euo pipefail
+    if ! just vault::exist langfuse/nextauth &>/dev/null; then
+        echo "Langfuse NextAuth secret does not exist" >&2
+        exit 1
+    fi
+    just vault::get langfuse/nextauth secret
+
+# Create Redis password
+create-redis-password:
+    #!/bin/bash
+    set -euo pipefail
+    if just vault::exist langfuse/redis &>/dev/null; then
+        echo "Redis password already exists, skipping creation"
+        exit
+    fi
+    SECRET=$(just utils::random-password)
+    just vault::put langfuse/redis secret="${SECRET}"
+
+# Delete Redis password
+delete-redis-password:
+    #!/bin/bash
+    set -euo pipefail
+    if ! just vault::exist langfuse/redis &>/dev/null; then
+        echo "Redis password does not exist, skipping deletion"
+        exit
+    fi
+    just vault::delete langfuse/redis
+
+# Print Redis password
+redis-password:
+    #!/bin/bash
+    set -euo pipefail
+    if ! just vault::exist langfuse/redis &>/dev/null; then
+        echo "Redis password does not exist" >&2
+        exit 1
+    fi
+    just vault::get langfuse/redis secret
+    echo
+
+# Create Keycloak client for Langfuse
+create-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${LANGFUSE_HOST}" ]; do
+        LANGFUSE_HOST=$(
+            gum input --prompt="Langfuse host (FQDN): " --width=100 \
+            --placeholder="e.g., langfuse.example.com"
+        )
+    done
+
+    echo "Creating Keycloak client for Langfuse..."
+
+    just keycloak::delete-client ${KEYCLOAK_REALM} ${LANGFUSE_OIDC_CLIENT_ID} || true
+
+    CLIENT_SECRET=$(just utils::random-password)
+
+    just keycloak::create-client \
+        realm=${KEYCLOAK_REALM} \
+        client_id=${LANGFUSE_OIDC_CLIENT_ID} \
+        redirect_url="https://${LANGFUSE_HOST}/api/auth/callback/keycloak" \
+        client_secret="${CLIENT_SECRET}"
+
+    kubectl delete secret langfuse-oauth-temp -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+    kubectl create secret generic langfuse-oauth-temp -n ${LANGFUSE_NAMESPACE} \
+        --from-literal=client_id="${LANGFUSE_OIDC_CLIENT_ID}" \
+        --from-literal=client_secret="${CLIENT_SECRET}"
+
+    echo "Keycloak client created successfully"
+    echo "Client ID: ${LANGFUSE_OIDC_CLIENT_ID}"
+    echo "Redirect URI: https://${LANGFUSE_HOST}/api/auth/callback/keycloak"
+
+# Delete Keycloak client for Langfuse
+delete-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deleting Keycloak client for Langfuse..."
+    just keycloak::delete-client ${KEYCLOAK_REALM} ${LANGFUSE_OIDC_CLIENT_ID} || true
+    kubectl delete secret langfuse-oauth-temp -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+    if just vault::exist keycloak/client/langfuse &>/dev/null; then
+        just vault::delete keycloak/client/langfuse
+    fi

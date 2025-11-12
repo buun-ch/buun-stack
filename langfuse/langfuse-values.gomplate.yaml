@@ -1,0 +1,102 @@
+langfuse:
+  salt:
+    value: {{ .Env.LANGFUSE_SALT }}
+  features:
+    telemetryEnabled: false
+    # Allow SSO users to automatically create accounts on first login
+    # Username/password authentication is disabled via AUTH_DISABLE_USERNAME_PASSWORD
+    signUpDisabled: false
+    experimentalFeaturesEnabled: false
+  nextauth:
+    url: https://{{ .Env.LANGFUSE_HOST }}
+    secret:
+      value: {{ .Env.NEXTAUTH_SECRET }}
+  additionalEnv:
+    - name: DATABASE_URL
+      valueFrom:
+        secretKeyRef:
+          name: postgres-auth
+          key: url
+    # ClickHouse database name
+    - name: CLICKHOUSE_DB
+      value: "langfuse"
+    # https://langfuse.com/self-hosting/authentication-and-sso#keycloak
+    - name: AUTH_DISABLE_USERNAME_PASSWORD
+      value: "true"
+    - name: AUTH_KEYCLOAK_ALLOW_ACCOUNT_LINKING
+      value: "true"
+    - name: AUTH_KEYCLOAK_CLIENT_ID
+      valueFrom:
+        secretKeyRef:
+          name: keycloak-auth
+          key: client_id
+    - name: AUTH_KEYCLOAK_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: keycloak-auth
+          key: client_secret
+    - name: AUTH_KEYCLOAK_ISSUER
+      value: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}"
+
+  ingress:
+    enabled: true
+    annotations:
+      kubernetes.io/ingress.class: traefik
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    className: traefik
+    hosts:
+      - host: {{ .Env.LANGFUSE_HOST }}
+        paths:
+          - path: /
+            pathType: ImplementationSpecific
+    tls:
+      enabled: true
+
+postgresql:
+  deploy: false
+
+redis:
+  deploy: true
+  architecture: standalone
+  auth:
+    username: "default"
+    existingSecret: redis-auth
+    existingSecretPasswordKey: secret
+
+clickhouse:
+  deploy: false
+  host: clickhouse-clickhouse.clickhouse
+  clusterEnabled: false
+  auth:
+    username: langfuse
+    existingSecret: clickhouse-auth
+    existingSecretKey: password
+
+  # for internal ClickHouse
+  # # https://github.com/bitnami/charts/tree/main/bitnami/clickhouse
+  # deploy: true
+  # auth:
+  #   existingSecret: clickhouse-auth
+  #   existingSecretKey: password
+  # shards: 1
+  # replicaCount: 1
+  # zookeeper:
+  #   enabled: true
+  #   replicaCount: 1
+  #   # persistence:
+  #   #   storageClass: local-path
+
+s3:
+  deploy: false
+  bucket: langfuse
+  region: "auto"
+  endpoint: https://{{ .Env.MINIO_HOST }}
+  forcePathStyle: true
+  accessKeyId:
+    secretKeyRef:
+      name: minio-auth
+      key: access_key
+  secretAccessKey:
+    secretKeyRef:
+      name: minio-auth
+      key: secret_key
