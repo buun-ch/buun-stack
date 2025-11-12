@@ -41,8 +41,6 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 ### Data & Analytics (Optional)
 
 - **[JupyterHub](https://jupyter.org/hub)**: Interactive computing with collaborative notebooks
-- **[MLflow](https://mlflow.org/)**: Machine learning lifecycle management with experiment tracking and model registry
-- **[KServe](https://kserve.github.io/)**: Model serving platform for deploying ML models on Kubernetes
 - **[Trino](https://trino.io/)**: Distributed SQL query engine for querying multiple data sources
 - **[Querybook](https://www.querybook.org/)**: Big data querying UI with notebook interface
 - **[ClickHouse](https://clickhouse.com/)**: High-performance columnar analytics database
@@ -51,6 +49,15 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - **[Apache Superset](https://superset.apache.org/)**: BI platform with rich chart types and high customizability
 - **[Metabase](https://www.metabase.com/)**: Lightweight BI with simple configuration and clean, modern interface
 - **[DataHub](https://datahubproject.io/)**: Data catalog and metadata management
+
+### Machine Learning (Optional)
+
+- **[MLflow](https://mlflow.org/)**: Machine learning lifecycle management with experiment tracking and model registry
+- **[KServe](https://kserve.github.io/)**: Model serving platform for deploying ML models on Kubernetes
+
+### LLM & AI Applications (Optional)
+
+- **[Langfuse](https://langfuse.com/)**: LLM observability and analytics platform for tracking and debugging AI applications
 
 ### Orchestration (Optional)
 
@@ -194,6 +201,17 @@ Model serving platform for deploying ML models on Kubernetes:
 - **RawDeployment Mode**: Uses native Kubernetes Deployments without Knative dependency
 
 [📖 See KServe Documentation](./kserve/README.md)
+
+### Langfuse
+
+LLM observability and analytics platform:
+
+- **Trace Tracking**: Monitor LLM calls, chains, and agent executions with detailed traces
+- **Prompt Management**: Version and test prompts with playground interface
+- **Analytics**: Track costs, latency, and token usage across all LLM applications
+- **Keycloak Authentication**: OAuth2 integration with automatic user provisioning
+
+[📖 See Langfuse Documentation](./langfuse/README.md)
 
 ### Apache Superset
 
@@ -427,6 +445,7 @@ kubectl --context yourpc-oidc get nodes
 # Airflow: https://airflow.yourdomain.com
 # JupyterHub: https://jupyter.yourdomain.com
 # MLflow: https://mlflow.yourdomain.com
+# Langfuse: https://langfuse.yourdomain.com
 ```
 
 ## Customization
