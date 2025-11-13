@@ -28,7 +28,7 @@ This document covers Dagster installation, deployment, and debugging in the buun
    ```
 
 3. **Access Dagster Web UI**:
-   - Navigate to your Dagster instance (e.g., `https://dagster.buun.dev`)
+   - Navigate to your Dagster instance (e.g., `https://dagster.yourdomain.com`)
    - Login with your Keycloak credentials
 
 ### Uninstalling

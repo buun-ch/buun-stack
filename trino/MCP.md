@@ -26,7 +26,7 @@ Create `.env.claude` with Trino connection settings:
 
 ```bash
 # Trino Connection (Password Authentication)
-TRINO_HOST=trino.buun.dev
+TRINO_HOST=trino.yourdomain.com
 TRINO_PORT=443
 TRINO_SCHEME=https
 TRINO_SSL=true
@@ -75,7 +75,7 @@ Create `~/.env.claude` in your home directory with 1Password references:
 
 ```bash
 # Trino Connection (Password Authentication)
-TRINO_HOST=trino.buun.dev
+TRINO_HOST=trino.yourdomain.com
 TRINO_PORT=443
 TRINO_SCHEME=https
 TRINO_SSL=true

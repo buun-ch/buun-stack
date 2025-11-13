@@ -159,6 +159,7 @@ install:
 ```
 
 ServiceMonitor template (`servicemonitor.gomplate.yaml`):
+
 ```yaml
 {{- if eq .Env.MONITORING_ENABLED "true" }}
 apiVersion: monitoring.coreos.com/v1
@@ -366,3 +367,36 @@ receiving
 - Only write code comments when necessary, as the code should be self-explanatory
   (Avoid trivial comment for each code block)
 - Write output messages and code comments in English
+
+### Markdown Style
+
+When writing Markdown documentation:
+
+1. **NEVER use ordered lists as section headers**:
+   - Ordered lists indent content and are not suitable for headings
+   - Use proper heading levels (####) instead of numbered lists for section titles
+
+   ```markdown
+   <!-- INCORRECT: Ordered list used as headers -->
+   1. **Setup Instructions:**
+
+   Details here...
+
+   2. **Next Step:**
+
+   More details...
+
+   <!-- CORRECT: Use headings instead -->
+   #### Setup Instructions
+
+   Details here...
+
+   #### Next Step
+
+   More details...
+   ```
+
+2. **Always validate with markdownlint-cli2**:
+   - Run `markdownlint-cli2 <file>` before committing any Markdown files
+   - Fix all linting errors to ensure consistent formatting
+   - Pay attention to code block language specifications (MD040) and list formatting (MD029)

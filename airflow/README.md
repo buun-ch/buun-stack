@@ -46,7 +46,7 @@ This document covers Airflow installation, deployment, and debugging in the buun
    **Note**: New users have only Viewer access by default and cannot execute DAGs without role assignment.
 
 4. **Access Airflow Web UI**:
-   - Navigate to your Airflow instance (e.g., `https://airflow.buun.dev`)
+   - Navigate to your Airflow instance (e.g., `https://airflow.yourdomain.com`)
    - Login with your Keycloak credentials
 
 ### Uninstalling
@@ -63,7 +63,7 @@ just airflow::uninstall true
 
 ### 1. Access JupyterHub
 
-- Navigate to your JupyterHub instance (e.g., `https://jupyter.buun.dev`)
+- Navigate to your JupyterHub instance (e.g., `https://jupyter.yourdomain.com`)
 - Login with your credentials
 
 ### 2. Navigate to Airflow DAGs Directory
@@ -82,7 +82,7 @@ In JupyterHub, the Airflow DAGs directory is mounted at:
 
 ### 4. Verify Deployment
 
-1. Access Airflow Web UI (e.g., `https://airflow.buun.dev`)
+1. Access Airflow Web UI (e.g., `https://airflow.yourdomain.com`)
 2. Check that the DAG `csv_to_postgres` appears in the DAGs list
 3. If the DAG doesn't appear immediately, wait 1-2 minutes for Airflow to detect the new file
 
