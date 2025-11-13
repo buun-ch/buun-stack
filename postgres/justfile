@@ -36,7 +36,8 @@ install-cnpg:
     @just add-helm-repo
     @helm upgrade --cleanup-on-fail --install cnpg cnpg/cloudnative-pg \
         --version ${CNPG_CHART_VERSION} \
-        -n ${CNPG_NAMESPACE} --create-namespace --wait
+        -n ${CNPG_NAMESPACE} --create-namespace --wait \
+        -f cnpg-values.yaml
 
 # Uninstall CloudNativePG
 uninstall-cnpg:
