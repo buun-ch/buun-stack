@@ -43,6 +43,13 @@ spec:
         args:
         - --config=/etc/oauth2-proxy/config.cfg
         - --upstream=http://{{ .Env.UPSTREAM_SERVICE }}
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 50m
+            memory: 128Mi
         env:
         - name: OAUTH2_PROXY_CLIENT_ID
           valueFrom:

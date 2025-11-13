@@ -26,7 +26,8 @@ install:
     helm upgrade --cleanup-on-fail \
         --install external-secrets external-secrets/external-secrets \
         --version ${EXTERNAL_SECRETS_CHART_VERSION} -n ${EXTERNAL_SECRETS_NAMESPACE} \
-        --create-namespace --wait
+        --create-namespace --wait \
+        -f external-secrets-values.yaml
     just create-external-secrets-role
     just create-vault-secret-store
 

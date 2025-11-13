@@ -26,7 +26,8 @@ install:
     echo "Installing cert-manager from OCI registry..."
     helm upgrade --cleanup-on-fail --install cert-manager \
         oci://quay.io/jetstack/charts/cert-manager --version ${CERT_MANAGER_CHART_VERSION} \
-        -n ${CERT_MANAGER_NAMESPACE} --set crds.enabled=true --wait --timeout=5m
+        -n ${CERT_MANAGER_NAMESPACE} --set crds.enabled=true --wait --timeout=5m \
+        -f cert-manager-values.yaml
 
     echo "Waiting for cert-manager webhook to be ready..."
     kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=webhook \
@@ -51,7 +52,8 @@ upgrade:
     echo "Upgrading cert-manager from OCI registry..."
     helm upgrade cert-manager oci://quay.io/jetstack/charts/cert-manager \
         --version ${CERT_MANAGER_CHART_VERSION} -n ${CERT_MANAGER_NAMESPACE} \
-        --set crds.enabled=true --wait --timeout=5m
+        --set crds.enabled=true --wait --timeout=5m \
+        -f cert-manager-values.yaml
 
     echo "cert-manager upgraded successfully"
 

@@ -52,6 +52,40 @@ langfuse:
     tls:
       enabled: true
 
+  # Resource configuration based on Goldilocks/VPA recommendations
+  # CPU limits increased to handle startup spikes
+  web:
+    resources:
+      requests:
+        cpu: 15m
+        memory: 704Mi
+      limits:
+        cpu: 100m
+        memory: 1.5Gi
+    # Probe configuration adjusted for slow startup and response time
+    livenessProbe:
+      initialDelaySeconds: 60
+      timeoutSeconds: 30
+      failureThreshold: 5
+    readinessProbe:
+      initialDelaySeconds: 60
+      timeoutSeconds: 30
+      failureThreshold: 5
+
+  worker:
+    resources:
+      requests:
+        cpu: 15m
+        memory: 512Mi
+      limits:
+        cpu: 100m
+        memory: 1Gi
+    # Probe configuration adjusted for slow startup
+    livenessProbe:
+      initialDelaySeconds: 60
+      timeoutSeconds: 30
+      failureThreshold: 5
+
 postgresql:
   deploy: false
 

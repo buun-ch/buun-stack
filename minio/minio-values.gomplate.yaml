@@ -40,3 +40,12 @@ consoleIngress:
   tls:
     - hosts:
       - {{ .Env.MINIO_CONSOLE_HOST }}
+
+# Resource configuration based on Goldilocks/VPA recommendations (rounded to clean values)
+resources:
+  requests:
+    cpu: 50m
+    memory: 512Mi
+  limits:
+    cpu: 100m
+    memory: 1Gi

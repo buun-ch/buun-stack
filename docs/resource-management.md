@@ -140,26 +140,62 @@ For CRDs, use alternative methods:
 
 ### Working with Recommendations
 
+#### Understanding Goldilocks Recommendations
+
+**How Goldilocks works:**
+
+- Goldilocks displays recommendations directly from **Vertical Pod Autoscaler (VPA)** resources
+- VPA analyzes actual resource usage and calculates recommendations with **built-in headroom**
+- Goldilocks shows VPA's `target` values for Guaranteed QoS and `lowerBound` values for Burstable QoS
+
+**Important**: VPA recommendations **already include significant headroom** (typically 5-15x for CPU, 2-3x for memory compared to observed usage).
+
+**How VPA calculates recommendations:**
+
+- **Percentile-based**: 90th percentile for target, 50th for lower bound, 95th for upper bound
+- **Safety margin**: 15% added to base calculation (configurable via `--recommendation-margin-fraction`)
+- **Confidence multiplier**: Additional buffer when historical data is limited (decreases as data accumulates)
+- **Minimum thresholds**: CPU 25m, Memory 250Mi
+- **Data collection**: 8-day rolling window with weight decay (newer samples weighted higher)
+
+Example from external-secrets:
+
+- Actual usage: CPU 1m, Memory 77Mi
+- VPA target recommendation: CPU 15m, Memory 164M (displayed as Goldilocks "Guaranteed QoS")
+- VPA lowerBound recommendation: CPU 15m, Memory 105M (displayed as Goldilocks "Burstable QoS" request)
+- Built-in headroom: 15x CPU, 2x Memory (includes percentile + safety margin + confidence multiplier)
+
 #### For Standard Workloads (Supported by Goldilocks)
 
-Review Goldilocks recommendations in the dashboard, then configure resources based on your testing status:
+Review Goldilocks recommendations in the dashboard, then configure resources:
 
-**With load testing:**
+**Recommendation: Use VPA values as-is in most cases**
 
-- Use Goldilocks recommended values with minimal headroom (1.5-2x)
-- Round to clean values (50m, 100m, 200m, 512Mi, 1Gi, etc.)
+Given that VPA already includes:
+- 90th percentile (covers 90% of usage patterns)
+- 15% safety margin
+- Confidence multiplier for recent workloads
+- Minimum thresholds
 
-**Without load testing:**
+**Additional headroom is typically NOT needed unless:**
 
-- Add more headroom to handle unexpected load (3-5x)
-- Round to clean values
+1. **Unpredictable workload**: Traffic patterns significantly vary or are not captured in 8-day window
+2. **Critical services**: Data stores (PostgreSQL, Vault) where stability is paramount
+3. **Insufficient history**: Newly deployed services with < 8 days of metrics
+4. **Known growth**: Expecting significant traffic increase in near future
+
+**Recommended approach:**
+
+- **Standard services (operators, auxiliary)**: Use VPA recommendations as-is, round to clean values
+- **Critical services**: Use VPA + 1.5-2x for extra safety margin, or use Guaranteed QoS
+- **New services**: Start with VPA + 1.5x, monitor, adjust after 1-2 weeks
 
 **Example:**
 
 Goldilocks recommendation: 50m CPU, 128Mi Memory
 
-- With load testing: 100m CPU, 256Mi Memory (2x, rounded)
-- Without load testing: 200m CPU, 512Mi Memory (4x, rounded)
+- Standard service: 50m CPU, 128Mi Memory (use as-is, rounded)
+- Critical service: 100m CPU, 256Mi Memory (2x for extra safety)
 
 #### For CRDs and Unsupported Workloads
 
@@ -167,24 +203,31 @@ Use Grafana to check actual resource usage:
 
 1. **Navigate to Grafana dashboard**: `Kubernetes / Compute Resources / Pod`
 2. **Select namespace and pod**
-3. **Review usage over 24+ hours** to identify peak values
+3. **Review usage over 7+ days** to identify peak values and usage patterns
 
-Then apply the same approach:
+**Apply headroom manually (since VPA is not available):**
 
-**With load testing:**
+Since you're working from raw metrics without VPA's automatic calculation, manually apply similar buffers:
 
-- Use observed peak values with minimal headroom (1.5-2x)
+- **Base calculation**: Use 90th percentile or observed peak values
+- **Safety margin**: Add 15-20%
+- **Confidence buffer**: Add 20-50% for services with < 1 week of data
+- **Minimum thresholds**: CPU 25-50m, Memory 256Mi
 
-**Without load testing:**
+**Recommended multipliers:**
 
-- Add significant headroom (3-5x) for safety
+- **Standard services**: 2-3x observed peak (approximates VPA calculation)
+- **Critical services**: 3-5x observed peak (extra safety for data stores)
+- **New services**: 5x observed peak, re-evaluate after 1-2 weeks
 
 **Example:**
 
-Grafana shows peak: 40m CPU, 207Mi Memory
+Grafana shows peak: 40m CPU, 200Mi Memory over 7 days
 
-- With load testing: 100m CPU, 512Mi Memory (2.5x/2.5x, rounded)
-- Without load testing: 200m CPU, 1Gi Memory (5x/5x, rounded, Guaranteed QoS)
+- Standard service: 100m CPU, 512Mi Memory (2.5x, rounded)
+- Critical service: 200m CPU, 1Gi Memory (5x, rounded, Guaranteed QoS recommended)
+
+**Note**: For CRDs, you're working from raw usage data and must manually apply the same statistical buffers that VPA provides automatically. Larger multipliers compensate for lack of percentile analysis and safety margins.
 
 ## Configuring Resources
 

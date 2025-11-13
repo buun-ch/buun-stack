@@ -39,14 +39,14 @@ catalog:
       initialDelaySeconds: 5
       periodSeconds: 5
 
-  # Resource limits
+  # Resource limits (based on Goldilocks/VPA recommendations, rounded to clean values)
   resources:
-    limits:
-      cpu: 500m
-      memory: 512Mi
     requests:
-      cpu: 100m
+      cpu: 50m
       memory: 128Mi
+    limits:
+      cpu: 100m
+      memory: 256Mi
 
 
   # Database migration configuration

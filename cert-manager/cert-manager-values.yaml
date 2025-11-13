@@ -1,0 +1,31 @@
+# cert-manager resource configuration
+# Based on Goldilocks recommendations (Burstable QoS)
+
+# cert-manager controller
+resources:
+  requests:
+    cpu: 15m
+    memory: 128Mi
+  limits:
+    cpu: 50m
+    memory: 192Mi
+
+# CA injector
+cainjector:
+  resources:
+    requests:
+      cpu: 15m
+      memory: 192Mi
+    limits:
+      cpu: 50m
+      memory: 256Mi
+
+# Webhook
+webhook:
+  resources:
+    requests:
+      cpu: 15m
+      memory: 128Mi
+    limits:
+      cpu: 50m
+      memory: 128Mi

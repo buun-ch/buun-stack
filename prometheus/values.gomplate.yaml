@@ -1,5 +1,7 @@
 ---
-# Grafana Configuration
+# kube-prometheus-stack Helm chart values
+# https://github.com/prometheus-community/helm-charts/blob/main/charts/kube-prometheus-stack/values.yaml
+
 grafana:
   enabled: true
 
@@ -44,6 +46,24 @@ grafana:
     enabled: true
     size: 10Gi
 
+  # Resource configuration based on Goldilocks/VPA recommendations
+  resources:
+    requests:
+      cpu: 15m
+      memory: 480Mi
+    limits:
+      cpu: 50m
+      memory: 704Mi
+
+  sidecar:
+    resources:
+      requests:
+        cpu: 15m
+        memory: 128Mi
+      limits:
+        cpu: 25m
+        memory: 192Mi
+
 # Prometheus Configuration
 prometheus:
   prometheusSpec:
@@ -66,6 +86,15 @@ prometheus:
     serviceMonitorNamespaceSelector:
       matchLabels:
         buun.channel/enable-monitoring: "true"
+
+    # Resource configuration based on observed usage patterns
+    resources:
+      requests:
+        cpu: 100m
+        memory: 1.2Gi
+      limits:
+        cpu: 500m
+        memory: 2.5Gi
 
 {{- if .Env.PROMETHEUS_HOST }}
   ingress:
@@ -91,6 +120,15 @@ alertmanager:
           resources:
             requests:
               storage: 10Gi
+
+    # Resource configuration based on observed usage patterns
+    resources:
+      requests:
+        cpu: 15m
+        memory: 64Mi
+      limits:
+        cpu: 50m
+        memory: 128Mi
 
 {{- if .Env.ALERTMANAGER_HOST }}
   ingress:
@@ -130,5 +168,38 @@ kubeProxy:
 kubeStateMetrics:
   enabled: true
 
+# kube-state-metrics subchart configuration
+kube-state-metrics:
+  # Resource configuration based on Goldilocks/VPA recommendations
+  resources:
+    requests:
+      cpu: 15m
+      memory: 128Mi
+    limits:
+      cpu: 50m
+      memory: 256Mi
+
 nodeExporter:
   enabled: true
+
+# prometheus-node-exporter subchart configuration
+prometheus-node-exporter:
+  # Resource configuration based on Goldilocks/VPA recommendations
+  resources:
+    requests:
+      cpu: 15m
+      memory: 128Mi
+    limits:
+      cpu: 50m
+      memory: 256Mi
+
+# Prometheus Operator Configuration
+# Resource configuration based on Goldilocks/VPA recommendations
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 15m
+      memory: 110Mi
+    limits:
+      cpu: 50m
+      memory: 192Mi

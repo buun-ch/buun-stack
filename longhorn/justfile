@@ -49,6 +49,7 @@ install:
         --version ${LONGHORN_VERSION} -n ${LONGHORN_NAMESPACE} --create-namespace --wait \
         -f longhorn-values.yaml
     just set-replicas 1
+    just patch-resources
 
 # Uninstall Longhorn
 uninstall:
@@ -81,6 +82,149 @@ set-replicas num='1':
     }
     EOF
     )"
+
+# Patch resources for Longhorn components based on Goldilocks/VPA recommendations
+patch-resources:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Patching Longhorn component resources based on Goldilocks/VPA recommendations..."
+
+    # Patch csi-attacher deployment
+    kubectl patch deployment csi-attacher -n ${LONGHORN_NAMESPACE} --type='json' -p='[
+      {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/0/resources",
+        "value": {
+          "requests": {"cpu": "50m", "memory": "128Mi"},
+          "limits": {"cpu": "50m", "memory": "128Mi"}
+        }
+      }
+    ]'
+
+    # Patch csi-provisioner deployment
+    kubectl patch deployment csi-provisioner -n ${LONGHORN_NAMESPACE} --type='json' -p='[
+      {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/0/resources",
+        "value": {
+          "requests": {"cpu": "50m", "memory": "128Mi"},
+          "limits": {"cpu": "50m", "memory": "128Mi"}
+        }
+      }
+    ]'
+
+    # Patch csi-resizer deployment
+    kubectl patch deployment csi-resizer -n ${LONGHORN_NAMESPACE} --type='json' -p='[
+      {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/0/resources",
+        "value": {
+          "requests": {"cpu": "50m", "memory": "128Mi"},
+          "limits": {"cpu": "50m", "memory": "128Mi"}
+        }
+      }
+    ]'
+
+    # Patch csi-snapshotter deployment
+    kubectl patch deployment csi-snapshotter -n ${LONGHORN_NAMESPACE} --type='json' -p='[
+      {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/0/resources",
+        "value": {
+          "requests": {"cpu": "50m", "memory": "128Mi"},
+          "limits": {"cpu": "50m", "memory": "128Mi"}
+        }
+      }
+    ]'
+
+    # Find and patch engine-image daemonset (name includes hash)
+    ENGINE_IMAGE_DS=$(kubectl get daemonset -n ${LONGHORN_NAMESPACE} -o name | grep engine-image)
+    if [ -n "${ENGINE_IMAGE_DS}" ]; then
+        kubectl patch ${ENGINE_IMAGE_DS} -n ${LONGHORN_NAMESPACE} --type='json' -p='[
+          {
+            "op": "replace",
+            "path": "/spec/template/spec/containers/0/resources",
+            "value": {
+              "requests": {"cpu": "50m", "memory": "128Mi"},
+              "limits": {"cpu": "50m", "memory": "128Mi"}
+            }
+          }
+        ]'
+    fi
+
+    # Patch longhorn-csi-plugin daemonset (3 containers)
+    kubectl patch daemonset longhorn-csi-plugin -n ${LONGHORN_NAMESPACE} --type='json' -p='[
+      {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/0/resources",
+        "value": {
+          "requests": {"cpu": "50m", "memory": "64Mi"},
+          "limits": {"cpu": "50m", "memory": "64Mi"}
+        }
+      },
+      {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/1/resources",
+        "value": {
+          "requests": {"cpu": "50m", "memory": "64Mi"},
+          "limits": {"cpu": "50m", "memory": "64Mi"}
+        }
+      },
+      {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/2/resources",
+        "value": {
+          "requests": {"cpu": "50m", "memory": "64Mi"},
+          "limits": {"cpu": "50m", "memory": "64Mi"}
+        }
+      }
+    ]'
+
+    # Patch longhorn-driver-deployer deployment
+    kubectl patch deployment longhorn-driver-deployer -n ${LONGHORN_NAMESPACE} --type='json' -p='[
+      {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/0/resources",
+        "value": {
+          "requests": {"cpu": "50m", "memory": "128Mi"},
+          "limits": {"cpu": "50m", "memory": "128Mi"}
+        }
+      }
+    ]'
+
+    # Patch longhorn-manager daemonset (2 containers - core component, add extra headroom)
+    kubectl patch daemonset longhorn-manager -n ${LONGHORN_NAMESPACE} --type='json' -p='[
+      {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/0/resources",
+        "value": {
+          "requests": {"cpu": "50m", "memory": "512Mi"},
+          "limits": {"cpu": "100m", "memory": "512Mi"}
+        }
+      },
+      {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/1/resources",
+        "value": {
+          "requests": {"cpu": "50m", "memory": "64Mi"},
+          "limits": {"cpu": "50m", "memory": "64Mi"}
+        }
+      }
+    ]'
+
+    # Patch longhorn-ui deployment
+    kubectl patch deployment longhorn-ui -n ${LONGHORN_NAMESPACE} --type='json' -p='[
+      {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/0/resources",
+        "value": {
+          "requests": {"cpu": "50m", "memory": "128Mi"},
+          "limits": {"cpu": "50m", "memory": "128Mi"}
+        }
+      }
+    ]'
+
+    echo "All Longhorn component resources have been patched successfully!"
 
 # Setup OAuth2-Proxy for Longhorn
 oauth2-proxy-install:

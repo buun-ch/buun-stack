@@ -115,6 +115,13 @@ install-operator:
     kubectl apply -n ${KEYCLOAK_NAMESPACE} -f https://raw.githubusercontent.com/keycloak/keycloak-k8s-resources/${KEYCLOAK_OPERATOR_VERSION}/kubernetes/kubernetes.yml
     kubectl wait --for=condition=available deployment/keycloak-operator -n ${KEYCLOAK_NAMESPACE} --timeout=300s
 
+    echo "Applying resource configuration based on Goldilocks/VPA recommendations..."
+    kubectl patch deployment keycloak-operator -n ${KEYCLOAK_NAMESPACE} --type='json' -p='[
+      {"op": "replace", "path": "/spec/template/spec/containers/0/resources/requests/memory", "value": "704Mi"},
+      {"op": "replace", "path": "/spec/template/spec/containers/0/resources/limits/memory", "value": "1Gi"}
+    ]'
+    kubectl wait --for=condition=available deployment/keycloak-operator -n ${KEYCLOAK_NAMESPACE} --timeout=300s
+
 # Install Keycloak instance
 install:
     #!/bin/bash
