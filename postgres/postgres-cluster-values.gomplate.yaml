@@ -1,6 +1,15 @@
 cluster:
   instances: 1
 
+  # Resource configuration (Guaranteed QoS)
+  resources:
+    requests:
+      cpu: 200m
+      memory: 1Gi
+    limits:
+      cpu: 200m
+      memory: 1Gi
+
   # Storage configuration
   storage:
     size: {{ .Env.POSTGRES_STORAGE_SIZE }}
