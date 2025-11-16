@@ -1,0 +1,42 @@
+diff --git a/helm/templates/web/web-deployment.yaml b/helm/templates/web/web-deployment.yaml
+index c520cf8..d3c2e50 100644
+--- a/helm/templates/web/web-deployment.yaml
++++ b/helm/templates/web/web-deployment.yaml
+@@ -26,13 +26,24 @@ spec:
+         release: {{ .Release.Name }}
+         component: {{ .Values.web.name }}
+     spec:
++      {{- with .Values.web.initContainers }}
++      initContainers:
++        {{- toYaml . | nindent 8 }}
++      {{- end }}
+       containers:
+         - name: {{ .Values.web.name }}
+           args:
+-            - ./querybook/scripts/bundled_docker_run_web
+-            - --initdb
++            - /bin/bash
++            - -c
++            - |
++              ./querybook/scripts/init_db
++              ./querybook/scripts/runservice web {{ .Values.web.service.containerPort }}
+           image: "{{ .Values.web.image.repository }}:{{ .Values.web.image.tag }}"
+           imagePullPolicy: {{ .Values.web.image.pullPolicy }}
++          {{- with .Values.web.volumeMounts }}
++          volumeMounts:
++            {{- toYaml . | nindent 12 }}
++          {{- end }}
+           env:
+             - name: PORT
+               value: "{{ .Values.web.service.containerPort }}"
+@@ -64,6 +75,10 @@ spec:
+             - containerPort: {{ .Values.web.service.containerPort }}
+           resources:
+             {{- toYaml .Values.web.resources | nindent 12 }}
++      {{- with .Values.web.volumes }}
++      volumes:
++        {{- toYaml . | nindent 8 }}
++      {{- end }}
+       restartPolicy: Always
+       {{- with .Values.nodeSelector }}
+       nodeSelector:

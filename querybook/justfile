@@ -29,13 +29,15 @@ delete-namespace:
 clone-chart-repo:
     #!/bin/bash
     set -euo pipefail
-    if [ ! -d "querybook-repo" ]; then
-        echo "Cloning Querybook Helm chart repository..."
-        git clone --depth 1 ${QUERYBOOK_CHART_REPO} querybook-repo
-    else
-        echo "Querybook repository already exists. Pulling latest changes..."
-        cd querybook-repo && git pull
+    if [ -d "querybook-repo" ]; then
+        echo "Removing existing Querybook repository..."
+        rm -rf querybook-repo
     fi
+    echo "Cloning Querybook Helm chart repository..."
+    git clone --depth 1 ${QUERYBOOK_CHART_REPO} querybook-repo
+    echo "Applying Helm chart patches..."
+    cd querybook-repo && git apply ../helm-chart.patch
+    echo "Patches applied successfully"
 
 # Remove cloned chart repository
 remove-chart-repo:
