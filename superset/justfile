@@ -257,3 +257,48 @@ uninstall delete-db='true':
         just vault::delete superset/config || true
         just vault::delete superset/oauth || true
     fi
+
+# Restore Superset datasets, charts, and dashboards from backup
+restore backup_file charts_only='false':
+    #!/bin/bash
+    set -euo pipefail
+
+    BACKUP_FILE="{{ backup_file }}"
+    CHARTS_ONLY="{{ charts_only }}"
+
+    # Convert to absolute path if relative
+    if [[ ! "${BACKUP_FILE}" = /* ]]; then
+        BACKUP_FILE="../${BACKUP_FILE}"
+    fi
+
+    if [ ! -f "${BACKUP_FILE}" ]; then
+        echo "Error: Backup file '${BACKUP_FILE}' not found"
+        exit 1
+    fi
+
+    POD_NAME=$(kubectl get pods -n postgres -l cnpg.io/cluster=postgres-cluster \
+        -o jsonpath='{.items[0].metadata.name}')
+
+    if [ -z "${POD_NAME}" ]; then
+        echo "Error: PostgreSQL pod not found"
+        exit 1
+    fi
+
+    echo "Uploading backup file to PostgreSQL pod..."
+    kubectl cp "${BACKUP_FILE}" postgres/${POD_NAME}:/var/lib/postgresql/data/superset-restore.sql
+
+    echo "Running restore script..."
+    if [ "${CHARTS_ONLY}" = "true" ]; then
+        bash restore-datasets-charts.sh --charts-only
+    else
+        bash restore-datasets-charts.sh
+    fi
+
+    echo ""
+    echo "Restarting Superset pods to clear cache..."
+    kubectl delete pod -n ${SUPERSET_NAMESPACE} -l app=superset --wait=false || true
+    kubectl delete pod -n ${SUPERSET_NAMESPACE} -l app.kubernetes.io/component=worker --wait=false || true
+
+    echo ""
+    echo "Restore completed successfully!"
+    echo "Please wait for Superset pods to restart."

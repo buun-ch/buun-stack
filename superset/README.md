@@ -332,6 +332,35 @@ Expected packages:
 - Test query in SQL Lab first
 - Check Superset logs for errors
 
+### "Unable to migrate query editor state to backend" Error
+
+**Symptom**: Repeated error message in SQL Lab:
+
+```plain
+Unable to migrate query editor state to backend. Superset will retry later.
+Please contact your administrator if this problem persists.
+```
+
+**Root Cause**: Known Apache Superset bug ([#30351](https://github.com/apache/superset/issues/30351), [#33423](https://github.com/apache/superset/issues/33423)) where `/tabstateview/` endpoint returns HTTP 400 errors. Multiple underlying causes:
+
+- Missing `dbId` in query editor state (KeyError)
+- Foreign key constraint violations in `tab_state` table
+- Missing PostgreSQL development tools in container images
+
+**Solution**: Disable SQL Lab backend persistence in `configOverrides`:
+
+```python
+# Disable SQL Lab backend persistence to avoid tab state migration errors
+SQLLAB_BACKEND_PERSISTENCE = False
+```
+
+**Impact**:
+
+- Query editor state stored in browser local storage only (not in database)
+- Browser cache clear may lose unsaved queries
+- Use "Saved Queries" feature for important queries
+- This configuration is already applied in this deployment
+
 ## References
 
 - [Apache Superset Documentation](https://superset.apache.org/docs/)
