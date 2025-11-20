@@ -38,6 +38,12 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - **[Longhorn](https://longhorn.io/)**: Distributed block storage
 - **[MinIO](https://min.io/)**: S3-compatible object storage
 
+### GPU Support (Optional)
+
+- **[NVIDIA Device Plugin](https://github.com/NVIDIA/k8s-device-plugin)**: GPU resource management for Kubernetes
+    - Exposes NVIDIA GPUs to Kubernetes as schedulable resources
+    - Required for GPU-accelerated workloads in JupyterHub and other applications
+
 ### Data & Analytics (Optional)
 
 - **[JupyterHub](https://jupyter.org/hub)**: Interactive computing with collaborative notebooks
@@ -178,6 +184,7 @@ Multi-user platform for interactive computing:
 - **Keycloak Authentication**: OAuth2 integration with SSO
 - **Persistent Storage**: User notebooks stored in Longhorn volumes
 - **Collaborative**: Shared computing environment for teams
+- **GPU Support**: CUDA-enabled notebooks with nvidia-device-plugin integration
 
 [📖 See JupyterHub Documentation](./jupyterhub/README.md)
 

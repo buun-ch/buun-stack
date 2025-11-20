@@ -193,30 +193,6 @@ spec:
         nvidia.com/gpu: 1
 ```
 
-### Using GPUs in JupyterHub
-
-Configure JupyterHub to allow GPU access for notebook servers:
-
-```yaml
-# jupyterhub values.yaml
-singleuser:
-  runtimeClassName: nvidia
-  extraResource:
-    limits:
-      nvidia.com/gpu: "1"
-```
-
-After deploying JupyterHub with this configuration, users can access GPUs in their notebooks:
-
-```python
-import torch
-
-# Check GPU availability
-print(torch.cuda.is_available())  # True
-print(torch.cuda.device_count())   # 1
-print(torch.cuda.get_device_name(0))  # NVIDIA GeForce RTX 4070 Ti
-```
-
 ### Multiple GPUs
 
 To request multiple GPUs:
