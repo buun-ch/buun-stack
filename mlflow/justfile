@@ -15,6 +15,7 @@ export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
 export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export DOCKER_CMD := env("DOCKER_CMD", "docker")
 
 [private]
 default:
@@ -35,7 +36,7 @@ build-image:
     set -euo pipefail
     echo "Building MLflow image with OIDC auth plugin..."
     cd image
-    docker build -t ${IMAGE_REGISTRY}/mlflow:${MLFLOW_IMAGE_TAG} .
+    ${DOCKER_CMD} build -t ${IMAGE_REGISTRY}/mlflow:${MLFLOW_IMAGE_TAG} .
     echo "Image built: ${IMAGE_REGISTRY}/mlflow:${MLFLOW_IMAGE_TAG}"
 
 # Push custom MLflow image to registry
@@ -43,7 +44,7 @@ push-image:
     #!/bin/bash
     set -euo pipefail
     echo "Pushing MLflow image to registry..."
-    docker push ${IMAGE_REGISTRY}/mlflow:${MLFLOW_IMAGE_TAG}
+    ${DOCKER_CMD} push ${IMAGE_REGISTRY}/mlflow:${MLFLOW_IMAGE_TAG}
     echo "Image pushed: ${IMAGE_REGISTRY}/mlflow:${MLFLOW_IMAGE_TAG}"
 
 # Build and push custom MLflow image

@@ -37,6 +37,7 @@ export VAULT_HOST := env("VAULT_HOST", "")
 export VAULT_ADDR := "https://" + VAULT_HOST
 export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
 export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+export DOCKER_CMD := env("DOCKER_CMD", "docker")
 
 [private]
 default:
@@ -242,7 +243,7 @@ build-kernel-images:
     (
         cd ./images/datastack-notebook
         cp ../../../python-package/dist/*.whl ./
-        DOCKER_BUILDKIT=1 docker build -t \
+        DOCKER_BUILDKIT=1 ${DOCKER_CMD} build -t \
         ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG} \
         --build-arg spark_version="${SPARK_VERSION}" \
         --build-arg spark_download_url="${SPARK_DOWNLOAD_URL}" \
@@ -254,7 +255,7 @@ build-kernel-images:
         (
             cd ./images/datastack-cuda-notebook
             cp ../../../python-package/dist/*.whl ./
-            DOCKER_BUILDKIT=1 docker build -t \
+            DOCKER_BUILDKIT=1 ${DOCKER_CMD} build -t \
             ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG} \
             --build-arg spark_version="${SPARK_VERSION}" \
             --build-arg spark_download_url="${SPARK_DOWNLOAD_URL}" \
@@ -268,9 +269,9 @@ build-kernel-images:
 push-kernel-images:
     #!/bin/bash
     set -euo pipefail
-    docker push ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG}
+    ${DOCKER_CMD} push ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG}
     if [ "${JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED}" = "true" ]; then
-        docker push ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG}
+        ${DOCKER_CMD} push ${IMAGE_REGISTRY}/${KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY}:${JUPYTER_PYTHON_KERNEL_TAG}
     fi
 
 # Setup Vault integration for JupyterHub (user-specific tokens + auto-renewal)
