@@ -9,6 +9,7 @@ JupyterHub provides a multi-user Jupyter notebook environment with Keycloak OIDC
 - [Access](#access)
 - [Kernel Images](#kernel-images)
 - [Profile Configuration](#profile-configuration)
+- [GPU Support](#gpu-support)
 - [Buun-Stack Images](#buun-stack-images)
 - [buunstack Package & SecretStore](#buunstack-package--secretstore)
 - [Vault Integration](#vault-integration)
@@ -97,6 +98,176 @@ Available profile variables:
 - `JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED`
 
 Only `JUPYTER_PROFILE_DATASCIENCE_ENABLED` is true by default.
+
+## GPU Support
+
+JupyterHub supports GPU-accelerated notebooks using NVIDIA GPUs. GPU support is automatically enabled during installation if the nvidia-device-plugin is detected.
+
+### GPU Prerequisites
+
+GPU support requires the following components to be installed:
+
+#### NVIDIA Device Plugin
+
+Install the NVIDIA device plugin for Kubernetes:
+
+```bash
+just nvidia-device-plugin::install
+```
+
+This plugin:
+
+- Exposes NVIDIA GPUs to Kubernetes as schedulable resources
+- Manages GPU allocation to pods
+- Ensures proper GPU driver access within containers
+
+#### RuntimeClass Configuration
+
+The nvidia-device-plugin installation automatically creates the `nvidia` RuntimeClass, which:
+
+- Configures containerd to use the NVIDIA container runtime
+- Enables GPU access for containers using `runtimeClassName: nvidia`
+
+### Enabling GPU Support
+
+During JupyterHub installation, you will be prompted:
+
+```bash
+just jupyterhub::install
+# When nvidia-device-plugin is installed, you'll see:
+# "Enable GPU support for JupyterHub notebooks? (y/N)"
+```
+
+Alternatively, set the environment variable before installation:
+
+```bash
+JUPYTERHUB_GPU_ENABLED=true
+JUPYTERHUB_GPU_LIMIT=1  # Number of GPUs per user (default: 1)
+```
+
+### GPU-Enabled Profiles
+
+When GPU support is enabled:
+
+1. **All notebook profiles** get GPU access via `runtimeClassName: nvidia`
+2. **CUDA-specific profile** (buun-stack-cuda) additionally includes:
+   - CUDA 12.x toolkit
+   - PyTorch with CUDA support
+   - GPU-optimized libraries
+
+### Usage
+
+#### Selecting a GPU Profile
+
+When spawning a notebook, select a profile with GPU capabilities:
+
+- **Buun-stack with CUDA**: Recommended for GPU workloads (requires custom image)
+- **PyTorch**: Standard PyTorch notebook
+- **TensorFlow**: Standard TensorFlow notebook
+
+#### Verifying GPU Access
+
+In your notebook, verify GPU availability:
+
+```python
+import torch
+
+# Check if CUDA is available
+print(f"CUDA available: {torch.cuda.is_available()}")
+
+# Get GPU device count
+print(f"GPU count: {torch.cuda.device_count()}")
+
+# Get GPU device name
+if torch.cuda.is_available():
+    print(f"GPU name: {torch.cuda.get_device_name(0)}")
+
+    # Test GPU operation
+    torch.cuda.synchronize()
+    print("GPU is working correctly!")
+```
+
+#### GPU Configuration
+
+Default GPU configuration:
+
+- **GPU limit per user**: 1 GPU (configurable via `JUPYTERHUB_GPU_LIMIT`)
+- **Memory requests**: 1Gi (defined in singleuser settings)
+- **RuntimeClass**: `nvidia` (automatically applied when GPU enabled)
+
+### Building GPU-Enabled Custom Images
+
+If using the buun-stack-cuda profile, build and push the CUDA-enabled image:
+
+```bash
+# Enable CUDA profile
+export JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED=true
+
+# Build CUDA-enabled image (includes PyTorch with CUDA 12.x)
+just jupyterhub::build-kernel-images
+
+# Push to registry
+just jupyterhub::push-kernel-images
+```
+
+The CUDA image:
+
+- Based on `quay.io/jupyter/pytorch-notebook:x86_64-cuda12-python-3.12.10`
+- Includes PyTorch with CUDA 12.4 support (`cu124`)
+- Contains all standard buun-stack packages
+- Supports GPU-accelerated deep learning
+
+### Troubleshooting GPU Issues
+
+#### Pod Not Scheduling
+
+If GPU-enabled pods fail to schedule:
+
+```bash
+# Check if nvidia-device-plugin is running
+kubectl get pods -n nvidia-device-plugin
+
+# Verify GPU resources are advertised
+kubectl describe nodes | grep nvidia.com/gpu
+
+# Check RuntimeClass exists
+kubectl get runtimeclass nvidia
+```
+
+#### CUDA Not Available
+
+If `torch.cuda.is_available()` returns `False`:
+
+1. Verify the image has CUDA support:
+
+   ```bash
+   # In notebook
+   !nvcc --version  # Should show CUDA compiler version
+   ```
+
+2. Check Pod uses nvidia RuntimeClass:
+
+   ```bash
+   kubectl get pod <pod-name> -n datastack -o yaml | grep runtimeClassName
+   ```
+
+3. Rebuild image if using custom buun-stack-cuda image
+
+#### GPU Memory Issues
+
+Monitor GPU usage:
+
+```python
+import torch
+
+# Check GPU memory
+if torch.cuda.is_available():
+    print(f"Allocated: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB")
+    print(f"Reserved: {torch.cuda.memory_reserved(0) / 1024**3:.2f} GB")
+
+    # Clear cache if needed
+    torch.cuda.empty_cache()
+```
 
 ## Buun-Stack Images
 

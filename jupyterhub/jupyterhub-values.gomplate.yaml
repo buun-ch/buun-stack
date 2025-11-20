@@ -1,6 +1,10 @@
 hub:
   extraEnv:
-    JUPYTERHUB_CRYPT_KEY: {{ .Env.JUPYTERHUB_CRYPT_KEY | quote }}
+    JUPYTERHUB_CRYPT_KEY:
+      valueFrom:
+        secretKeyRef:
+          name: jupyterhub-crypt-key
+          key: crypt-key
     VAULT_ADDR: {{ .Env.VAULT_ADDR | quote }}
     NOTEBOOK_VAULT_TOKEN_TTL: {{ .Env.NOTEBOOK_VAULT_TOKEN_TTL | quote }}
     NOTEBOOK_VAULT_TOKEN_MAX_TTL: {{ .Env.NOTEBOOK_VAULT_TOKEN_MAX_TTL | quote }}
@@ -172,6 +176,14 @@ singleuser:
     NOTEBOOK_VAULT_TOKEN_TTL: "{{ .Env.NOTEBOOK_VAULT_TOKEN_TTL }}"
     NOTEBOOK_VAULT_TOKEN_MAX_TTL: "{{ .Env.NOTEBOOK_VAULT_TOKEN_MAX_TTL }}"
     # JUPYTERHUB_SINGLEUSER_EXTENSION: "0"
+
+  {{- if eq .Env.JUPYTERHUB_GPU_ENABLED "true" }}
+  extraPodConfig:
+    runtimeClassName: nvidia
+  extraResource:
+    limits:
+      nvidia.com/gpu: "{{ .Env.JUPYTERHUB_GPU_LIMIT }}"
+  {{- end }}
 
   storage:
     {{ if env.Getenv "PVC_NAME" -}}

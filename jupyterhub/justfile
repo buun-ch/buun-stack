@@ -9,7 +9,7 @@ export JUPYTERHUB_NFS_PV_ENABLED := env("JUPYTERHUB_NFS_PV_ENABLED", "")
 export JUPYTERHUB_STORAGE_CLASS := env("JUPYTERHUB_STORAGE_CLASS", "")
 export JUPYTERHUB_VAULT_INTEGRATION_ENABLED := env("JUPYTERHUB_VAULT_INTEGRATION_ENABLED", "")
 export JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED := env("JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED", "")
-export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-50")
+export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-51")
 export KERNEL_IMAGE_BUUN_STACK_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_REPOSITORY", "buun-stack-notebook")
 export KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY", "buun-stack-cuda-notebook")
 export JUPYTER_PROFILE_MINIMAL_ENABLED := env("JUPYTER_PROFILE_MINIMAL_ENABLED", "false")
@@ -20,6 +20,8 @@ export JUPYTER_PROFILE_PYTORCH_ENABLED := env("JUPYTER_PROFILE_PYTORCH_ENABLED",
 export JUPYTER_PROFILE_TENSORFLOW_ENABLED := env("JUPYTER_PROFILE_TENSORFLOW_ENABLED", "false")
 export JUPYTER_PROFILE_BUUN_STACK_ENABLED := env("JUPYTER_PROFILE_BUUN_STACK_ENABLED", "false")
 export JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED := env("JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED", "false")
+export JUPYTERHUB_GPU_ENABLED := env("JUPYTERHUB_GPU_ENABLED", "")
+export JUPYTERHUB_GPU_LIMIT := env("JUPYTERHUB_GPU_LIMIT", "1")
 export JUPYTERHUB_VAULT_TOKEN_TTL := env("JUPYTERHUB_VAULT_TOKEN_TTL", "24h")
 export NOTEBOOK_VAULT_TOKEN_TTL := env("NOTEBOOK_VAULT_TOKEN_TTL", "24h")
 export NOTEBOOK_VAULT_TOKEN_MAX_TTL := env("NOTEBOOK_VAULT_TOKEN_MAX_TTL", "168h")
@@ -38,6 +40,8 @@ export VAULT_ADDR := "https://" + VAULT_HOST
 export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
 export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
 export DOCKER_CMD := env("DOCKER_CMD", "docker")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 
 [private]
 default:
@@ -61,6 +65,37 @@ create-namespace:
 delete-namespace:
     kubectl delete namespace ${JUPYTERHUB_NAMESPACE} --ignore-not-found
 
+# Create JupyterHub crypt key secret
+create-crypt-key-secret:
+    #!/bin/bash
+    set -euo pipefail
+    crypt_key=$(just utils::random-password)
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Storing crypt key in Vault..."
+        just vault::put jupyterhub/config crypt-key="${crypt_key}"
+
+        kubectl delete secret jupyterhub-crypt-key -n ${JUPYTERHUB_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret jupyterhub-crypt-key -n ${JUPYTERHUB_NAMESPACE} --ignore-not-found
+
+        gomplate -f jupyterhub-crypt-key-external-secret.gomplate.yaml \
+            -o jupyterhub-crypt-key-external-secret.yaml
+        kubectl apply -f jupyterhub-crypt-key-external-secret.yaml
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/jupyterhub-crypt-key \
+            -n ${JUPYTERHUB_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating secret directly..."
+        kubectl delete secret jupyterhub-crypt-key -n ${JUPYTERHUB_NAMESPACE} --ignore-not-found
+        kubectl create secret generic jupyterhub-crypt-key -n ${JUPYTERHUB_NAMESPACE} \
+            --from-literal=crypt-key="${crypt_key}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put jupyterhub/config crypt-key="${crypt_key}"
+        fi
+    fi
+
 # Install JupyterHub
 install root_token='':
     #!/bin/bash
@@ -73,12 +108,11 @@ install root_token='':
         )
     done
 
-    # Generate JUPYTERHUB_CRYPT_KEY if not exists
-    if [ -z "${JUPYTERHUB_CRYPT_KEY:-}" ]; then
-        echo "Generating JUPYTERHUB_CRYPT_KEY..."
-        export JUPYTERHUB_CRYPT_KEY=$(just utils::random-password)
-        echo "JUPYTERHUB_CRYPT_KEY=${JUPYTERHUB_CRYPT_KEY}" >> ../../.env.local
-        echo "✓ JUPYTERHUB_CRYPT_KEY generated and saved to .env.local"
+    just create-namespace
+
+    # Create crypt key secret if it doesn't exist
+    if ! kubectl get secret jupyterhub-crypt-key -n ${JUPYTERHUB_NAMESPACE} &>/dev/null; then
+        just create-crypt-key-secret
     fi
 
     if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
@@ -93,7 +127,25 @@ install root_token='':
         MONITORING_ENABLED="false"
     fi
 
-    just create-namespace
+    # Check if nvidia-device-plugin is installed
+    if helm status nvidia-device-plugin -n ${NVIDIA_DEVICE_PLUGIN_NAMESPACE:-nvidia-device-plugin} &>/dev/null; then
+        if [ -z "${JUPYTERHUB_GPU_ENABLED}" ]; then
+            if gum confirm "Enable GPU support for JupyterHub notebooks?"; then
+                JUPYTERHUB_GPU_ENABLED="true"
+                if [ -z "${JUPYTERHUB_GPU_LIMIT}" ]; then
+                    JUPYTERHUB_GPU_LIMIT=$(
+                        gum input --prompt="GPU limit per user (default: 1): " --width=100 \
+                        --placeholder="1" --value="1"
+                    )
+                fi
+            else
+                JUPYTERHUB_GPU_ENABLED="false"
+            fi
+        fi
+    else
+        JUPYTERHUB_GPU_ENABLED="false"
+    fi
+
     # just k8s::copy-regcred ${JUPYTERHUB_NAMESPACE}
     just keycloak::create-client realm=${KEYCLOAK_REALM} client_id=${JUPYTERHUB_OIDC_CLIENT_ID} \
         redirect_url="https://${JUPYTERHUB_HOST}/hub/oauth_callback" \
@@ -216,9 +268,16 @@ uninstall:
     helm uninstall jupyterhub -n ${JUPYTERHUB_NAMESPACE} --wait --ignore-not-found
     kubectl delete pods -n ${JUPYTERHUB_NAMESPACE} -l app.kubernetes.io/component=singleuser-server
     kubectl delete -n ${JUPYTERHUB_NAMESPACE} pvc jupyter-nfs-pvc --ignore-not-found
+    kubectl delete -n ${JUPYTERHUB_NAMESPACE} secret jupyterhub-crypt-key --ignore-not-found
+    kubectl delete -n ${JUPYTERHUB_NAMESPACE} externalsecret jupyterhub-crypt-key --ignore-not-found
     kubectl delete -n ${JUPYTERHUB_NAMESPACE} externalsecret jupyterhub-vault-token --ignore-not-found
     if kubectl get pv jupyter-nfs-pv &>/dev/null; then
         kubectl patch pv jupyter-nfs-pv -p '{"spec":{"claimRef":null}}'
+    fi
+
+    # Clean up Vault entries if present
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+        just vault::delete jupyterhub/config || true
     fi
 
 # Delete JupyterHub PV and StorageClass

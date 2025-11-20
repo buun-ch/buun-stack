@@ -168,11 +168,11 @@ RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_
 #  && pip uninstall -y pycrdt datalayer_pycrdt \
 #  && pip install -i "${pip_repository_url}" 'datalayer_pycrdt==0.12.17'
 
-# Install PyTorch with pip (https://pytorch.org/get-started/locally/)
+# Install PyTorch with CUDA 12.x support (https://pytorch.org/get-started/locally/)
 # langchain-openai must be updated to avoid pydantic v2 error
-# https://github.com/run-llama/llama_index/issues/16540https://github.com/run-llama/llama_index/issues/16540
+# https://github.com/run-llama/llama_index/issues/16540
 # hadolint ignore=DL3013
-RUN pip install --no-cache-dir --index-url 'https://download.pytorch.org/whl/cpu' --upgrade \
+RUN pip install --no-cache-dir --index-url 'https://download.pytorch.org/whl/cu124' --upgrade \
     langchain-openai \
     torch \
     torchaudio \
