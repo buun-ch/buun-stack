@@ -1,0 +1,10 @@
+# Enable GPU Feature Discovery
+gfd:
+  enabled: true
+
+# Enable Node Feature Discovery (dependency)
+nfd:
+  enabled: true
+
+# Configure runtime for k3s
+runtimeClassName: "nvidia"

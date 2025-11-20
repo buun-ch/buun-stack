@@ -1,0 +1,75 @@
+set fallback := true
+
+export NVIDIA_DEVICE_PLUGIN_NAMESPACE := env("NVIDIA_DEVICE_PLUGIN_NAMESPACE", "nvidia-device-plugin")
+export NVIDIA_DEVICE_PLUGIN_VERSION := env("NVIDIA_DEVICE_PLUGIN_VERSION", "0.18.0")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Install NVIDIA device plugin for Kubernetes
+install:
+    #!/bin/bash
+    set -euo pipefail
+
+    if ! helm repo list | grep -q "^nvdp"; then
+        helm repo add nvdp https://nvidia.github.io/k8s-device-plugin
+    fi
+    helm repo update nvdp
+
+    helm upgrade --install nvidia-device-plugin nvdp/nvidia-device-plugin \
+        --namespace ${NVIDIA_DEVICE_PLUGIN_NAMESPACE} \
+        --create-namespace \
+        --version ${NVIDIA_DEVICE_PLUGIN_VERSION} \
+        --values values.yaml \
+        --wait
+
+    echo "✓ NVIDIA device plugin installed successfully"
+    echo ""
+    echo "Verify GPU availability with:"
+    echo "  just nvidia-device-plugin::verify"
+
+# Verify GPU resources are available
+verify:
+    #!/bin/bash
+    set -euo pipefail
+
+    echo "=== GPU Resources per Node ==="
+    kubectl get nodes -o json | jq -r '.items[] | "\(.metadata.name): \(.status.capacity["nvidia.com/gpu"] // "0") GPUs"'
+
+    echo ""
+    echo "=== Device Plugin Pods ==="
+    kubectl get pods -n ${NVIDIA_DEVICE_PLUGIN_NAMESPACE} -l app.kubernetes.io/name=nvidia-device-plugin
+
+    echo ""
+    echo "Test GPU access with:"
+    echo "  just nvidia-device-plugin::test"
+
+# Show detailed GPU information
+gpu-info:
+    kubectl get nodes -o json | jq -r '.items[] | select(.status.capacity["nvidia.com/gpu"] != null) | {name: .metadata.name, gpus: .status.capacity["nvidia.com/gpu"], allocatable: .status.allocatable["nvidia.com/gpu"]}'
+
+# Test GPU access by running nvidia-smi in a pod
+test:
+    #!/bin/bash
+    set -euo pipefail
+
+    kubectl delete pod gpu-test --ignore-not-found=true
+    kubectl apply -f gpu-test-pod.yaml
+
+    echo "Waiting for pod to complete..."
+    kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/gpu-test --timeout=60s || true
+
+    echo ""
+    echo "=== GPU Test Output ==="
+    kubectl logs gpu-test
+
+    kubectl delete pod gpu-test
+
+# Uninstall NVIDIA device plugin
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+
+    helm uninstall nvidia-device-plugin -n ${NVIDIA_DEVICE_PLUGIN_NAMESPACE} || true
+    echo "✓ NVIDIA device plugin uninstalled"
