@@ -40,9 +40,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 
 ### GPU Support (Optional)
 
-- **[NVIDIA Device Plugin](https://github.com/NVIDIA/k8s-device-plugin)**: GPU resource management for Kubernetes
-    - Exposes NVIDIA GPUs to Kubernetes as schedulable resources
-    - Required for GPU-accelerated workloads in JupyterHub and other applications
+- **[NVIDIA Device Plugin](https://github.com/NVIDIA/k8s-device-plugin)**: NVIDIA GPU support for Kubernetes
 
 ### Data & Analytics (Optional)
 
