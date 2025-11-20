@@ -74,7 +74,7 @@ delete-namespace:
 # Install Vault
 install: check-env
     #!/bin/bash
-    set -euo pipefail
+    set -eu
     just create-namespace
     just add-helm-repo
     gomplate -f vault-values.gomplate.yaml -o vault-values.yaml
@@ -84,6 +84,21 @@ install: check-env
     # Wait for the primary vault pod to complete init containers and be ready to accept commands
     kubectl wait pod --for=condition=PodReadyToStartContainers \
         -n ${K8S_VAULT_NAMESPACE} vault-0 --timeout=5m
+
+    # Wait for Vault service to be ready to accept connections
+    echo "Waiting for Vault service to be ready..."
+    for i in {1..30}; do
+        if kubectl exec -n ${K8S_VAULT_NAMESPACE} vault-0 -- \
+            vault status 2>&1 | grep -qE "(Initialized|Sealed)"; then
+            echo "✓ Vault service is ready"
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            echo "Error: Timeout waiting for Vault service to be ready"
+            exit 1
+        fi
+        sleep 3
+    done
 
     init_output=$(kubectl exec -n ${K8S_VAULT_NAMESPACE} vault-0 -- \
         vault operator init -key-shares=1 -key-threshold=1 -format=json || true)
