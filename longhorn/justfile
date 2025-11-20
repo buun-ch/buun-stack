@@ -89,6 +89,20 @@ patch-resources:
     set -euo pipefail
     echo "Patching Longhorn component resources based on Goldilocks/VPA recommendations..."
 
+    # Wait for deployments to be created
+    echo "Waiting for Longhorn deployments to be created..."
+    for i in {1..30}; do
+        if kubectl get deployment csi-attacher -n ${LONGHORN_NAMESPACE} &>/dev/null; then
+            echo "✓ Deployments are ready"
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            echo "Warning: Timeout waiting for deployments. Skipping resource patching."
+            exit 0
+        fi
+        sleep 2
+    done
+
     # Patch csi-attacher deployment
     kubectl patch deployment csi-attacher -n ${LONGHORN_NAMESPACE} --type='json' -p='[
       {
