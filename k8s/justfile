@@ -44,6 +44,10 @@ install:
     echo "Running: k3sup ${args[*]}"
     k3sup "${args[@]}"
 
+    if [ -n "${context}" ]; then
+        kubectl config use-context "${context}"
+    fi
+
     if [ "${K3S_ENABLE_REGISTRY}" = "true" ]; then
         echo "Setting up local Docker registry..."
 
@@ -76,6 +80,22 @@ uninstall:
     #!/bin/bash
     set -euo pipefail
     if gum confirm "Uninstall k3s from ${LOCAL_K8S_HOST}?"; then
+        # Check if Longhorn is installed and uninstall it first
+        if helm status longhorn -n longhorn-system &>/dev/null; then
+            echo "Detected Longhorn installation. Uninstalling Longhorn first to prevent CSI mount issues..."
+            just longhorn::uninstall || echo "Warning: Longhorn uninstallation had errors, continuing..."
+
+            # Wait a bit for CSI cleanup
+            echo "Waiting for CSI cleanup..."
+            sleep 5
+        fi
+
+        # Force cleanup any remaining CSI mounts
+        echo "Cleaning up CSI mounts..."
+        ssh "${LOCAL_K8S_HOST}" "sudo pkill -9 umount || true"
+        ssh "${LOCAL_K8S_HOST}" "sudo umount -f /var/lib/kubelet/plugins/kubernetes.io/csi/*/globalmount 2>/dev/null || true"
+        ssh "${LOCAL_K8S_HOST}" "sudo umount -l /var/lib/kubelet/plugins/kubernetes.io/csi/*/globalmount 2>/dev/null || true"
+
         ssh "${LOCAL_K8S_HOST}" "/usr/local/bin/k3s-uninstall.sh"
         echo "Cleaning up kubeconfig entries..."
         cluster_name=$(kubectl config view -o json | jq -r ".contexts[] | select(.name == \"${LOCAL_K8S_HOST}\") | .context.cluster // empty")
@@ -97,6 +117,47 @@ uninstall:
         echo "Uninstallation cancelled." >&2
         exit 1
     fi
+
+# Stop k3s cluster (with CSI cleanup)
+stop:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Cleaning up CSI mounts before stopping k3s..."
+    ssh "${LOCAL_K8S_HOST}" 'bash -s' << 'EOF'
+        set +e
+        sudo pkill -9 umount 2>/dev/null
+        shopt -s nullglob
+        for mount in /var/lib/kubelet/plugins/kubernetes.io/csi/*/globalmount; do
+            if [ -d "$mount" ]; then
+                echo "Unmounting $mount..."
+                sudo umount -f "$mount" 2>/dev/null
+                sudo umount -l "$mount" 2>/dev/null
+            fi
+        done
+        exit 0
+    EOF
+    echo "Stopping k3s service..."
+    ssh "${LOCAL_K8S_HOST}" "sudo systemctl stop k3s"
+    echo "k3s stopped on ${LOCAL_K8S_HOST}."
+    echo "You can now safely shutdown the machine."
+
+# Start k3s cluster
+start:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Starting k3s service..."
+    ssh "${LOCAL_K8S_HOST}" "sudo systemctl start k3s"
+    echo "Waiting for k3s to be ready..."
+    sleep 5
+    kubectl wait --for=condition=Ready nodes --all --timeout=60s
+    echo "k3s started on ${LOCAL_K8S_HOST}."
+
+# Restart k3s cluster (with CSI cleanup)
+restart:
+    #!/bin/bash
+    set -euo pipefail
+    just k8s::stop
+    just k8s::start
 
 # Setup k8s OIDC authentication
 setup-oidc-auth:

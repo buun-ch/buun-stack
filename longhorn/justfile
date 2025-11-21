@@ -1,7 +1,7 @@
 set fallback := true
 
 export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
-export LONGHORN_VERSION := env("LONGHORN_VERSION", "1.9.1")
+export LONGHORN_VERSION := env("LONGHORN_VERSION", "1.10.1")
 export LONGHORN_HOST := env("LONGHORN_HOST", "")
 export LONGHORN_OIDC_CLIENT_ID := env("LONGHORN_OIDC_CLIENT_ID", "longhorn")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
