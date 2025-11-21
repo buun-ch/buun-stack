@@ -1,0 +1,141 @@
+set fallback := true
+
+export LOCAL_K8S_HOST := env("LOCAL_K8S_HOST", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Run Trivy security scan (quick: CRITICAL + HIGH only)
+scan-quick:
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    echo "Running quick security scan (CRITICAL + HIGH misconfigurations only)..."
+    trivy k8s --report summary \
+        --severity CRITICAL,HIGH \
+        --scanners misconfig \
+        --ignorefile .trivyignore \
+        "${LOCAL_K8S_HOST}" \
+        --timeout 30m
+
+# Run Trivy security scan (standard: CRITICAL + HIGH + MEDIUM)
+scan:
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    echo "Running standard security scan (CRITICAL + HIGH + MEDIUM)..."
+    trivy k8s --report summary \
+        --severity CRITICAL,HIGH,MEDIUM \
+        "${LOCAL_K8S_HOST}" \
+        --timeout 30m
+
+# Run Trivy security scan (full: all severities)
+scan-full:
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    echo "Running full security scan (all severities)..."
+    trivy k8s --report summary \
+        "${LOCAL_K8S_HOST}" \
+        --timeout 30m
+
+# Run Trivy vulnerability scan only (CRITICAL + HIGH)
+scan-vulns:
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    echo "Running vulnerability scan (CRITICAL + HIGH only)..."
+    trivy k8s --report summary \
+        --severity CRITICAL,HIGH \
+        --scanners vuln \
+        "${LOCAL_K8S_HOST}" \
+        --timeout 30m
+
+# Run Trivy misconfiguration scan only (CRITICAL + HIGH)
+scan-misconfig:
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    echo "Running misconfiguration scan (CRITICAL + HIGH only)..."
+    trivy k8s --report summary \
+        --severity CRITICAL,HIGH \
+        --scanners misconfig \
+        --ignorefile .trivyignore \
+        "${LOCAL_K8S_HOST}" \
+        --timeout 30m
+
+# Run Trivy RBAC assessment
+scan-rbac:
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    echo "Running RBAC assessment..."
+    trivy k8s --report summary \
+        --severity CRITICAL,HIGH \
+        --scanners rbac \
+        "${LOCAL_K8S_HOST}" \
+        --timeout 30m
+
+# Run Trivy scan for specific namespace
+scan-namespace namespace severity='CRITICAL,HIGH':
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    echo "Running security scan for namespace: {{ namespace }}..."
+    trivy k8s --report summary \
+        --severity {{ severity }} \
+        --include-namespaces {{ namespace }} \
+        "${LOCAL_K8S_HOST}" \
+        --timeout 30m
+
+# Show detailed findings for specific namespace
+scan-namespace-detail namespace severity='CRITICAL,HIGH':
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    echo "Showing detailed findings for namespace: {{ namespace }}..."
+    trivy k8s --report all \
+        --severity {{ severity }} \
+        --include-namespaces {{ namespace }} \
+        "${LOCAL_K8S_HOST}" \
+        --timeout 30m
+
+# Show detailed findings for specific resource
+scan-resource namespace kind name severity='CRITICAL,HIGH':
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    echo "Showing detailed findings for {{ kind }}/{{ name }} in {{ namespace }}..."
+    trivy k8s --report all \
+        --severity {{ severity }} \
+        --include-namespaces {{ namespace }} \
+        "${LOCAL_K8S_HOST}" \
+        --timeout 30m | grep -A 50 "{{ kind }}/{{ name }}"
+
+# Generate detailed HTML report
+report output='trivy-report.html':
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    echo "Generating detailed security report..."
+    trivy k8s --report all \
+        --format template \
+        --template "@contrib/html.tpl" \
+        --output {{ output }} \
+        "${LOCAL_K8S_HOST}" \
+        --timeout 30m
+    echo "Report saved to: {{ output }}"
+
+# Generate JSON report for automation
+report-json output='trivy-report.json':
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    echo "Generating JSON security report..."
+    trivy k8s --report all \
+        --format json \
+        --output {{ output }} \
+        "${LOCAL_K8S_HOST}" \
+        --timeout 30m
+    echo "Report saved to: {{ output }}"

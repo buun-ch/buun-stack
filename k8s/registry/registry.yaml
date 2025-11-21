@@ -20,6 +20,12 @@ spec:
       labels:
         app: registry
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: registry
         image: registry:2
@@ -31,9 +37,19 @@ spec:
           value: "true"
         - name: REGISTRY_HTTP_ADDR
           value: "0.0.0.0:5000"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          capabilities:
+            drop:
+              - ALL
         volumeMounts:
         - name: registry-data
           mountPath: /var/lib/registry
+        - name: tmp
+          mountPath: /tmp
         livenessProbe:
           httpGet:
             path: /v2/
@@ -48,6 +64,8 @@ spec:
           periodSeconds: 5
       volumes:
       - name: registry-data
+        emptyDir: {}
+      - name: tmp
         emptyDir: {}
 ---
 apiVersion: v1

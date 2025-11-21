@@ -1,0 +1,38 @@
+# Trivy ignore file for development environment
+# Format: CVE-ID or Misconfiguration ID
+
+# ============================================================================
+# k3s System Components (kube-system namespace)
+# ============================================================================
+# These components are managed by k3s and follow k3s design decisions.
+# Manual modifications would be overwritten during k3s upgrades.
+
+# AVD-KSV-0024: svclb-traefik uses hostPorts by design
+# This is how k3s ServiceLB works - it binds to host ports 80/443
+# Cannot be changed without replacing the entire ServiceLB implementation
+AVD-KSV-0024
+
+# AVD-KSV-0014: readOnlyRootFilesystem not set
+# Many k3s components need write access for proper operation
+# (logs, temp files, state management)
+# Acceptable for trusted system components in development environment
+AVD-KSV-0014
+
+# AVD-KSV-0118: Default securityContext usage
+# k3s components use default security context for compatibility
+# and resource efficiency. Acceptable for development environments.
+# In production, consider hardened Kubernetes distributions.
+AVD-KSV-0118
+
+# ============================================================================
+# Longhorn Storage System
+# ============================================================================
+# Longhorn requires extensive permissions for volume management operations
+# These are expected and necessary for storage orchestration
+
+# ============================================================================
+# Kubernetes RBAC Core Components
+# ============================================================================
+# system:kube-controller-manager needs cluster-wide permissions
+# system:kube-scheduler needs cluster-wide permissions
+# These are standard Kubernetes architecture requirements

@@ -32,6 +32,7 @@ mod postgres
 mod prometheus
 mod qdrant
 mod querybook
+mod security
 mod superset
 mod trino
 mod utils
