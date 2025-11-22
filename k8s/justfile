@@ -54,6 +54,9 @@ install:
         # Deploy Docker registry to cluster
         kubectl apply -f ./registry/registry.yaml
 
+        # Set Pod Security Standard for registry namespace
+        kubectl label namespace registry pod-security.kubernetes.io/enforce=restricted --overwrite
+
         # Wait for registry deployment
         echo "Waiting for registry to be ready..."
         kubectl wait --for=condition=available --timeout=60s deployment/registry -n registry
@@ -304,6 +307,9 @@ deploy-registry:
     echo "Deploying local Docker registry..."
 
     kubectl apply -f ./registry/registry.yaml
+
+    # Set Pod Security Standard for registry namespace
+    kubectl label namespace registry pod-security.kubernetes.io/enforce=restricted --overwrite
 
     echo "Waiting for registry to be ready..."
     kubectl wait --for=condition=available --timeout=60s deployment/registry -n registry
