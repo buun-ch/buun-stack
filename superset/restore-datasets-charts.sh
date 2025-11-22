@@ -103,6 +103,69 @@ for table in "${TABLES[@]}"; do
 done
 
 echo ""
+echo "Fixing orphaned user references..."
+
+# Fix orphaned foreign key references to ab_user
+kubectl exec -n "$POSTGRES_NAMESPACE" "$POD_NAME" -- \
+    bash -c "PGPASSWORD='$DB_PASSWORD' psql -h localhost -U $DB_USER -d $DB_NAME" <<'EOF'
+BEGIN;
+
+-- Temporarily disable triggers to allow updates
+SET session_replication_role = replica;
+
+-- Fix all orphaned references to ab_user (replace with user_id = 1)
+UPDATE dashboards SET created_by_fk = 1 WHERE created_by_fk NOT IN (SELECT id FROM ab_user);
+UPDATE dashboards SET changed_by_fk = 1 WHERE changed_by_fk NOT IN (SELECT id FROM ab_user);
+
+UPDATE tables SET created_by_fk = 1 WHERE created_by_fk NOT IN (SELECT id FROM ab_user);
+UPDATE tables SET changed_by_fk = 1 WHERE changed_by_fk NOT IN (SELECT id FROM ab_user);
+
+UPDATE slices SET created_by_fk = 1 WHERE created_by_fk NOT IN (SELECT id FROM ab_user);
+UPDATE slices SET changed_by_fk = 1 WHERE changed_by_fk NOT IN (SELECT id FROM ab_user);
+UPDATE slices SET last_saved_by_fk = 1 WHERE last_saved_by_fk NOT IN (SELECT id FROM ab_user);
+
+UPDATE sql_metrics SET created_by_fk = 1 WHERE created_by_fk NOT IN (SELECT id FROM ab_user);
+UPDATE sql_metrics SET changed_by_fk = 1 WHERE changed_by_fk NOT IN (SELECT id FROM ab_user);
+
+UPDATE table_columns SET created_by_fk = 1 WHERE created_by_fk NOT IN (SELECT id FROM ab_user);
+UPDATE table_columns SET changed_by_fk = 1 WHERE changed_by_fk NOT IN (SELECT id FROM ab_user);
+
+-- Re-enable triggers
+SET session_replication_role = DEFAULT;
+
+COMMIT;
+EOF
+
+echo "  ✓ Successfully fixed orphaned user references"
+
+echo ""
+echo "Fixing PostgreSQL sequences..."
+
+# Fix all sequences to prevent primary key conflicts
+kubectl exec -n "$POSTGRES_NAMESPACE" "$POD_NAME" -- \
+    bash -c "PGPASSWORD='$DB_PASSWORD' psql -h localhost -U $DB_USER -d $DB_NAME" <<'EOF'
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN
+        SELECT s.relname AS seq_name, t.relname AS table_name
+        FROM pg_class AS s
+        JOIN pg_depend AS d ON d.objid = s.oid
+        JOIN pg_class AS t ON d.refobjid = t.oid
+        WHERE s.relkind = 'S'
+          AND t.relkind = 'r'
+          AND t.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+    LOOP
+        EXECUTE format('SELECT setval(%L, (SELECT COALESCE(MAX(id), 0) + 1 FROM %I))', r.seq_name, r.table_name);
+        RAISE NOTICE 'Fixed sequence % for table %', r.seq_name, r.table_name;
+    END LOOP;
+END $$;
+EOF
+
+echo "  ✓ Successfully fixed all sequences"
+
+echo ""
 echo "Restoration completed successfully!"
 echo ""
 echo "Restored tables:"
