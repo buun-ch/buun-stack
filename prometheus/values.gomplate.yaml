@@ -5,10 +5,39 @@
 grafana:
   enabled: true
 
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 472
+    runAsGroup: 472
+    fsGroup: 472
+    seccompProfile:
+      type: RuntimeDefault
+
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: false
+    runAsNonRoot: true
+    runAsUser: 472
+    runAsGroup: 472
+    seccompProfile:
+      type: RuntimeDefault
+
   admin:
     existingSecret: grafana-admin-credentials
     userKey: admin-user
     passwordKey: admin-password
+
+{{- if .Env.GRAFANA_OIDC_ENABLED }}
+  # Reference OIDC client secret from Kubernetes Secret
+  envValueFrom:
+    GRAFANA_OIDC_CLIENT_SECRET:
+      secretKeyRef:
+        name: grafana-oidc-credentials
+        key: client-secret
+{{- end }}
 
   ingress:
     enabled: true
@@ -25,14 +54,14 @@ grafana:
   grafana.ini:
     server:
       root_url: https://{{ .Env.GRAFANA_HOST }}
-{{- if eq (.Env.GRAFANA_OIDC_ENABLED | default "false") "true" }}
+{{- if .Env.GRAFANA_OIDC_ENABLED }}
     auth.generic_oauth:
       enabled: true
       name: Keycloak
       allow_sign_up: true
       client_id: grafana
-      client_secret: {{ .Env.GRAFANA_OIDC_CLIENT_SECRET }}
-      scopes: openid profile email groups
+      client_secret: $__env{GRAFANA_OIDC_CLIENT_SECRET}
+      scopes: openid profile email
       auth_url: https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/auth
       token_url: https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/token
       api_url: https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/userinfo
@@ -67,6 +96,22 @@ grafana:
 # Prometheus Configuration
 prometheus:
   prometheusSpec:
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 2000
+      fsGroup: 2000
+      seccompProfile:
+        type: RuntimeDefault
+
+    containers:
+      - name: prometheus
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          readOnlyRootFilesystem: true
     # Retention settings
     retention: 30d
     retentionSize: "50GB"
@@ -112,6 +157,22 @@ prometheus:
 # Alertmanager Configuration
 alertmanager:
   alertmanagerSpec:
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 2000
+      fsGroup: 2000
+      seccompProfile:
+        type: RuntimeDefault
+
+    containers:
+      - name: alertmanager
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          readOnlyRootFilesystem: true
     # Storage
     storage:
       volumeClaimTemplate:
@@ -170,6 +231,21 @@ kubeStateMetrics:
 
 # kube-state-metrics subchart configuration
 kube-state-metrics:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+
   # Resource configuration based on Goldilocks/VPA recommendations
   resources:
     requests:
@@ -196,6 +272,21 @@ prometheus-node-exporter:
 # Prometheus Operator Configuration
 # Resource configuration based on Goldilocks/VPA recommendations
 prometheusOperator:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+
   resources:
     requests:
       cpu: 15m

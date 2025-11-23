@@ -101,6 +101,14 @@ install: check-env
     #!/bin/bash
     set -euo pipefail
     just create-namespace
+
+    # Using 'privileged' because prometheus-node-exporter requires:
+    # - hostNetwork, hostPID (not allowed in baseline/restricted)
+    # - hostPath volumes (not allowed in baseline/restricted)
+    # - hostPort (not allowed in baseline/restricted)
+    kubectl label namespace ${PROMETHEUS_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=privileged --overwrite
+
     just add-helm-repo
 
     # Create credentials if not exists
@@ -182,6 +190,31 @@ setup-oidc:
     # Create admin group if it doesn't exist
     just keycloak::create-group "grafana-admins" "" "Grafana administrators group" || true
 
+    # Store OIDC client secret in Vault and create ExternalSecret
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Creating ExternalSecret..."
+        just vault::put grafana/oidc client_secret="${oidc_client_secret}"
+
+        kubectl delete secret grafana-oidc-credentials -n ${PROMETHEUS_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret grafana-oidc-credentials -n ${PROMETHEUS_NAMESPACE} --ignore-not-found
+
+        gomplate -f grafana-oidc-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/grafana-oidc-credentials \
+            -n ${PROMETHEUS_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating secret directly..."
+        kubectl delete secret grafana-oidc-credentials -n ${PROMETHEUS_NAMESPACE} --ignore-not-found
+
+        kubectl create secret generic grafana-oidc-credentials -n ${PROMETHEUS_NAMESPACE} \
+            --from-literal=client-secret="${oidc_client_secret}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put grafana/oidc client_secret="${oidc_client_secret}"
+        fi
+    fi
+
     # Update Helm values with OIDC configuration
     export GRAFANA_OIDC_CLIENT_SECRET="${oidc_client_secret}"
     export GRAFANA_OIDC_ENABLED="true"
@@ -210,8 +243,12 @@ disable-oidc:
     set -euo pipefail
     echo "Disabling Keycloak OIDC authentication for Grafana..."
 
+    # Clean up OIDC secrets
+    kubectl delete secret grafana-oidc-credentials -n ${PROMETHEUS_NAMESPACE} --ignore-not-found
+    kubectl delete externalsecret grafana-oidc-credentials -n ${PROMETHEUS_NAMESPACE} --ignore-not-found
+
     # Update Helm values to disable OIDC
-    export GRAFANA_OIDC_ENABLED="false"
+    export GRAFANA_OIDC_ENABLED=""
     export GRAFANA_OIDC_CLIENT_SECRET=""
     gomplate -f values.gomplate.yaml -o values.yaml
 

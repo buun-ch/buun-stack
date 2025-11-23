@@ -72,6 +72,57 @@ kubectl port-forward -n monitoring svc/kube-prometheus-stack-alertmanager 9093:9
 
 Then access at `http://localhost:9093`
 
+## Pod Security Standards
+
+The monitoring namespace uses **privileged** Pod Security Standard enforcement.
+
+```bash
+pod-security.kubernetes.io/enforce=privileged
+```
+
+#### Why Privileged Instead of Baseline or Restricted?
+
+The `prometheus-node-exporter` component requires the following privileged access to collect hardware and OS-level metrics:
+
+- `hostNetwork: true` - Access to host network namespace
+- `hostPID: true` - Access to host process IDs
+- `hostPath` volumes - Access to host filesystem paths (`/`, `/sys`, `/proc`)
+- `hostPort: 9100` - Expose metrics on host port
+
+These requirements are incompatible with both `baseline` and `restricted` Pod Security Standards:
+- **baseline** prohibits: `hostNetwork`, `hostPID`, `hostPath`, `hostPort`
+- **restricted** has even stricter requirements
+
+While these settings may seem permissive, they are necessary for node-exporter to collect system-level metrics from the host.
+
+#### Security Measures
+
+While using privileged enforcement at the namespace level, all other components (except node-exporter) apply restricted-level security contexts:
+
+- **Grafana**: Non-root user (472), dropped capabilities, seccomp profile
+- **Prometheus**: Non-root user (1000), read-only root filesystem, dropped capabilities
+- **Alertmanager**: Non-root user (1000), read-only root filesystem, dropped capabilities
+- **Prometheus Operator**: Non-root user (65534), read-only root filesystem, dropped capabilities
+- **kube-state-metrics**: Non-root user (65534), read-only root filesystem, dropped capabilities
+
+#### Alternative: Restricted Mode Without Node Metrics
+
+To use `restricted` Pod Security Standard, disable node-exporter:
+
+1. Add to `values.gomplate.yaml`:
+   ```yaml
+   nodeExporter:
+     enabled: false
+   ```
+
+2. Update justfile to use `restricted`:
+   ```bash
+   kubectl label namespace ${PROMETHEUS_NAMESPACE} \
+       pod-security.kubernetes.io/enforce=restricted --overwrite
+   ```
+
+**Trade-off**: You will lose node-level metrics (CPU, memory, disk, network at the host level), though pod-level metrics remain available.
+
 ## Configuration
 
 Environment variables (set in `.env.local` or override):
