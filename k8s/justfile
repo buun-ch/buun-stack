@@ -164,7 +164,18 @@ restart:
 
 # Setup k8s OIDC authentication
 setup-oidc-auth:
+    #!/bin/bash
+    set -euo pipefail
     just env::check
+
+    # Clear OIDC token cache if it exists
+    if [ -d ~/.kube/cache/oidc-login ]; then
+        if gum confirm "Clear OIDC token cache? (Recommended after Keycloak reinstall)"; then
+            rm -rf ~/.kube/cache/oidc-login/
+            echo "OIDC token cache cleared."
+        fi
+    fi
+
     gomplate -f ./k3s/config.gomplate.yaml | \
         ssh ${LOCAL_K8S_HOST} "sudo tee /etc/rancher/k3s/config.yaml > /dev/null"
     ssh ${LOCAL_K8S_HOST} "sudo systemctl restart k3s"
