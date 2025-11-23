@@ -1,6 +1,10 @@
 cluster:
   instances: 1
 
+  # Security configuration for restricted Pod Security Standards
+  seccompProfile:
+    type: RuntimeDefault
+
   # Resource configuration (Guaranteed QoS)
   resources:
     requests:

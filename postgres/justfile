@@ -1,7 +1,7 @@
 set fallback := true
 
 export CNPG_NAMESPACE := env("CNPG_NAMESPACE", "postgres")
-export CNPG_CHART_VERSION := env("CNPG_CHART_VERSION", "0.26.0")
+export CNPG_CHART_VERSION := env("CNPG_CHART_VERSION", "0.26.1")
 export CNPG_CLUSTER_CHART_VERSION := env("CNPG_CLUSTER_CHART_VERSION", "0.3.1")
 export POSTGRES_STORAGE_SIZE := env("POSTGRES_STORAGE_SIZE", "20Gi")
 export POSTGRES_MAX_CONNECTIONS := env("POSTGRES_MAX_CONNECTIONS", "200")
@@ -38,6 +38,9 @@ install-cnpg:
         --version ${CNPG_CHART_VERSION} \
         -n ${CNPG_NAMESPACE} --create-namespace --wait \
         -f cnpg-values.yaml
+
+    @kubectl label namespace ${CNPG_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=restricted --overwrite
 
 # Uninstall CloudNativePG
 uninstall-cnpg:

@@ -1,7 +1,26 @@
+# Pod Security Context for restricted Pod Security Standards
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+  fsGroup: 10001
+
+# Container Security Context for restricted Pod Security Standards
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop:
+      - ALL
+
 resources:
-    requests:
-        cpu: 50m
-        memory: 128Mi
-    limits:
-        cpu: 100m
-        memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 100m
+    memory: 256Mi
