@@ -4,7 +4,7 @@ set fallback := true
 # https://www.keycloak.org/operator/installation
 
 export KEYCLOAK_NAMESPACE := env("KEYCLOAK_NAMESPACE", "keycloak")
-export KEYCLOAK_OPERATOR_VERSION := env("KEYCLOAK_OPERATOR_VERSION", "26.3.4")
+export KEYCLOAK_OPERATOR_VERSION := env("KEYCLOAK_OPERATOR_VERSION", "26.4.5")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export K8S_OIDC_CLIENT_ID := env('K8S_OIDC_CLIENT_ID', "k8s")
@@ -108,6 +108,12 @@ install-operator:
     #!/bin/bash
     set -euo pipefail
     just create-namespace
+
+    # Using 'baseline' instead of 'restricted' because Keycloak Operator does not meet
+    # restricted requirements
+    kubectl label namespace ${KEYCLOAK_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=baseline --overwrite
+
     echo "Installing Keycloak Operator CRDs..."
     kubectl apply -f https://raw.githubusercontent.com/keycloak/keycloak-k8s-resources/${KEYCLOAK_OPERATOR_VERSION}/kubernetes/keycloaks.k8s.keycloak.org-v1.yml
     kubectl apply -f https://raw.githubusercontent.com/keycloak/keycloak-k8s-resources/${KEYCLOAK_OPERATOR_VERSION}/kubernetes/keycloakrealmimports.k8s.keycloak.org-v1.yml

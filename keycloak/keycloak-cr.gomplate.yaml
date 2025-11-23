@@ -5,7 +5,7 @@ metadata:
   namespace: {{ .Env.KEYCLOAK_NAMESPACE }}
 spec:
   instances: 1
-  image: quay.io/keycloak/keycloak:26.3.4
+  image: quay.io/keycloak/keycloak:26.4
   startOptimized: false
 
   # Database configuration for external PostgreSQL
@@ -37,18 +37,24 @@ spec:
   proxy:
     headers: xforwarded
 
-  # Additional options and admin configuration
+  # http-enabled and hostname-strict are configured via http.httpEnabled and hostname.strict
   additionalOptions:
-    - name: http-enabled
-      value: "true"
-    - name: hostname-strict
-      value: "false"
-    - name: hostname-strict-https
-      value: "false"
-    - name: proxy
-      value: edge
     - name: metrics-enabled
       value: "true"
+
+  # Keycloak takes ~20 seconds to start, so we configure probes accordingly
+  # Note: Keycloak Operator v2alpha1 only supports periodSeconds and failureThreshold
+  startupProbe:
+    periodSeconds: 10
+    failureThreshold: 20
+
+  livenessProbe:
+    periodSeconds: 10
+    failureThreshold: 3
+
+  readinessProbe:
+    periodSeconds: 5
+    failureThreshold: 3
 
   # Bootstrap admin configuration
   bootstrapAdmin:
@@ -56,15 +62,39 @@ spec:
       secret: keycloak-bootstrap-admin
 
   # Resources
+  # Increased memory limit to 3Gi for Keycloak 26.4 build process
   resources:
     requests:
-      memory: "1.5Gi"
+      memory: "2Gi"
       cpu: "500m"
     limits:
-      memory: "2Gi"
+      memory: "3Gi"
       cpu: "1000m"
 
-  # Ingress configuration (disabled - using separate Ingress resource)
+  unsupported:
+    podTemplate:
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        containers:
+          - name: keycloak
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: false
+              runAsNonRoot: true
+              runAsUser: 1000
+              runAsGroup: 1000
+              seccompProfile:
+                type: RuntimeDefault
+              capabilities:
+                drop:
+                  - ALL
+
   ingress:
     enabled: false
 
@@ -95,4 +125,3 @@ spec:
                 name: keycloak-service
                 port:
                   number: 8080
-
