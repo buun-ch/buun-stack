@@ -98,12 +98,29 @@ kubectl --context <host>-oidc get nodes       # Test OIDC auth
 - **Templates**: `*.gomplate.yaml` files use environment variables from `.env.local`
 - **Custom Extensions**: `custom.just` can be created for additional workflows
 
+### Resource Management
+
+All components should have appropriate resource requests and limits configured. See [docs/resource-management.md](docs/resource-management.md) for:
+
+- QoS class selection (Guaranteed vs Burstable)
+- Using Goldilocks/VPA for recommendations
+- Configuration guidelines and examples
+- **Important**: Never set resources below Goldilocks recommendations; always round up to clean values
+
 ### Gomplate Template Pattern
 
 **Environment Variable Management:**
 
-- Justfile manages environment variables and their default values
+- Justfile manages environment variables and their default values at the top using `export VAR := env("VAR", "default")`
 - Gomplate templates access variables using `{{ .Env.VAR }}`
+- **IMPORTANT**: Variables exported at the top of justfile are automatically available to all recipes - do NOT use `export` again inside recipes
+
+**Conditional Rendering Rules:**
+
+- For boolean flags (enabled/disabled features), use simple truthiness check: `{{- if .Env.VAR }}`
+- The justfile should set the variable to "true" (or any non-empty value) to enable, or empty string to disable
+- **DO NOT use**: `{{- if eq (.Env.VAR | default "false") "true" }}` - this is redundant
+- **CORRECT**: `{{- if .Env.VAR }}` - simple and clean
 
 **Example justfile pattern:**
 
@@ -111,12 +128,15 @@ kubectl --context <host>-oidc get nodes       # Test OIDC auth
 # At the top of justfile - define variables with defaults
 export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
 export GRAFANA_HOST := env("GRAFANA_HOST", "")
+export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
 
-# In recipes - export variables for gomplate
+# In recipes - use variables directly (already exported at top)
 install:
     #!/bin/bash
     set -euo pipefail
-    export GRAFANA_OIDC_ENABLED="${GRAFANA_OIDC_ENABLED:-false}"
+    if gum confirm "Enable monitoring?"; then
+        MONITORING_ENABLED="true"
+    fi
     gomplate -f values.gomplate.yaml -o values.yaml
 ```
 
@@ -128,8 +148,8 @@ namespace: {{ .Env.PROMETHEUS_NAMESPACE }}
 ingress:
   hosts:
     - {{ .Env.GRAFANA_HOST }}
-{{- if eq .Env.GRAFANA_OIDC_ENABLED "true" }}
-  oidc:
+{{- if .Env.MONITORING_ENABLED }}
+  monitoring:
     enabled: true
 {{- end }}
 ```
@@ -145,10 +165,10 @@ install:
         if [ -z "${MONITORING_ENABLED}" ]; then
             if gum confirm "Enable Prometheus monitoring?"; then
                 MONITORING_ENABLED="true"
+            else
+                MONITORING_ENABLED="false"
             fi
         fi
-    else
-        MONITORING_ENABLED="false"
     fi
     # ... helm install
 
@@ -161,7 +181,7 @@ install:
 ServiceMonitor template (`servicemonitor.gomplate.yaml`):
 
 ```yaml
-{{- if eq .Env.MONITORING_ENABLED "true" }}
+{{- if .Env.MONITORING_ENABLED }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

@@ -190,12 +190,24 @@ Given that VPA already includes:
 - **Critical services**: Use VPA + 1.5-2x for extra safety margin, or use Guaranteed QoS
 - **New services**: Start with VPA + 1.5x, monitor, adjust after 1-2 weeks
 
+**IMPORTANT:** Never configure resources **below** Goldilocks recommendations. Setting values lower than recommended will:
+- Cause Goldilocks dashboard to flag the workload as under-resourced
+- Potentially lead to performance issues or OOMKilled events
+- Defeat the purpose of using VPA-based recommendations
+
+When rounding values, always round **up** to the next clean value, not down.
+
 **Example:**
 
 Goldilocks recommendation: 50m CPU, 128Mi Memory
 
-- Standard service: 50m CPU, 128Mi Memory (use as-is, rounded)
+- Standard service: 50m CPU, 128Mi Memory (use as-is, rounded up if needed)
 - Critical service: 100m CPU, 256Mi Memory (2x for extra safety)
+
+Goldilocks recommendation: 15m CPU, 105M Memory
+
+- Correct: 25m CPU, 128Mi Memory (rounded up to clean values)
+- Incorrect: 10m CPU, 100Mi Memory (below recommendations, will be flagged)
 
 #### For CRDs and Unsupported Workloads
 
