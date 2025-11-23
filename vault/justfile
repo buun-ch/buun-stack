@@ -1,7 +1,7 @@
 set fallback := true
 
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
-export VAULT_CHART_VERSION := env("VAULT_CHART_VERSION", "0.29.1")
+export VAULT_CHART_VERSION := env("VAULT_CHART_VERSION", "0.31.0")
 export VAULT_HOST := env("VAULT_HOST", "")
 export VAULT_ADDR := "https://" + VAULT_HOST
 export VAULT_DEBUG := env("VAULT_DEBUG", "false")
@@ -77,6 +77,10 @@ install: check-env
     set -eu
     just create-namespace
     just add-helm-repo
+
+    kubectl label namespace ${K8S_VAULT_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=restricted --overwrite
+
     gomplate -f vault-values.gomplate.yaml -o vault-values.yaml
     helm upgrade --cleanup-on-fail --install vault hashicorp/vault \
         --version ${VAULT_CHART_VERSION} -n ${K8S_VAULT_NAMESPACE} --wait -f vault-values.yaml
