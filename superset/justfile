@@ -157,6 +157,9 @@ install:
 
     just create-namespace
 
+    kubectl label namespace ${SUPERSET_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=baseline --overwrite
+
     # Create Superset database and user
     POSTGRES_PASSWORD=$(just utils::random-password)
     just postgres::create-user-and-db superset superset "${POSTGRES_PASSWORD}"

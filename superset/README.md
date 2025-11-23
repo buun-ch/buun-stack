@@ -193,6 +193,110 @@ Data Sources (via HTTPS)
 - **Database Connections**: Must use external HTTPS hostnames for authenticated connections
 - **Role Mapping**: Keycloak groups map to Superset roles (Admin, Alpha, Gamma)
 
+## Security
+
+### Pod Security Standards
+
+This deployment applies Kubernetes Pod Security Standards at the **baseline** level.
+
+#### Security Configuration
+
+**Namespace Level**:
+
+```bash
+pod-security.kubernetes.io/enforce=baseline
+```
+
+**Container Security Context**:
+
+- `runAsUser: 1000` (non-root user)
+- `runAsNonRoot: true`
+- `allowPrivilegeEscalation: false`
+- `capabilities: drop ALL`
+- `seccompProfile: RuntimeDefault`
+- `readOnlyRootFilesystem: false` (required for Python package installation)
+
+**Init Container (copy-venv)**:
+
+- Purpose: Copy Python virtual environment to writable emptyDir volume
+- `runAsUser: 0` (root) - required for `chown` operation
+- Runs before main container to prepare writable `.venv` directory
+
+**Volume Configuration**:
+
+Two emptyDir volumes are mounted for write operations:
+
+1. `/app/.venv` - Python virtual environment (copied from image and made writable)
+2. `/app/superset_home/.cache` - uv package manager cache
+
+#### Why Baseline Instead of Restricted?
+
+The **baseline** level is required because:
+
+1. **Init container needs root**: The `copy-venv` initContainer must run as root (uid=0) to:
+   - Copy Python virtual environment from read-only image layer
+   - Change ownership to uid=1000 for main container
+   - Enable bootstrap script to install additional packages
+
+2. **Image architecture limitation**: The official Apache Superset image:
+   - Installs Python packages as root during build → `/app/.venv` owned by root
+   - Runs application as uid=1000
+   - Does not provide writable `.venv` for runtime package installation
+
+3. **Restricted would require**:
+   - All containers (including init) to run as non-root
+   - Custom Docker image with pre-chowned directories
+   - Or forgoing bootstrap script package installation
+
+**Security Impact**:
+
+- **Main application containers run as non-root** (uid=1000) ✓
+- **Init container runs as root** (uid=0) for ~2 seconds during pod startup
+- **Application runtime is non-root** - the attack surface is minimal
+- All other security controls (capabilities drop, seccomp, etc.) are applied
+
+#### Achieving Restricted Level (Optional)
+
+To deploy with **restricted** Pod Security Standards, create a custom Docker image:
+
+```dockerfile
+FROM apachesuperset.docker.scarf.sh/apache/superset:5.0.0
+
+# Switch to root to install packages and fix permissions
+USER root
+
+# Install required packages into the existing venv
+RUN . /app/.venv/bin/activate && \
+    uv pip install psycopg2-binary sqlalchemy-trino authlib
+
+# Change ownership to superset user (uid=1000)
+RUN chown -R superset:superset /app/.venv
+
+# Switch back to superset user
+USER superset
+```
+
+**Changes Required**:
+
+1. Build and push custom image to your registry
+2. Update `superset-values.gomplate.yaml`:
+   - Change `image.repository` to your custom image
+   - Remove `extraVolumes` and `extraVolumeMounts` (emptyDir no longer needed)
+   - Remove `initContainers` sections from `init`, `supersetNode`, `supersetWorker`
+   - Add `runAsNonRoot: true` to Pod-level `podSecurityContext`
+   - Remove `bootstrapScript` (packages already installed in image)
+3. Update namespace label to `restricted`:
+
+   ```bash
+   kubectl label namespace superset pod-security.kubernetes.io/enforce=restricted --overwrite
+   ```
+
+**Trade-offs**:
+
+- **Pros**: Strictest security posture, all containers run as non-root
+- **Cons**: Custom image maintenance required (rebuild on Superset version updates)
+- **Current approach**: Uses official images with minimal customization via bootstrap script
+
 ## Authentication
 
 ### User Login (OAuth)
