@@ -7,6 +7,18 @@ export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export SUPERSET_CPU_REQUEST := env("SUPERSET_CPU_REQUEST", "50m")
+export SUPERSET_CPU_LIMIT := env("SUPERSET_CPU_LIMIT", "1")
+export SUPERSET_MEMORY_REQUEST := env("SUPERSET_MEMORY_REQUEST", "500Mi")
+export SUPERSET_MEMORY_LIMIT := env("SUPERSET_MEMORY_LIMIT", "3Gi")
+export SUPERSET_WORKER_CPU_REQUEST := env("SUPERSET_WORKER_CPU_REQUEST", "300m")
+export SUPERSET_WORKER_CPU_LIMIT := env("SUPERSET_WORKER_CPU_LIMIT", "4")
+export SUPERSET_WORKER_MEMORY_REQUEST := env("SUPERSET_WORKER_MEMORY_REQUEST", "4Gi")
+export SUPERSET_WORKER_MEMORY_LIMIT := env("SUPERSET_WORKER_MEMORY_LIMIT", "8Gi")
+export REDIS_CPU_REQUEST := env("REDIS_CPU_REQUEST", "50m")
+export REDIS_CPU_LIMIT := env("REDIS_CPU_LIMIT", "200m")
+export REDIS_MEMORY_REQUEST := env("REDIS_MEMORY_REQUEST", "128Mi")
+export REDIS_MEMORY_LIMIT := env("REDIS_MEMORY_LIMIT", "256Mi")
 
 [private]
 default:
@@ -84,8 +96,6 @@ create-secrets postgres_password='':
     #!/bin/bash
     set -euo pipefail
 
-    secret_key=$(just utils::random-password)
-
     pg_host="postgres-cluster-rw.postgres"
     pg_port="5432"
     pg_user="superset"
@@ -101,17 +111,26 @@ create-secrets postgres_password='':
         oauth_client_secret=$(kubectl get secret superset-oauth-temp -n ${SUPERSET_NAMESPACE} \
             -o jsonpath='{.data.client_secret}' | base64 -d)
     else
-        echo "Error: Cannot retrieve OAuth client secret. Please run 'just superset::create-keycloak-client' first."
+        echo "Error: Cannot retrieve OAuth client secret. Please run 'just superset::create-keycloak-client' first." >&2
         exit 1
     fi
 
     if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
         echo "External Secrets Operator detected. Storing secrets in Vault..."
 
+        # Try to retrieve existing SECRET_KEY, generate new one if not found
+        if secret_key=$(just vault::get superset/config SECRET_KEY 2>/dev/null); then
+            echo "Using existing SECRET_KEY from Vault."
+        else
+            echo "Generating new SECRET_KEY..."
+            secret_key=$(just utils::random-password)
+        fi
+
         just vault::put superset/config \
             SECRET_KEY="${secret_key}" \
             SQLALCHEMY_DATABASE_URI="${database_url}" \
-            OAUTH_CLIENT_SECRET="${oauth_client_secret}"
+            OAUTH_CLIENT_SECRET="${oauth_client_secret}" \
+            DB_PASSWORD="${pg_password}"
 
         kubectl delete secret superset-secret -n ${SUPERSET_NAMESPACE} --ignore-not-found
         kubectl delete externalsecret superset-secret -n ${SUPERSET_NAMESPACE} --ignore-not-found
@@ -161,8 +180,21 @@ install:
         pod-security.kubernetes.io/enforce=baseline --overwrite
 
     # Create Superset database and user
-    POSTGRES_PASSWORD=$(just utils::random-password)
-    just postgres::create-user-and-db superset superset "${POSTGRES_PASSWORD}"
+    if just postgres::user-exists superset &>/dev/null; then
+        echo "PostgreSQL user 'superset' already exists."
+        if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            POSTGRES_PASSWORD=$(just vault::get superset/config DB_PASSWORD)
+        else
+            echo "Without External Secrets Operator, cannot retrieve DB password." >&2
+            echo "Please dump the database and run restore after installation:" >&2
+            echo "just superset::restore <backup-file>" >&2
+            exit 1
+        fi
+    else
+        echo "Creating new PostgreSQL user and database..."
+        POSTGRES_PASSWORD=$(just utils::random-password)
+        just postgres::create-user-and-db superset superset "${POSTGRES_PASSWORD}"
+    fi
 
     just create-keycloak-client
     just create-secrets "${POSTGRES_PASSWORD}"
@@ -174,7 +206,7 @@ install:
         export OAUTH_CLIENT_SECRET=$(kubectl get secret superset-oauth-temp -n ${SUPERSET_NAMESPACE} \
             -o jsonpath='{.data.client_secret}' | base64 -d)
     else
-        echo "Error: Cannot retrieve OAuth client secret. Please run 'just superset::create-keycloak-client' first."
+        echo "Error: Cannot retrieve OAuth client secret. Please run 'just superset::create-keycloak-client' first." >&2
         exit 1
     fi
 
@@ -226,7 +258,7 @@ upgrade:
         export OAUTH_CLIENT_SECRET=$(kubectl get secret superset-oauth-temp -n ${SUPERSET_NAMESPACE} \
             -o jsonpath='{.data.client_secret}' | base64 -d)
     else
-        echo "Error: Cannot retrieve OAuth client secret. Please run 'just superset::create-keycloak-client' first."
+        echo "Error: Cannot retrieve OAuth client secret. Please run 'just superset::create-keycloak-client' first." >&2
         exit 1
     fi
 
@@ -254,10 +286,10 @@ uninstall delete-db='true':
     just delete-namespace
     if [ "{{ delete-db }}" = "true" ]; then
         just postgres::delete-user-and-db superset superset
+        just vault::delete superset/config || true
     fi
 
     if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
-        just vault::delete superset/config || true
         just vault::delete superset/oauth || true
     fi
 
@@ -275,7 +307,7 @@ restore backup_file charts_only='false':
     fi
 
     if [ ! -f "${BACKUP_FILE}" ]; then
-        echo "Error: Backup file '${BACKUP_FILE}' not found"
+        echo "Error: Backup file '${BACKUP_FILE}' not found" >&2
         exit 1
     fi
 
@@ -283,7 +315,7 @@ restore backup_file charts_only='false':
         -o jsonpath='{.items[0].metadata.name}')
 
     if [ -z "${POD_NAME}" ]; then
-        echo "Error: PostgreSQL pod not found"
+        echo "Error: PostgreSQL pod not found" >&2
         exit 1
     fi
 

@@ -69,6 +69,14 @@ init:
 supersetNode:
   replicaCount: 1
 
+  resources:
+    requests:
+      cpu: "{{ .Env.SUPERSET_CPU_REQUEST }}"
+      memory: "{{ .Env.SUPERSET_MEMORY_REQUEST }}"
+    limits:
+      cpu: "{{ .Env.SUPERSET_CPU_LIMIT }}"
+      memory: "{{ .Env.SUPERSET_MEMORY_LIMIT }}"
+
   # Security context for Pod Security Standards (baseline)
   podSecurityContext:
     fsGroup: 1000
@@ -125,6 +133,14 @@ supersetNode:
 # Superset worker (Celery) configuration
 supersetWorker:
   replicaCount: 1
+
+  resources:
+    requests:
+      cpu: "{{ .Env.SUPERSET_WORKER_CPU_REQUEST }}"
+      memory: "{{ .Env.SUPERSET_WORKER_MEMORY_REQUEST }}"
+    limits:
+      cpu: "{{ .Env.SUPERSET_WORKER_CPU_LIMIT }}"
+      memory: "{{ .Env.SUPERSET_WORKER_MEMORY_LIMIT }}"
 
   # Security context for Pod Security Standards (baseline)
   podSecurityContext:
@@ -183,6 +199,13 @@ redis:
   master:
     persistence:
       enabled: false
+    resources:
+      requests:
+        cpu: "{{ .Env.REDIS_CPU_REQUEST }}"
+        memory: "{{ .Env.REDIS_MEMORY_REQUEST }}"
+      limits:
+        cpu: "{{ .Env.REDIS_CPU_LIMIT }}"
+        memory: "{{ .Env.REDIS_MEMORY_LIMIT }}"
     # Security context for Pod Security Standards (restricted)
     podSecurityContext:
       runAsNonRoot: true
