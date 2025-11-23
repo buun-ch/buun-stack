@@ -274,9 +274,9 @@ revoke db_name='' username='':
 
 # Create Postgres database and user
 create-user-and-db username='' db_name='' password='':
-    just create-db "{{ db_name }}"
-    just create-user "{{ username }}" "{{ password }}"
-    just grant "{{ db_name }}" "{{ username }}"
+    @just create-db "{{ db_name }}"
+    @just create-user "{{ username }}" "{{ password }}"
+    @just grant "{{ db_name }}" "{{ username }}"
 
 # Delete Postgres database and user
 delete-user-and-db username='' db_name='':
@@ -577,7 +577,7 @@ cleanup-cdc db_name='' slot_name='' pub_name='':
 # Run psql
 [no-exit-message]
 psql *args='':
-    @kubectl exec -it -n postgres postgres-cluster-1 -c postgres -- psql {{ args }}
+    @kubectl exec -it -n ${CNPG_NAMESPACE} postgres-cluster-1 -c postgres -- psql {{ args }}
 
 # Dump Postgres database by pg_dump
 [no-cd]
