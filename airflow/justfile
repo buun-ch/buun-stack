@@ -10,6 +10,8 @@ export AIRFLOW_NFS_IP := env("AIRFLOW_NFS_IP", "")
 export AIRFLOW_NFS_PATH := env("AIRFLOW_NFS_PATH", "")
 export AIRFLOW_DAGS_STORAGE_SIZE := env("AIRFLOW_DAGS_STORAGE_SIZE", "10Gi")
 export AIRFLOW_EXTRA_PACKAGES := env("AIRFLOW_EXTRA_PACKAGES", "'PyJWT>=2.10' cryptography 'requests>=2.32' 'dlt[duckdb,filesystem,postgres,s3]' pyarrow pyiceberg s3fs simple-salesforce")
+export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
 
 # ↑ PyJWT, cryptography, and requests are needed for Keycloak OAuth
 
@@ -26,7 +28,7 @@ add-helm-repo:
 remove-helm-repo:
     helm repo remove apache-airflow
 
-# Create namespace (shared with JupyterHub when using jupyter namespace)
+# Create namespace
 create-namespace:
     @kubectl get namespace ${AIRFLOW_NAMESPACE} &>/dev/null || \
         kubectl create namespace ${AIRFLOW_NAMESPACE}
@@ -319,6 +321,10 @@ install:
     fi
     echo "Installing Airflow..."
     just create-namespace
+
+    kubectl label namespace ${AIRFLOW_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=restricted --overwrite
+
     just setup-database
     just create-oauth-client
     just create-keycloak-roles
@@ -343,6 +349,21 @@ install:
         export AIRFLOW_ENV_SECRETS_EXIST="false"
     fi
 
+    # Check if Prometheus monitoring should be enabled
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            else
+                MONITORING_ENABLED="false"
+            fi
+        fi
+    fi
+
+    # Enable monitoring label on namespace if monitoring is enabled
+    if [ "${MONITORING_ENABLED}" = "true" ]; then
+        kubectl label namespace ${AIRFLOW_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+    fi
     AIRFLOW_WEBSERVER_SECRET_KEY=$(just utils::random-password) \
         gomplate -f airflow-values.gomplate.yaml -o airflow-values.yaml
     helm upgrade --install airflow apache-airflow/airflow \
@@ -352,14 +373,6 @@ install:
     kubectl exec deployment/airflow-scheduler -n ${AIRFLOW_NAMESPACE} -- airflow sync-perm
     echo "Airflow installation completed"
     echo "Access Airflow at: https://${AIRFLOW_HOST}"
-    if [ "${AIRFLOW_NAMESPACE}" = "jupyter" ] && [ "${AIRFLOW_DAGS_PERSISTENCE_ENABLED}" = "true" ]; then
-        echo ""
-        echo "📝 JupyterHub Integration Notes:"
-        echo "   • If JupyterHub is already installed with DAG mounting enabled:"
-        echo "     Restart user pods to access DAGs: kubectl delete pods -n jupyter -l app.kubernetes.io/component=singleuser-server"
-        echo "   • If JupyterHub will be installed later:"
-        echo "     Enable 'Airflow DAG storage mounting' during JupyterHub installation"
-    fi
 
 # Uninstall Airflow
 uninstall delete-db='true':
@@ -371,22 +384,31 @@ uninstall delete-db='true':
     # Force delete stuck resources
     echo "Checking for stuck resources..."
 
-    # Delete stuck pods (especially Redis StatefulSet)
-    STUCK_PODS=$(kubectl get pods -n ${AIRFLOW_NAMESPACE} -o name 2>/dev/null || true)
+    # Delete stuck pods (especially Redis StatefulSet) - only Airflow pods
+    STUCK_PODS=$(kubectl get pods -n ${AIRFLOW_NAMESPACE} \
+        -l 'release=airflow' -o name 2>/dev/null || true)
     if [ -n "$STUCK_PODS" ]; then
-        echo "Force deleting stuck pods..."
-        kubectl delete pods --all -n ${AIRFLOW_NAMESPACE} --force --grace-period=0 2>/dev/null || true
+        echo "Force deleting stuck Airflow pods..."
+        kubectl delete pods -n ${AIRFLOW_NAMESPACE} -l 'release=airflow' \
+            --force --grace-period=0 2>/dev/null || true
     fi
 
-    # Delete PVCs
-    PVCS=$(kubectl get pvc -n ${AIRFLOW_NAMESPACE} -o name 2>/dev/null || true)
-    if [ -n "$PVCS" ]; then
-        echo "Deleting PersistentVolumeClaims..."
-        kubectl delete pvc --all -n ${AIRFLOW_NAMESPACE} --force --grace-period=0 2>/dev/null || true
+    # Delete Airflow-specific PVCs only
+    AIRFLOW_PVCS=$(kubectl get pvc -n ${AIRFLOW_NAMESPACE} \
+        -l 'release=airflow' -o name 2>/dev/null || true)
+    if [ -n "$AIRFLOW_PVCS" ]; then
+        echo "Deleting Airflow PersistentVolumeClaims..."
+        kubectl delete pvc -n ${AIRFLOW_NAMESPACE} -l 'release=airflow' \
+            --force --grace-period=0 2>/dev/null || true
     fi
 
-    # Delete any remaining resources
-    kubectl delete all --all -n ${AIRFLOW_NAMESPACE} --force --grace-period=0 2>/dev/null || true
+    # Delete DAG storage PVC if it exists
+    kubectl delete pvc airflow-dags-pvc -n ${AIRFLOW_NAMESPACE} --ignore-not-found
+
+    # Delete Airflow-specific resources (with label selector to avoid deleting JupyterHub)
+    echo "Deleting Airflow-specific resources..."
+    kubectl delete all -n ${AIRFLOW_NAMESPACE} -l 'release=airflow' \
+        --force --grace-period=0 2>/dev/null || true
 
     just delete-database-secret
     just delete-oauth-secret
@@ -395,7 +417,6 @@ uninstall delete-db='true':
     fi
     # Clean up Keycloak client
     just keycloak::delete-client ${KEYCLOAK_REALM} airflow || true
-    echo "Airflow uninstalled"
 
 # Create API user for JupyterHub integration
 create-api-user username='' role='':
