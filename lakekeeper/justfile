@@ -154,7 +154,7 @@ create-oidc-api-client client_name='lakekeeper-api':
     if just keycloak::client-exists ${KEYCLOAK_REALM} {{ client_name }} &>/dev/null; then
         echo "Client '{{ client_name }}' already exists."
         echo "To recreate, first delete it with: just lakekeeper::delete-oidc-api-client {{ client_name }}"
-        exit 1
+        exit 0
     fi
 
     # Create confidential client with service account
@@ -222,6 +222,10 @@ install:
     done
     echo "Installing Lakekeeper..."
     just create-namespace
+
+    kubectl label namespace ${LAKEKEEPER_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=restricted --overwrite
+
     just setup-database
     just create-oidc-client
     just add-helm-repo
@@ -249,7 +253,6 @@ install:
     echo "Lakekeeper installation completed"
     echo "Access Lakekeeper at: https://${LAKEKEEPER_HOST}"
 
-    # Create the OIDC client for API access at the end to print credentials
     just create-oidc-api-client
 
 # Uninstall Lakekeeper
