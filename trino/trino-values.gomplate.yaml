@@ -80,7 +80,7 @@ accessControl:
 
 resourceGroups: {}
 
-{{- if .Env.TRINO_POSTGRES_ENABLED }}
+{{- if eq .Env.TRINO_POSTGRES_ENABLED "true" }}
 catalogs:
   postgresql: |
     connector.name=postgresql
@@ -92,7 +92,7 @@ catalogs:
     connector.name=tpch
     tpch.splits-per-node=4
 
-{{- if .Env.TRINO_ICEBERG_ENABLED }}
+{{- if eq .Env.TRINO_ICEBERG_ENABLED "true" }}
   iceberg: |
     connector.name=iceberg
     iceberg.catalog.type=rest
@@ -164,11 +164,11 @@ coordinator:
 
   resources:
     requests:
-      memory: "{{ .Env.TRINO_COORDINATOR_MEMORY }}"
-      cpu: "{{ .Env.TRINO_COORDINATOR_CPU }}"
+      memory: "{{ .Env.TRINO_COORDINATOR_MEMORY_REQUEST }}"
+      cpu: "{{ .Env.TRINO_COORDINATOR_CPU_REQUEST }}"
     limits:
-      memory: "{{ .Env.TRINO_COORDINATOR_MEMORY }}"
-      cpu: "{{ .Env.TRINO_COORDINATOR_CPU }}"
+      memory: "{{ .Env.TRINO_COORDINATOR_MEMORY_LIMIT }}"
+      cpu: "{{ .Env.TRINO_COORDINATOR_CPU_LIMIT }}"
 
   livenessProbe:
     initialDelaySeconds: 30
@@ -228,11 +228,11 @@ worker:
 
   resources:
     requests:
-      memory: "{{ .Env.TRINO_WORKER_MEMORY }}"
-      cpu: "{{ .Env.TRINO_WORKER_CPU }}"
+      memory: "{{ .Env.TRINO_WORKER_MEMORY_REQUEST }}"
+      cpu: "{{ .Env.TRINO_WORKER_CPU_REQUEST }}"
     limits:
-      memory: "{{ .Env.TRINO_WORKER_MEMORY }}"
-      cpu: "{{ .Env.TRINO_WORKER_CPU }}"
+      memory: "{{ .Env.TRINO_WORKER_MEMORY_LIMIT }}"
+      cpu: "{{ .Env.TRINO_WORKER_CPU_LIMIT }}"
 
   livenessProbe:
     initialDelaySeconds: 30
@@ -276,9 +276,27 @@ initContainers: {}
 
 sidecarContainers: {}
 
+# Security context for Pod Security Standards (restricted)
 securityContext:
+  runAsNonRoot: true
   runAsUser: 1000
   runAsGroup: 1000
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop:
+      - ALL
 
 shareProcessNamespace:
   coordinator: false
@@ -298,7 +316,7 @@ env:
       secretKeyRef:
         name: trino-oauth-secret
         key: client_secret
-{{- if .Env.TRINO_POSTGRES_ENABLED }}
+{{- if eq .Env.TRINO_POSTGRES_ENABLED "true" }}
   - name: POSTGRES_USER
     valueFrom:
       secretKeyRef:
