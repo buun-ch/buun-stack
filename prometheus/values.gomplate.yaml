@@ -30,7 +30,7 @@ grafana:
     userKey: admin-user
     passwordKey: admin-password
 
-{{- if .Env.GRAFANA_OIDC_ENABLED }}
+{{- if eq .Env.GRAFANA_OIDC_ENABLED "true" }}
   # Reference OIDC client secret from Kubernetes Secret
   envValueFrom:
     GRAFANA_OIDC_CLIENT_SECRET:
@@ -54,7 +54,7 @@ grafana:
   grafana.ini:
     server:
       root_url: https://{{ .Env.GRAFANA_HOST }}
-{{- if .Env.GRAFANA_OIDC_ENABLED }}
+{{- if eq .Env.GRAFANA_OIDC_ENABLED "true" }}
     auth.generic_oauth:
       enabled: true
       name: Keycloak

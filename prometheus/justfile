@@ -6,7 +6,7 @@ export GRAFANA_HOST := env("GRAFANA_HOST", "")
 export PROMETHEUS_HOST := env("PROMETHEUS_HOST", "")
 export ALERTMANAGER_HOST := env("ALERTMANAGER_HOST", "")
 export GRAFANA_ADMIN_PASSWORD := env("GRAFANA_ADMIN_PASSWORD", "")
-export GRAFANA_OIDC_ENABLED := env("GRAFANA_OIDC_ENABLED", "false")
+export GRAFANA_OIDC_ENABLED := env("GRAFANA_OIDC_ENABLED", "")
 export GRAFANA_OIDC_CLIENT_SECRET := env("GRAFANA_OIDC_CLIENT_SECRET", "")
 export KEYCLOAK_NAMESPACE := env("KEYCLOAK_NAMESPACE", "keycloak")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
@@ -116,9 +116,6 @@ install: check-env
         just create-credentials
     fi
 
-    export GRAFANA_OIDC_ENABLED="${GRAFANA_OIDC_ENABLED:-false}"
-    export GRAFANA_OIDC_CLIENT_SECRET="${GRAFANA_OIDC_CLIENT_SECRET:-}"
-
     gomplate -f values.gomplate.yaml -o values.yaml
     helm upgrade --cleanup-on-fail --install kube-prometheus-stack \
         prometheus-community/kube-prometheus-stack \
@@ -146,8 +143,17 @@ install: check-env
     echo "Grafana admin user: admin"
     echo "Grafana admin password: ${admin_password}"
     echo ""
-    echo "To setup Keycloak OIDC authentication for Grafana:"
-    echo "  just prometheus::setup-oidc"
+
+    if [ -z "${GRAFANA_OIDC_ENABLED}" ]; then
+        if gum confirm "Setup Keycloak OIDC authentication for Grafana?"; then
+            GRAFANA_OIDC_ENABLED="true"
+        else
+            GRAFANA_OIDC_ENABLED="false"
+        fi
+    fi
+    if [ "${GRAFANA_OIDC_ENABLED}" = "true" ]; then
+        just setup-oidc
+    fi
 
 # Uninstall kube-prometheus-stack
 uninstall:
@@ -179,11 +185,13 @@ setup-oidc:
     just keycloak::delete-client "${KEYCLOAK_REALM}" "grafana" || true
     oidc_client_secret=$(just utils::random-password)
     redirect_urls="https://${GRAFANA_HOST}/login/generic_oauth"
+    post_logout_redirect_urls="https://${GRAFANA_HOST}/login"
     just keycloak::create-client \
         realm="${KEYCLOAK_REALM}" \
         client_id="grafana" \
         redirect_url="${redirect_urls}" \
-        client_secret="${oidc_client_secret}"
+        client_secret="${oidc_client_secret}" \
+        post_logout_redirect_uris="${post_logout_redirect_urls}"
     just keycloak::add-groups-mapper "grafana"
     echo "✓ Keycloak client 'grafana' created"
 
@@ -227,6 +235,10 @@ setup-oidc:
         -n ${PROMETHEUS_NAMESPACE} \
         --wait \
         -f values.yaml
+
+    # Restart Grafana to ensure new OIDC configuration is loaded
+    kubectl rollout restart deployment -n ${PROMETHEUS_NAMESPACE} -l app.kubernetes.io/name=grafana
+    kubectl rollout status deployment -n ${PROMETHEUS_NAMESPACE} -l app.kubernetes.io/name=grafana --timeout=120s
 
     echo ""
     echo "=== OIDC Setup Complete ==="
