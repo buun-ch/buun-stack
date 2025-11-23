@@ -73,6 +73,14 @@ hub:
       with open('/srv/jupyterhub/pre_spawn_hook.py', 'r') as f:
           exec(f.read())
 
+    configure-security-context: |
+      # Configure container security context for restricted Pod Security Standard
+      c.KubeSpawner.container_security_context = {
+          'capabilities': {
+              'drop': ['ALL']
+          }
+      }
+
   {{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
   # Vault token renewal sidecar configuration
   extraVolumes:
@@ -155,6 +163,21 @@ proxy:
     type: ClusterIP
 
 singleuser:
+  # Disable block-cloud-metadata sidecar for restricted Pod Security Standard compliance
+  # Not needed in self-hosted environments without cloud metadata services
+  cloudMetadata:
+    blockWithIptables: false
+
+  # Pod Security Standard (restricted) compliance
+  allowPrivilegeEscalation: false
+
+  # Additional security context via extraPodConfig
+  extraPodConfig:
+    securityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
+
   storage:
     {{ if env.Getenv "PVC_NAME" -}}
     type: static
@@ -180,6 +203,10 @@ singleuser:
   {{- if eq .Env.JUPYTERHUB_GPU_ENABLED "true" }}
   extraPodConfig:
     runtimeClassName: nvidia
+    securityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
   extraResource:
     limits:
       nvidia.com/gpu: "{{ .Env.JUPYTERHUB_GPU_LIMIT }}"
@@ -206,7 +233,6 @@ singleuser:
       - name: airflow-dags
         persistentVolumeClaim:
           claimName: airflow-dags-pvc
-          optional: true  # Don't fail if PVC doesn't exist yet
     extraVolumeMounts:
       - name: airflow-dags
         mountPath: /home/jovyan/airflow-dags

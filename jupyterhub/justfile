@@ -110,6 +110,9 @@ install root_token='':
 
     just create-namespace
 
+    kubectl label namespace ${JUPYTERHUB_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=restricted --overwrite
+
     # Create crypt key secret if it doesn't exist
     if ! kubectl get secret jupyterhub-crypt-key -n ${JUPYTERHUB_NAMESPACE} &>/dev/null; then
         just create-crypt-key-secret
@@ -393,21 +396,6 @@ create-jupyterhub-vault-token root_token='':
     while [ -z "${VAULT_TOKEN}" ]; do
         VAULT_TOKEN=$(gum input --prompt="Vault root token: " --password --width=100)
     done
-
-    echo "Creating JupyterHub admin Vault token"
-
-    # jupyterhub-admin policy should exist (created by setup-vault-integration)
-
-    # Check if token already exists
-    if vault kv get secret/jupyterhub/vault-token >/dev/null 2>&1; then
-        echo "Existing admin token found at secret/jupyterhub/vault-token"
-        if gum confirm "Replace existing token with new one?"; then
-            echo "Creating new admin token..."
-        else
-            echo "Using existing token"
-            return 0
-        fi
-    fi
 
     # Create admin vault token with unlimited max TTL
     echo ""
