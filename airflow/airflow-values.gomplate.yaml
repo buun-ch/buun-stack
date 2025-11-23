@@ -187,7 +187,7 @@ statsd:
         drop:
           - ALL
 
-{{- if .Env.MONITORING_ENABLED }}
+{{- if eq .Env.MONITORING_ENABLED "true" }}
 # Prometheus metrics configuration
 metrics:
   enabled: true

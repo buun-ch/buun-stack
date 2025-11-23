@@ -148,7 +148,7 @@ namespace: {{ .Env.PROMETHEUS_NAMESPACE }}
 ingress:
   hosts:
     - {{ .Env.GRAFANA_HOST }}
-{{- if .Env.MONITORING_ENABLED }}
+{{- if eq .Env.MONITORING_ENABLED "true" }}
   monitoring:
     enabled: true
 {{- end }}
@@ -181,7 +181,7 @@ install:
 ServiceMonitor template (`servicemonitor.gomplate.yaml`):
 
 ```yaml
-{{- if .Env.MONITORING_ENABLED }}
+{{- if eq .Env.MONITORING_ENABLED "true" }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
