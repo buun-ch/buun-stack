@@ -43,7 +43,7 @@ _vault_oidc_env_setup := '''
             echo "   • After login, token will be automatically set" >&2
             echo "" >&2
         fi
-        vault login -method=oidc &>/dev/null
+        vault login -method=oidc
         VAULT_TOKEN=$(vault print token)
     fi
     export VAULT_TOKEN
