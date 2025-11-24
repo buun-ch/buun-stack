@@ -527,6 +527,20 @@ Key technologies: Next.js, Payload CMS, dlt, dbt, Iceberg, Lakekeeper, Trino, Su
 
 Both projects demonstrate the medallion architecture (raw → staging → marts) and showcase how buun-stack components work together for production data workflows.
 
+## Documentation
+
+### Troubleshooting
+
+Having issues? Check the [Troubleshooting Guide](./docs/troubleshooting.md) for solutions to common problems:
+
+### Resource Management
+
+See [Resource Management Guide](./docs/resource-management.md) for configuring CPU and memory:
+
+- QoS classes (Guaranteed vs Burstable)
+- Using Goldilocks for recommendations
+- Best practices and examples
+
 ## License
 
 MIT License - See LICENSE file for details
