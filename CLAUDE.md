@@ -107,6 +107,18 @@ All components should have appropriate resource requests and limits configured. 
 - Configuration guidelines and examples
 - **Important**: Never set resources below Goldilocks recommendations; always round up to clean values
 
+### Pod Security Standards
+
+All components should be configured with Pod Security Standards set to **restricted** level whenever possible. This ensures the highest level of security by enforcing:
+
+- `runAsNonRoot: true` - Prevents containers from running as root
+- `allowPrivilegeEscalation: false` - Blocks privilege escalation
+- `seccompProfile.type: RuntimeDefault` - Enables seccomp filtering
+- `capabilities.drop: [ALL]` - Drops all Linux capabilities
+- `readOnlyRootFilesystem: false` - May be required for applications that need to write temporary files
+
+Only fall back to **baseline** level if the application specifically requires additional privileges. Document the reason when using baseline instead of restricted.
+
 ### Gomplate Template Pattern
 
 **Environment Variable Management:**
