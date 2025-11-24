@@ -350,6 +350,62 @@ Trino (HTTPS via external hostname)
 - **Trino Connection**: Must use external HTTPS hostname (not internal service name)
 - **User Impersonation**: Admin credentials with X-Trino-User header for query attribution
 
+## Pod Security Standards
+
+**Current Configuration**: `privileged` (enforce) / `baseline` (warn, audit)
+
+Querybook namespace is configured with the following Pod Security Standards:
+
+```yaml
+pod-security.kubernetes.io/enforce: privileged
+pod-security.kubernetes.io/warn: baseline
+pod-security.kubernetes.io/audit: baseline
+```
+
+### Why Not Restricted or Baseline?
+
+Querybook's embedded **Elasticsearch** component requires privileged containers and special Linux capabilities that violate both `restricted` and `baseline` Pod Security Standards:
+
+**Elasticsearch Requirements**:
+
+- `privileged: true` - Container must run in privileged mode
+- `capabilities.add: [IPC_LOCK, SYS_RESOURCE]` - Requires Linux capabilities for memory locking
+- `sysctl -w vm.max_map_count=262144` - Init container needs privileged mode to configure kernel parameters
+
+These requirements are necessary for Elasticsearch to:
+
+1. Lock memory to prevent swapping (performance)
+2. Set virtual memory map count (stability)
+3. Configure ulimit for unlimited locked memory
+
+**Security Implications**:
+
+- Elasticsearch containers run with elevated privileges
+- Init containers can modify kernel parameters
+- Other components (web, worker, scheduler, redis) run without special privileges
+
+**Mitigation**:
+
+- `warn` and `audit` at `baseline` level to track violations
+- Web init container (copy-keycloak-auth) uses `restricted`-level security context
+- Future: Consider external Elasticsearch service to enable stricter Pod Security Standards
+
+**Component Security Status**:
+
+| Component      | Privileges Required | Security Level |
+|----------------|---------------------|----------------|
+| Elasticsearch  | privileged=true, IPC_LOCK, SYS_RESOURCE | Violates baseline |
+| Web            | None (container), runAsNonRoot (initContainer) | Baseline-ready |
+| Worker         | None | Baseline-ready |
+| Scheduler      | None | Baseline-ready |
+| Redis          | None | Baseline-ready |
+
+To check current Pod Security Standards configuration:
+
+```bash
+kubectl get namespace querybook -o jsonpath='{.metadata.labels}' | jq
+```
+
 ## Authentication
 
 ### User Login (OAuth2)

@@ -15,13 +15,15 @@ worker:
     pullPolicy: IfNotPresent
     tag: latest
 {{- end }}
+  # Resource limits (based on Goldilocks/VPA recommendations, rounded to clean values)
+  # VPA recommendations: CPU 15m, Memory 2.8Gi
   resources:
     requests:
-      memory: 1Gi
-      cpu: 700m
+      cpu: 25m
+      memory: 3Gi
     limits:
-      memory: 2Gi
-      cpu: 1
+      cpu: 500m
+      memory: 6Gi
 
 # Scheduler configuration
 scheduler:
@@ -37,13 +39,15 @@ scheduler:
     pullPolicy: IfNotPresent
     tag: latest
 {{- end }}
+  # Resource limits (based on Goldilocks/VPA recommendations, rounded to clean values)
+  # VPA recommendations: CPU 15m, Memory 194Mi
   resources:
     requests:
-      memory: 200Mi
-      cpu: 100m
+      cpu: 25m
+      memory: 256Mi
     limits:
-      memory: 300Mi
-      cpu: 200m
+      cpu: 100m
+      memory: 512Mi
 
 # Web server configuration
 web:
@@ -63,13 +67,15 @@ web:
     serviceType: ClusterIP
     servicePort: 80
     containerPort: 10001
+  # Resource limits (based on Goldilocks/VPA recommendations, rounded to clean values)
+  # VPA recommendations: CPU 224m, Memory 215Mi
   resources:
     requests:
-      memory: 1Gi
-      cpu: 500m
+      cpu: 250m
+      memory: 256Mi
     limits:
-      memory: 2Gi
-      cpu: 1
+      cpu: 500m
+      memory: 512Mi
 
   # Custom initContainer to inject Keycloak auth backend
   initContainers:
@@ -84,6 +90,17 @@ web:
           mountPath: /config
         - name: auth-volume
           mountPath: /auth
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+        capabilities:
+          drop:
+            - ALL
 
   # Volume mounts for main container
   volumeMounts:
@@ -115,13 +132,15 @@ redis:
   service:
     serviceType: ClusterIP
     servicePort: 6379
+  # Resource limits (based on Goldilocks/VPA recommendations, rounded to clean values)
+  # VPA recommendations: CPU 15m, Memory 100Mi
   resources:
     requests:
-      memory: 512Mi
-      cpu: 200m
+      cpu: 25m
+      memory: 128Mi
     limits:
-      memory: 1Gi
-      cpu: 500m
+      cpu: 100m
+      memory: 256Mi
 
 # Elasticsearch configuration (use Helm chart's embedded Elasticsearch)
 elasticsearch:
@@ -144,13 +163,15 @@ elasticsearch:
   service:
     serviceType: ClusterIP
     servicePort: 9200
+  # Resource limits (based on Goldilocks/VPA recommendations, rounded to clean values)
+  # VPA recommendations: CPU 78m, Memory 1.7Gi
   resources:
     requests:
+      cpu: 100m
       memory: 2Gi
-      cpu: 500m
     limits:
-      memory: 3Gi
-      cpu: 1
+      cpu: 500m
+      memory: 4Gi
 
 # Ingress configuration
 ingress:

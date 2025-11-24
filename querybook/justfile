@@ -16,10 +16,20 @@ export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 default:
     @just --list --unsorted --list-submodules
 
-# Create Querybook namespace
+# Create Querybook namespace with Pod Security Standards
+# Note: Elasticsearch requires privileged containers, so enforce=privileged
+# but warn/audit at baseline level to encourage security improvements
 create-namespace:
-    @kubectl get namespace ${QUERYBOOK_NAMESPACE} &>/dev/null || \
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace ${QUERYBOOK_NAMESPACE} &>/dev/null; then
         kubectl create namespace ${QUERYBOOK_NAMESPACE}
+    fi
+    kubectl label namespace ${QUERYBOOK_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=privileged \
+        pod-security.kubernetes.io/warn=baseline \
+        pod-security.kubernetes.io/audit=baseline \
+        --overwrite
 
 # Delete Querybook namespace
 delete-namespace:
@@ -253,22 +263,6 @@ install:
     echo "Waiting for web deployment to be ready..."
     kubectl wait --for=condition=Available deployment/web \
         -n ${QUERYBOOK_NAMESPACE} --timeout=300s
-
-    echo "Waiting for service to be accessible at https://${QUERYBOOK_HOST} ..."
-    for i in {1..60}; do
-        http_code=$(curl -k -s -o /dev/null -w "%{http_code}" https://${QUERYBOOK_HOST} 2>/dev/null || echo "000")
-        if echo "${http_code}" | grep -q -E "200|302|401|403"; then
-            echo "Service is now accessible (HTTP ${http_code})"
-            break
-        fi
-        if [ $i -eq 60 ]; then
-            echo "Warning: Service may not be fully accessible yet (last status: ${http_code})"
-            echo "Please wait a few more minutes and try accessing the URL"
-        else
-            echo "Waiting for service to respond... ($i/60, current status: ${http_code})"
-            sleep 5
-        fi
-    done
 
     echo ""
     echo "Querybook installed successfully!"
