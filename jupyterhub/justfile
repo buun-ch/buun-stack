@@ -296,7 +296,7 @@ delete-pv:
 # Build Jupyter notebook kernel images
 build-kernel-images:
     #!/bin/bash
-    set -euxo pipefail
+    set -euo pipefail
     (
         cd ../python-package
         rm -rf dist/ build/ *.egg-info/
