@@ -4,3 +4,7 @@ ingress:
 defaultSettings:
   deletingConfirmationFlag: true
   defaultReplicaCount: 1
+  # Automatically delete orphaned data to keep storage clean
+  orphanAutoDeletion: true
+  # Force pod deletion when node goes down to trigger volume detachment
+  nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
