@@ -474,6 +474,36 @@ write-policy name file:
 login:
     @vault login -method=oidc
 
+# Unseal Vault
+unseal:
+    #!/bin/bash
+    set -euo pipefail
+
+    if [ -z "${VAULT_UNSEAL_KEY:-}" ]; then
+        if [ "${VAULT_DEBUG}" = "true" ]; then
+            echo "" >&2
+            echo "💡 To avoid entering unseal key repeatedly:" >&2
+            echo "   • Set environment variable: export VAULT_UNSEAL_KEY=your_unseal_key" >&2
+            echo "   • or write it in .env.local file: VAULT_UNSEAL_KEY=your_unseal_key" >&2
+            echo "   • Use 1Password reference: VAULT_UNSEAL_KEY=op://vault/unseal/key" >&2
+            echo "" >&2
+        fi
+        VAULT_UNSEAL_KEY=$(gum input --prompt="Vault unseal key: " --password --width=100)
+    elif [[ "${VAULT_UNSEAL_KEY}" == op://* ]]; then
+        if ! command -v op &>/dev/null; then
+            echo "Error: 1Password CLI (op) is not installed." >&2
+            echo "" >&2
+            echo "To use 1Password secret references (op://...), please install the 1Password CLI:" >&2
+            echo "  https://developer.1password.com/docs/cli/get-started/" >&2
+            exit 1
+        fi
+        VAULT_UNSEAL_KEY=$(op read "${VAULT_UNSEAL_KEY}")
+    fi
+
+    echo "Unsealing Vault..."
+    kubectl exec -n ${K8S_VAULT_NAMESPACE} vault-0 -- vault operator unseal "${VAULT_UNSEAL_KEY}"
+    echo "✓ Vault unsealed successfully"
+
 # NOTE: Vault monitoring is not supported
 # Reason: Prometheus ServiceMonitor does not support custom HTTP headers (X-Vault-Token)
 # Alternative: Use Vault Exporter or manual Prometheus scrape_configs

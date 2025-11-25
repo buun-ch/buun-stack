@@ -29,6 +29,7 @@ Vault automatically seals itself when:
 
 - The Vault pod is restarted
 - The node where Vault is running is restarted
+- The machine is rebooted
 - Vault encounters certain error conditions
 
 When sealed, Vault cannot decrypt its data and all operations are blocked.
@@ -43,7 +44,23 @@ Unseal Vault using your unseal key:
 2. Enter your unseal key in the web interface
 3. Click "Unseal"
 
-**Option 2: Using kubectl**
+**Option 2: Using just recipe (Recommended)**
+
+```bash
+just vault::unseal
+```
+
+This recipe will prompt for the unseal key interactively. You can also set the `VAULT_UNSEAL_KEY` environment variable to avoid entering it repeatedly:
+
+```bash
+# Set in .env.local
+VAULT_UNSEAL_KEY=your-unseal-key-here
+
+# Or use 1Password reference
+VAULT_UNSEAL_KEY=op://vault/unseal/key
+```
+
+**Option 3: Using kubectl**
 
 ```bash
 # Get the unseal key from your secure storage
@@ -51,6 +68,12 @@ UNSEAL_KEY="your-unseal-key-here"
 
 # Unseal Vault
 kubectl exec -n vault vault-0 -- vault operator unseal "${UNSEAL_KEY}"
+```
+
+After unsealing, restart the External Secrets Operator to ensure it reconnects properly:
+
+```bash
+kubectl rollout restart -n external-secrets deploy/external-secrets
 ```
 
 #### Prevention
