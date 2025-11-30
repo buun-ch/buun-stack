@@ -126,142 +126,161 @@ stop:
     #!/bin/bash
     set -euo pipefail
 
+    START_TIME=$(date +%s)
+    elapsed() {
+        echo "$(($(date +%s) - START_TIME))s"
+    }
+
     echo "Starting graceful k3s shutdown..."
 
-    # Check if Longhorn is installed
+    # Get node name
+    NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+
+    if [ -z "$NODE_NAME" ]; then
+        echo "⚠ Could not get node name, k3s may already be stopped"
+        echo "Running k3s-killall.sh for cleanup..."
+        ssh "${LOCAL_K8S_HOST}" "sudo /usr/local/bin/k3s-killall.sh 2>/dev/null || true"
+        echo "✓ Cleanup completed ($(elapsed))"
+        exit 0
+    fi
+
+    echo "Node: $NODE_NAME"
+
+    # Drain the node to gracefully evict all pods and detach Longhorn volumes
+    # This is the recommended way to shutdown with Longhorn (see: https://github.com/longhorn/longhorn/issues/7206)
+    echo "[$(elapsed)] Draining node to gracefully detach Longhorn volumes..."
+    kubectl drain "$NODE_NAME" \
+        --ignore-daemonsets \
+        --delete-emptydir-data \
+        --force \
+        --grace-period=30 \
+        --timeout=90s 2>&1 || {
+            echo "⚠ Drain had warnings (this is usually OK for single-node clusters)"
+        }
+    echo "[$(elapsed)] Drain completed"
+
+    # Wait for Longhorn volumes to be fully detached
     if helm status longhorn -n longhorn-system &>/dev/null; then
-        echo "Detected Longhorn installation. Scaling down workloads..."
-
-        # Scale down all deployments and statefulsets
-        echo "Scaling down Deployments..."
-        kubectl scale deployment --all --replicas=0 -A --timeout=60s 2>/dev/null || true
-        echo "Scaling down StatefulSets..."
-        kubectl scale statefulset --all --replicas=0 -A --timeout=60s 2>/dev/null || true
-
-        echo "Waiting for Longhorn volumes to be detached..."
-
-        # Wait for all volumes to be detached (max 60 seconds)
-        TIMEOUT=60
+        echo "[$(elapsed)] Waiting for Longhorn volumes to be detached..."
+        TIMEOUT=30
         ELAPSED=0
         while [ $ELAPSED -lt $TIMEOUT ]; do
-            # Check if any volume is still attached
             ATTACHED=$(kubectl get volumes.longhorn.io -n longhorn-system -o json 2>/dev/null | \
                 jq -r '.items[] | select(.status.state == "attached") | .metadata.name' 2>/dev/null || true)
 
             if [ -z "$ATTACHED" ]; then
-                echo "✓ All Longhorn volumes detached successfully"
+                echo "[$(elapsed)] ✓ All Longhorn volumes detached successfully"
                 break
             fi
 
-            ATTACHED_COUNT=$(echo "$ATTACHED" | wc -l)
+            ATTACHED_COUNT=$(echo "$ATTACHED" | grep -c . || echo 0)
             echo "  Still waiting for $ATTACHED_COUNT volume(s) to detach..."
             sleep 2
             ELAPSED=$((ELAPSED + 2))
         done
 
         if [ $ELAPSED -ge $TIMEOUT ]; then
-            echo "⚠ Warning: Timeout waiting for volumes to detach"
-            echo "  Remaining attached volumes:"
-            echo "$ATTACHED" | sed 's/^/    /'
+            echo "[$(elapsed)] ⚠ Warning: Timeout waiting for volumes to detach"
         fi
-    else
-        echo "Longhorn not detected, skipping volume detachment wait."
     fi
 
-    echo "Cleaning up CSI mounts..."
+    # Stop and disable k3s service to prevent auto-start on reboot
+    echo "[$(elapsed)] Stopping and disabling k3s service..."
+    ssh "${LOCAL_K8S_HOST}" "sudo systemctl stop k3s 2>/dev/null || true"
+    ssh "${LOCAL_K8S_HOST}" "sudo systemctl disable k3s 2>/dev/null || true"
+
+    # Run k3s-killall.sh to clean up all container processes
+    echo "[$(elapsed)] Running k3s-killall.sh to stop all container processes..."
     ssh "${LOCAL_K8S_HOST}" 'bash -s' << 'EOF'
         set +e
-        sudo pkill -9 umount 2>/dev/null
-        shopt -s nullglob
-        for mount in /var/lib/kubelet/plugins/kubernetes.io/csi/*/globalmount; do
-            if [ -d "$mount" ]; then
-                echo "  Unmounting $mount..."
-                sudo umount -f "$mount" 2>/dev/null
-                sudo umount -l "$mount" 2>/dev/null
-            fi
-        done
+
+        if [ -x /usr/local/bin/k3s-killall.sh ]; then
+            echo "  Executing /usr/local/bin/k3s-killall.sh..."
+            timeout 180 sudo /usr/local/bin/k3s-killall.sh || {
+                echo "  k3s-killall.sh timed out, forcing cleanup..."
+                # Use pgrep/kill instead of pkill -f to avoid matching ourselves
+                for pid in $(pgrep -x k3s 2>/dev/null); do
+                    sudo kill -9 "$pid" 2>/dev/null || true
+                done
+                sudo pkill -9 -x containerd-shim-runc-v2 2>/dev/null || true
+                sudo pkill -9 -x containerd 2>/dev/null || true
+            }
+        else
+            echo "  k3s-killall.sh not found, stopping manually..."
+            sudo systemctl stop k3s 2>/dev/null || true
+            for pid in $(pgrep -x k3s 2>/dev/null); do
+                sudo kill -9 "$pid" 2>/dev/null || true
+            done
+            sudo pkill -9 -x containerd-shim-runc-v2 2>/dev/null || true
+        fi
+
         exit 0
     EOF
 
-    echo "Stopping k3s service..."
-    ssh "${LOCAL_K8S_HOST}" "sudo systemctl stop k3s"
-
-    # Wait for k3s to fully stop
-    echo "Waiting for k3s to fully stop..."
-    STOP_TIMEOUT=30
-    STOP_ELAPSED=0
-    while [ $STOP_ELAPSED -lt $STOP_TIMEOUT ]; do
-        if ! ssh "${LOCAL_K8S_HOST}" "sudo systemctl is-active --quiet k3s"; then
-            echo "✓ k3s stopped successfully"
+    # Wait for containerd-shim processes to terminate
+    echo "[$(elapsed)] Waiting for containerd-shim processes to terminate..."
+    SHIM_TIMEOUT=15
+    SHIM_ELAPSED=0
+    while [ $SHIM_ELAPSED -lt $SHIM_TIMEOUT ]; do
+        SHIM_COUNT=$(ssh "${LOCAL_K8S_HOST}" "pgrep containerd-shim 2>/dev/null | wc -l | tr -d ' '")
+        SHIM_COUNT=${SHIM_COUNT:-0}
+        if [ "$SHIM_COUNT" -eq 0 ] 2>/dev/null; then
+            echo "[$(elapsed)] ✓ All containerd-shim processes terminated"
             break
         fi
-        sleep 1
-        STOP_ELAPSED=$((STOP_ELAPSED + 1))
+        echo "  Still waiting for $SHIM_COUNT containerd-shim process(es)..."
+        sleep 2
+        SHIM_ELAPSED=$((SHIM_ELAPSED + 2))
     done
 
-    if [ $STOP_ELAPSED -ge $STOP_TIMEOUT ]; then
-        echo "⚠ Warning: k3s did not stop within timeout"
+    if [ $SHIM_ELAPSED -ge $SHIM_TIMEOUT ]; then
+        echo "[$(elapsed)] ⚠ Warning: containerd-shim processes did not terminate within timeout"
+        echo "  Forcing termination..."
+        ssh "${LOCAL_K8S_HOST}" "sudo pkill -9 containerd-shim 2>/dev/null || true"
+        sleep 1
     fi
 
-    # Cleanup all kubelet mounts after k3s stops
-    echo "Cleaning up all kubelet mounts..."
-    ssh "${LOCAL_K8S_HOST}" 'bash -s' << 'EOF'
-        set -euo pipefail
-
-        # Function to unmount a path safely
-        unmount_path() {
-            local path="$1"
-            if mountpoint -q "$path" 2>/dev/null; then
-                echo "  Unmounting: $path"
-                sudo umount "$path" 2>/dev/null || sudo umount -f "$path" 2>/dev/null || sudo umount -l "$path" 2>/dev/null || true
-            fi
-        }
-
-        # Unmount all Longhorn CSI mounts first (most specific paths first)
-        if [ -d /var/lib/kubelet/pods ]; then
-            # Find and unmount all volume mounts in pods
-            find /var/lib/kubelet/pods -type d -name "mount" 2>/dev/null | sort -r | while read -r mount; do
-                unmount_path "$mount"
-            done
-        fi
-
-        # Unmount CSI globalmounts
-        if [ -d /var/lib/kubelet/plugins/kubernetes.io/csi ]; then
-            find /var/lib/kubelet/plugins/kubernetes.io/csi -type d -name "globalmount" 2>/dev/null | sort -r | while read -r mount; do
-                unmount_path "$mount"
-            done
-        fi
-
-        # Unmount any remaining kubelet plugin mounts
-        if [ -d /var/lib/kubelet/plugins ]; then
-            find /var/lib/kubelet/plugins -type d 2>/dev/null | sort -r | while read -r mount; do
-                if mountpoint -q "$mount" 2>/dev/null; then
-                    unmount_path "$mount"
-                fi
-            done
-        fi
-
-        # Final check: unmount anything still mounted under /var/lib/kubelet
-        mount | grep '/var/lib/kubelet' | awk '{print $3}' | sort -r | while read -r mount; do
-            unmount_path "$mount"
-        done
-
-        echo "✓ All kubelet mounts cleaned up"
-    EOF
-
     echo ""
-    echo "✓ k3s stopped gracefully on ${LOCAL_K8S_HOST}."
+    echo "✓ k3s stopped gracefully on ${LOCAL_K8S_HOST}. (Total: $(elapsed))"
     echo "You can now safely shutdown the machine."
+    echo ""
+    echo "IMPORTANT: k3s has been disabled and will NOT start automatically on reboot."
+    echo "After reboot, you MUST manually run:"
+    echo "  just k8s::start"
+    echo "  just vault::unseal  # If Vault is installed"
 
 # Start k3s cluster
 start:
     #!/bin/bash
     set -euo pipefail
-    echo "Starting k3s service..."
+    echo "Enabling and starting k3s service..."
+    ssh "${LOCAL_K8S_HOST}" "sudo systemctl enable k3s"
     ssh "${LOCAL_K8S_HOST}" "sudo systemctl start k3s"
     echo "Waiting for k3s to be ready..."
     sleep 5
     kubectl wait --for=condition=Ready nodes --all --timeout=60s
+
+    # Uncordon the node if it was cordoned by 'just k8s::stop'
+    NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    if [ -n "$NODE_NAME" ]; then
+        NODE_SCHEDULABLE=$(kubectl get node "$NODE_NAME" -o jsonpath='{.spec.unschedulable}' 2>/dev/null || echo "false")
+        if [ "$NODE_SCHEDULABLE" = "true" ]; then
+            echo "Uncordoning node $NODE_NAME..."
+            kubectl uncordon "$NODE_NAME"
+        fi
+    fi
+
+    # Wait for Longhorn CSI plugin to be ready before other pods start using volumes
+    if helm status longhorn -n longhorn &>/dev/null; then
+        echo "Waiting for Longhorn CSI plugin to be ready..."
+        if ! kubectl wait --for=condition=Ready pod -l app=longhorn-csi-plugin -n longhorn --timeout=120s 2>/dev/null; then
+            echo "⚠ Longhorn CSI plugin not ready, restarting pod..."
+            kubectl delete pod -l app=longhorn-csi-plugin -n longhorn --ignore-not-found
+            kubectl wait --for=condition=Ready pod -l app=longhorn-csi-plugin -n longhorn --timeout=120s
+        fi
+        echo "✓ Longhorn CSI plugin is ready"
+    fi
+
     echo "k3s started on ${LOCAL_K8S_HOST}."
 
 # Restart k3s cluster (with CSI cleanup)
