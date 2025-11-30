@@ -166,11 +166,16 @@ RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_
 RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_repository_url}" \
     'dlt[clickhouse,databricks,deltalake,dremio,duckdb,filesystem,parquet,postgres,pyiceberg,qdrant,redshift,s3,snowflake,sql-database,sqlalchemy,workspace]'
 
+# jupyter-mcp-server as Jupyter Server Extension
 # https://jupyter-mcp-server.datalayer.tech/setup/jupyter/local_mcp/
-# RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip \
-#     pip install -i "${pip_repository_url}" 'jupyterlab==4.4.1' 'jupyter-collaboration==4.0.2' \
-#  && pip uninstall -y pycrdt datalayer_pycrdt \
-#  && pip install -i "${pip_repository_url}" 'datalayer_pycrdt==0.12.17'
+# Provides /mcp/v1 endpoint for Claude Code integration
+RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip \
+    pip install -i "${pip_repository_url}" \
+        'jupyter-mcp-server==0.21.0' \
+        'jupyter-mcp-tools>=0.1.4' \
+ && pip uninstall -y pycrdt datalayer_pycrdt \
+ && pip install -i "${pip_repository_url}" 'datalayer_pycrdt==0.12.17' \
+ && jupyter server extension enable jupyter_mcp_server
 
 # Install PyTorch with pip (https://pytorch.org/get-started/locally/)
 # langchain-openai must be updated to avoid pydantic v2 error

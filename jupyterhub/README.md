@@ -7,6 +7,8 @@ JupyterHub provides a multi-user Jupyter notebook environment with Keycloak OIDC
 - [Installation](#installation)
 - [Prerequisites](#prerequisites)
 - [Access](#access)
+- [MCP Server Integration](#mcp-server-integration)
+- [Programmatic API Access](#programmatic-api-access)
 - [Kernel Images](#kernel-images)
 - [Profile Configuration](#profile-configuration)
 - [GPU Support](#gpu-support)
@@ -48,6 +50,237 @@ This will prompt for:
 ## Access
 
 Access JupyterHub at your configured host (e.g., `https://jupyter.example.com`) and authenticate via Keycloak.
+
+## MCP Server Integration
+
+JupyterHub includes [jupyter-mcp-server](https://jupyter-mcp-server.datalayer.tech/) as a Jupyter Server Extension, enabling MCP (Model Context Protocol) clients to interact with Jupyter notebooks programmatically.
+
+### Overview
+
+The MCP server provides a standardized interface for AI assistants and other MCP clients to:
+
+- List and manage files on the Jupyter server
+- Create, read, and edit notebook cells
+- Execute code in notebook kernels
+- Manage kernel sessions
+
+### Enabling MCP Server
+
+MCP server support is controlled by the `JUPYTER_MCP_SERVER_ENABLED` environment variable. During installation, you will be prompted:
+
+```bash
+just jupyterhub::install
+# "Enable jupyter-mcp-server for Claude Code integration? (y/N)"
+```
+
+Or set the environment variable before installation:
+
+```bash
+JUPYTER_MCP_SERVER_ENABLED=true just jupyterhub::install
+```
+
+### Kernel Image Requirements
+
+The MCP server requires jupyter-mcp-server to be installed and enabled in the kernel image.
+
+**Buun-Stack profiles** (`buun-stack`, `buun-stack-cuda`) include jupyter-mcp-server pre-installed and enabled. No additional setup is required.
+
+**Other profiles** (minimal, base, datascience, pyspark, pytorch, tensorflow) do not include jupyter-mcp-server. To use MCP with these images, install the required packages in your notebook:
+
+```bash
+pip install 'jupyter-mcp-server==0.21.0' 'jupyter-mcp-tools>=0.1.4'
+pip uninstall -y pycrdt datalayer_pycrdt
+pip install 'datalayer_pycrdt==0.12.17'
+jupyter server extension enable jupyter_mcp_server
+```
+
+After installation, restart your Jupyter server for the extension to take effect.
+
+### MCP Endpoint
+
+When enabled, each user's Jupyter server exposes an MCP endpoint at:
+
+```text
+https://<JUPYTERHUB_HOST>/user/<username>/mcp
+```
+
+### Authentication
+
+MCP clients must authenticate using a JupyterHub API token. Obtain a token using:
+
+```bash
+# Get token for a user (creates user if not exists)
+just jupyterhub::get-token <username>
+```
+
+The token should be passed in the `Authorization` header:
+
+```text
+Authorization: token <JUPYTERHUB_TOKEN>
+```
+
+### Client Configuration
+
+#### Generic MCP Client Configuration
+
+For any MCP client that supports HTTP transport:
+
+```bash
+just jupyterhub::setup-mcp-server <username>
+```
+
+This displays the MCP server URL, authentication details, and available tools.
+
+#### Claude Code Configuration
+
+For Claude Code specifically:
+
+```bash
+just jupyterhub::setup-claude-mcp-server <username>
+```
+
+This provides a ready-to-use `.mcp.json` configuration:
+
+```json
+{
+  "mcpServers": {
+    "jupyter-<username>": {
+      "type": "http",
+      "url": "https://<JUPYTERHUB_HOST>/user/<username>/mcp",
+      "headers": {
+        "Authorization": "token ${JUPYTERHUB_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Set the environment variable:
+
+```bash
+export JUPYTERHUB_TOKEN=<your-token>
+```
+
+### Checking MCP Status
+
+Verify MCP server status for a user:
+
+```bash
+just jupyterhub::mcp-status <username>
+```
+
+This checks:
+
+- User pod is running
+- jupyter-mcp-server extension is enabled
+- MCP endpoint is responding
+
+### Technical Details
+
+- **Transport**: HTTP (streamable-http)
+- **Extension**: jupyter-mcp-server (installed in kernel images)
+- **Environment Variable**: `JUPYTERHUB_ALLOW_TOKEN_IN_URL=1` enables WebSocket token authentication
+
+## Programmatic API Access
+
+buun-stack configures JupyterHub to allow programmatic API access, enabling token generation and user management without requiring users to log in first. This is achieved by registering a **Service** in JupyterHub.
+
+### What is a JupyterHub Service?
+
+In JupyterHub, a **Service** is a registered entity (external program or script) that can access the JupyterHub API using a pre-configured token. While regular users obtain tokens by logging in, services use tokens registered in the JupyterHub configuration.
+
+```python
+# Register a service with its API token
+c.JupyterHub.services = [
+    {
+        'name': 'admin-service',
+        'api_token': '<token>',
+    }
+]
+
+# Grant permissions to the service
+c.JupyterHub.load_roles = [
+    {
+        'name': 'admin-service-role',
+        'scopes': ['admin:users', 'tokens', 'admin:servers'],
+        'services': ['admin-service'],
+    }
+]
+```
+
+When an API request includes `Authorization: token <token>`, JupyterHub identifies the token owner (in this case, `admin-service`) and applies the corresponding permissions.
+
+### How It Works
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│  just jupyterhub::get-token <username>                          │
+│                                                                 │
+│  1. Retrieve service token from Kubernetes Secret               │
+│  2. Call JupyterHub API with the token                          │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  JupyterHub API                                                 │
+│                                                                 │
+│  1. Receive: Authorization: token <service-token>               │
+│  2. Identify: This token belongs to "admin-service"             │
+│  3. Check permissions: admin-service has admin:users, tokens    │
+│  4. Execute: Create user token and return it                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Service Configuration
+
+The service is automatically configured during JupyterHub installation:
+
+1. **Token Generation**: A random token is generated using `just utils::random-password`
+2. **Secret Storage**: Token is stored in Vault (if External Secrets Operator is available) or as a Kubernetes Secret
+3. **Service Registration**: JupyterHub is configured with the service and appropriate RBAC roles
+
+### RBAC Permissions
+
+The registered service has the following scopes:
+
+- `admin:users` - Create, read, update, delete users
+- `tokens` - Create and manage API tokens
+- `admin:servers` - Start and stop user servers
+
+### Usage
+
+#### Get Token for a User
+
+```bash
+# Creates user if not exists, returns API token
+just jupyterhub::get-token <username>
+```
+
+This command:
+
+1. Checks if the user exists in JupyterHub
+2. Creates the user if not found
+3. Generates an API token with appropriate scopes
+4. Returns the token for use with MCP or other API clients
+
+#### Manual Token Management
+
+The service token is stored in:
+
+- **Vault path**: `secret/jupyterhub/admin-service` (key: `token`)
+- **Kubernetes Secret**: `jupyterhub-admin-service-token` in the JupyterHub namespace
+
+To recreate the service token:
+
+```bash
+just jupyterhub::create-admin-service-token-secret
+```
+
+### Security Considerations
+
+- The service token has elevated privileges; protect it accordingly
+- Tokens are stored encrypted in Vault when External Secrets Operator is available
+- User tokens generated via the service have limited scopes (`access:servers!user=<username>`, `self`)
 
 ## Kernel Images
 
@@ -391,7 +624,7 @@ Vault integration enables secure secrets management directly from Jupyter notebo
                                          └──────────────────────┘
 ```
 
-### Prerequisites
+### Vault Integration Prerequisites
 
 Vault integration requires:
 

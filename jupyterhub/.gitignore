@@ -1,4 +1,5 @@
 jupyterhub-values.yaml
+jupyterhub-admin-service-token-external-secret.yaml
 jupyterhub-crypt-key-external-secret.yaml
 pre_spawn_hook.py
 vault-agent-config.hcl

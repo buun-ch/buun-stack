@@ -9,7 +9,7 @@ export JUPYTERHUB_NFS_PV_ENABLED := env("JUPYTERHUB_NFS_PV_ENABLED", "")
 export JUPYTERHUB_STORAGE_CLASS := env("JUPYTERHUB_STORAGE_CLASS", "")
 export JUPYTERHUB_VAULT_INTEGRATION_ENABLED := env("JUPYTERHUB_VAULT_INTEGRATION_ENABLED", "")
 export JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED := env("JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED", "")
-export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-52")
+export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-53")
 export KERNEL_IMAGE_BUUN_STACK_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_REPOSITORY", "buun-stack-notebook")
 export KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY", "buun-stack-cuda-notebook")
 export JUPYTER_PROFILE_MINIMAL_ENABLED := env("JUPYTER_PROFILE_MINIMAL_ENABLED", "false")
@@ -22,6 +22,7 @@ export JUPYTER_PROFILE_BUUN_STACK_ENABLED := env("JUPYTER_PROFILE_BUUN_STACK_ENA
 export JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED := env("JUPYTER_PROFILE_BUUN_STACK_CUDA_ENABLED", "false")
 export JUPYTERHUB_GPU_ENABLED := env("JUPYTERHUB_GPU_ENABLED", "")
 export JUPYTERHUB_GPU_LIMIT := env("JUPYTERHUB_GPU_LIMIT", "1")
+export JUPYTER_MCP_SERVER_ENABLED := env("JUPYTER_MCP_SERVER_ENABLED", "")
 export JUPYTERHUB_VAULT_TOKEN_TTL := env("JUPYTERHUB_VAULT_TOKEN_TTL", "24h")
 export NOTEBOOK_VAULT_TOKEN_TTL := env("NOTEBOOK_VAULT_TOKEN_TTL", "24h")
 export NOTEBOOK_VAULT_TOKEN_MAX_TTL := env("NOTEBOOK_VAULT_TOKEN_MAX_TTL", "168h")
@@ -64,6 +65,37 @@ create-namespace:
 # Delete JupyterHub namespace
 delete-namespace:
     kubectl delete namespace ${JUPYTERHUB_NAMESPACE} --ignore-not-found
+
+# Create JupyterHub admin service token secret
+create-admin-service-token-secret:
+    #!/bin/bash
+    set -euo pipefail
+    admin_token=$(just utils::random-password)
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Storing admin service token in Vault..."
+        just vault::put jupyterhub/admin-service token="${admin_token}"
+
+        kubectl delete secret jupyterhub-admin-service-token -n ${JUPYTERHUB_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret jupyterhub-admin-service-token -n ${JUPYTERHUB_NAMESPACE} --ignore-not-found
+
+        gomplate -f jupyterhub-admin-service-token-external-secret.gomplate.yaml \
+            -o jupyterhub-admin-service-token-external-secret.yaml
+        kubectl apply -f jupyterhub-admin-service-token-external-secret.yaml
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/jupyterhub-admin-service-token \
+            -n ${JUPYTERHUB_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating secret directly..."
+        kubectl delete secret jupyterhub-admin-service-token -n ${JUPYTERHUB_NAMESPACE} --ignore-not-found
+        kubectl create secret generic jupyterhub-admin-service-token -n ${JUPYTERHUB_NAMESPACE} \
+            --from-literal=token="${admin_token}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put jupyterhub/admin-service token="${admin_token}"
+        fi
+    fi
 
 # Create JupyterHub crypt key secret
 create-crypt-key-secret:
@@ -113,9 +145,12 @@ install root_token='':
     kubectl label namespace ${JUPYTERHUB_NAMESPACE} \
         pod-security.kubernetes.io/enforce=restricted --overwrite
 
-    # Create crypt key secret if it doesn't exist
     if ! kubectl get secret jupyterhub-crypt-key -n ${JUPYTERHUB_NAMESPACE} &>/dev/null; then
         just create-crypt-key-secret
+    fi
+
+    if ! kubectl get secret jupyterhub-admin-service-token -n ${JUPYTERHUB_NAMESPACE} &>/dev/null; then
+        just create-admin-service-token-secret
     fi
 
     if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
@@ -130,7 +165,6 @@ install root_token='':
         MONITORING_ENABLED="false"
     fi
 
-    # Check if nvidia-device-plugin is installed
     if helm status nvidia-device-plugin -n ${NVIDIA_DEVICE_PLUGIN_NAMESPACE:-nvidia-device-plugin} &>/dev/null; then
         if [ -z "${JUPYTERHUB_GPU_ENABLED}" ]; then
             if gum confirm "Enable GPU support for JupyterHub notebooks?"; then
@@ -197,7 +231,6 @@ install root_token='':
         kubectl apply -n ${JUPYTERHUB_NAMESPACE} -f nfs-pvc.yaml
     fi
 
-    # Setup Airflow DAG storage sharing (same namespace)
     if [ -z "${JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED}" ]; then
         if gum confirm "Enable Airflow DAG storage mounting (requires Airflow in same namespace)?"; then
             JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED="true"
@@ -214,7 +247,19 @@ install root_token='':
         echo "      kubectl delete pods -n jupyter -l app.kubernetes.io/component=singleuser-server"
     fi
 
-    # Setup Vault Agent for automatic token management
+    if [ -z "${JUPYTER_MCP_SERVER_ENABLED}" ]; then
+        if gum confirm "Enable jupyter-mcp-server?"; then
+            JUPYTER_MCP_SERVER_ENABLED="true"
+        else
+            JUPYTER_MCP_SERVER_ENABLED="false"
+        fi
+    fi
+    if [ "${JUPYTER_MCP_SERVER_ENABLED}" = "true" ]; then
+        echo "✅ jupyter-mcp-server enabled"
+        echo "   MCP endpoint: https://${JUPYTERHUB_HOST}/user/{username}/mcp"
+        echo "   Use 'just jupyterhub::get-token <username>' to get API token"
+    fi
+
     if [ -z "${JUPYTERHUB_VAULT_INTEGRATION_ENABLED}" ]; then
         if gum confirm "Are you going to enable Vault integration?"; then
             JUPYTERHUB_VAULT_INTEGRATION_ENABLED=true
@@ -243,7 +288,6 @@ install root_token='':
         export USER_POLICY_HCL=""
     fi
 
-    # Generate pre_spawn_hook.py
     echo "Generating pre_spawn_hook.py..."
     gomplate -f pre_spawn_hook.gomplate.py -o pre_spawn_hook.py
 
@@ -253,7 +297,8 @@ install root_token='':
     helm upgrade --cleanup-on-fail --install jupyterhub jupyterhub/jupyterhub \
         --version ${JUPYTERHUB_CHART_VERSION} -n ${JUPYTERHUB_NAMESPACE} \
         --timeout=20m -f jupyterhub-values.yaml
-    # wait deployments manually because `helm upgrade --wait` does not work for JupyterHub
+
+    # Wait deployments manually because `helm upgrade --wait` does not work for JupyterHub
     just k8s::wait-deployments-ready ${JUPYTERHUB_NAMESPACE} hub proxy
 
     if [ "${MONITORING_ENABLED}" = "true" ]; then
@@ -272,7 +317,9 @@ uninstall:
     kubectl delete pods -n ${JUPYTERHUB_NAMESPACE} -l app.kubernetes.io/component=singleuser-server
     kubectl delete -n ${JUPYTERHUB_NAMESPACE} pvc jupyter-nfs-pvc --ignore-not-found
     kubectl delete -n ${JUPYTERHUB_NAMESPACE} secret jupyterhub-crypt-key --ignore-not-found
+    kubectl delete -n ${JUPYTERHUB_NAMESPACE} secret jupyterhub-admin-service-token --ignore-not-found
     kubectl delete -n ${JUPYTERHUB_NAMESPACE} externalsecret jupyterhub-crypt-key --ignore-not-found
+    kubectl delete -n ${JUPYTERHUB_NAMESPACE} externalsecret jupyterhub-admin-service-token --ignore-not-found
     kubectl delete -n ${JUPYTERHUB_NAMESPACE} externalsecret jupyterhub-vault-token --ignore-not-found
     if kubectl get pv jupyter-nfs-pv &>/dev/null; then
         kubectl patch pv jupyter-nfs-pv -p '{"spec":{"claimRef":null}}'
@@ -281,6 +328,7 @@ uninstall:
     # Clean up Vault entries if present
     if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
         just vault::delete jupyterhub/config || true
+        just vault::delete jupyterhub/admin-service || true
     fi
 
 # Delete JupyterHub PV and StorageClass
@@ -364,6 +412,7 @@ setup-vault-integration root_token='':
         bound_service_account_names=hub \
         bound_service_account_namespaces=jupyter \
         policies=jupyterhub-admin \
+        audience=vault \
         ttl=${JUPYTERHUB_VAULT_TOKEN_TTL} \
         max_ttl=720h
 
@@ -430,7 +479,71 @@ create-jupyterhub-vault-token root_token='':
     echo ""
     echo "Token stored at: secret/jupyterhub/vault-token"
 
-# Get JupyterHub API token for a user
+# Get or create JupyterHub API token for a user
+get-token username:
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="{{ username }}"
+
+    if [ -z "${USERNAME}" ]; then
+        echo "Error: Username is required" >&2
+        echo "Usage: just jupyterhub::get-token <username>" >&2
+        exit 1
+    fi
+
+    # Get admin service token from Secret
+    ADMIN_TOKEN=$(kubectl get secret jupyterhub-admin-service-token -n ${JUPYTERHUB_NAMESPACE} \
+        -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)
+
+    if [ -z "${ADMIN_TOKEN}" ]; then
+        echo "Error: Could not retrieve admin service token" >&2
+        echo "Make sure jupyterhub-admin-service-token secret exists" >&2
+        exit 1
+    fi
+
+    # Check if user exists, if not create it
+    USER_EXISTS=$(kubectl exec -n ${JUPYTERHUB_NAMESPACE} deployment/hub -- \
+        curl -s -o /dev/null -w "%{http_code}" \
+        -H "Authorization: token ${ADMIN_TOKEN}" \
+        "http://localhost:8081/hub/api/users/${USERNAME}" 2>/dev/null || echo "000")
+
+    if [ "${USER_EXISTS}" = "404" ]; then
+        echo "User '${USERNAME}' not found, creating..." >&2
+        CREATE_RESPONSE=$(kubectl exec -n ${JUPYTERHUB_NAMESPACE} deployment/hub -- \
+            curl -s -X POST \
+            -H "Authorization: token ${ADMIN_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"usernames\": [\"${USERNAME}\"]}" \
+            "http://localhost:8081/hub/api/users" 2>/dev/null)
+        echo "User '${USERNAME}' created" >&2
+    fi
+
+    # Create token via JupyterHub API
+    # POST /hub/api/users/{name}/tokens
+    # Use access:servers!user={username} scope to allow access to the user's own servers
+    RESPONSE=$(kubectl exec -n ${JUPYTERHUB_NAMESPACE} deployment/hub -- \
+        curl -s -X POST \
+        -H "Authorization: token ${ADMIN_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{\"note\": \"MCP server token\", \"scopes\": [\"access:servers!user=${USERNAME}\", \"self\"]}" \
+        "http://localhost:8081/hub/api/users/${USERNAME}/tokens" 2>/dev/null)
+
+    TOKEN=$(echo "${RESPONSE}" | jq -r '.token // empty' 2>/dev/null)
+
+    if [ -z "${TOKEN}" ]; then
+        ERROR=$(echo "${RESPONSE}" | jq -r '.message // .error // empty' 2>/dev/null)
+        if [ -n "${ERROR}" ]; then
+            echo "Error: ${ERROR}" >&2
+        else
+            echo "Error: Failed to create token for user '${USERNAME}'" >&2
+            echo "Response: ${RESPONSE}" >&2
+        fi
+        exit 1
+    fi
+
+    echo "${TOKEN}"
+
+# Get JupyterHub API token for a user (from running pod)
 get-api-token username:
     #!/bin/bash
     set -euo pipefail
@@ -474,8 +587,8 @@ get-api-token username:
 
     echo "${API_TOKEN}"
 
-# Setup MCP server configuration for Claude Code (has auth problems)
-setup-mcp-server username='' notebook='':
+# Show MCP server configuration for a user
+setup-mcp-server username='':
     #!/bin/bash
     set -euo pipefail
 
@@ -499,78 +612,136 @@ setup-mcp-server username='' notebook='':
         exit 1
     fi
 
-    # Get notebook path
-    NOTEBOOK="{{ notebook }}"
-    if [ -z "${NOTEBOOK}" ]; then
-        echo ""
-        echo "Available notebooks for user '${USERNAME}':"
-        kubectl exec -n ${JUPYTERHUB_NAMESPACE} jupyter-${USERNAME} -- \
-            curl -s -H "Authorization: token ${API_TOKEN}" \
-            "http://localhost:8888/user/${USERNAME}/api/contents" 2>/dev/null | \
-            jq -r '.content[]? | select(.type=="notebook") | .path' | head -20 || true
-        echo ""
-        NOTEBOOK=$(gum input --prompt="Notebook path (required): " --width=100 --placeholder="e.g., Untitled.ipynb or path/to/notebook.ipynb")
+    # MCP endpoint URL (Jupyter Server Extension provides /mcp)
+    MCP_URL="https://${JUPYTERHUB_HOST}/user/${USERNAME}/mcp"
 
-        if [ -z "${NOTEBOOK}" ]; then
-            echo "Error: Notebook path is required for MCP server to function" >&2
-            exit 1
-        fi
+    echo ""
+    echo "✅ MCP Server is available at: ${MCP_URL}"
+    echo ""
+    echo "API Token: ${API_TOKEN}"
+    echo ""
+    echo "MCP Server Configuration:"
+    echo ""
+    echo "  URL: ${MCP_URL}"
+    echo "  Transport: HTTP (streamable-http)"
+    echo "  Authentication: Bearer token via Authorization header"
+    echo ""
+    echo "Environment variable:"
+    echo "  export JUPYTERHUB_TOKEN=${API_TOKEN}"
+    echo ""
+    echo "Available MCP tools:"
+    echo "  - list_files: List files in the Jupyter server"
+    echo "  - list_kernels: List available kernels"
+    echo "  - use_notebook: Activate a notebook for operations"
+    echo "  - list_notebooks: Show activated notebooks"
+    echo "  - insert_cell, execute_cell, read_cell, delete_cell: Cell operations"
+    echo "  - execute_code: Execute arbitrary code"
+    echo ""
+    echo "Note: Use 'list_files' first to find notebooks, then 'use_notebook' to activate one."
+
+# Show MCP server configuration for Claude Code (with .mcp.json example)
+setup-claude-mcp-server username='':
+    #!/bin/bash
+    set -euo pipefail
+
+    USERNAME="{{ username }}"
+    if [ -z "${USERNAME}" ]; then
+        USERNAME=$(gum input --prompt="JupyterHub username: " --width=100 --placeholder="e.g., buun")
     fi
 
-    # Create .mcp.json configuration
-    MCP_CONFIG_FILE="../.mcp.json"
+    if [ -z "${USERNAME}" ]; then
+        echo "Error: Username is required" >&2
+        exit 1
+    fi
 
-    echo "Creating MCP server configuration..."
-    cat > "${MCP_CONFIG_FILE}" <<EOF
+    # Get the API token for the user
+    echo "Getting API token for user '${USERNAME}'..."
+    API_TOKEN=$(just jupyterhub::get-api-token ${USERNAME} 2>/dev/null || true)
+
+    if [ -z "${API_TOKEN}" ]; then
+        echo "Error: Could not get API token for user '${USERNAME}'" >&2
+        echo "Make sure the user has an active Jupyter session" >&2
+        exit 1
+    fi
+
+    # MCP endpoint URL (Jupyter Server Extension provides /mcp)
+    MCP_URL="https://${JUPYTERHUB_HOST}/user/${USERNAME}/mcp"
+
+    echo ""
+    echo "✅ MCP Server is available at: ${MCP_URL}"
+    echo ""
+    echo "API Token: ${API_TOKEN}"
+    echo ""
+    echo "To configure Claude Code, add to your .mcp.json:"
+    echo ""
+    cat <<EOF
     {
-        "mcpServers": {
-            "jupyter-${USERNAME}": {
-                "command": "docker",
-                "args": [
-                    "run",
-                    "-i",
-                    "--rm",
-                    "-e",
-                    "DOCUMENT_URL",
-                    "-e",
-                    "DOCUMENT_TOKEN",
-                    "-e",
-                    "RUNTIME_URL",
-                    "-e",
-                    "RUNTIME_TOKEN",
-                    "-e",
-                    "DOCUMENT_ID",
-                    "datalayer/jupyter-mcp-server:latest"
-                ],
-                "env": {
-                    "DOCUMENT_URL": "https://${JUPYTERHUB_HOST}/user/${USERNAME}",
-                    "DOCUMENT_TOKEN": "${API_TOKEN}",
-                    "DOCUMENT_ID": "${NOTEBOOK}",
-                    "RUNTIME_URL": "https://${JUPYTERHUB_HOST}/user/${USERNAME}",
-                    "RUNTIME_TOKEN": "${API_TOKEN}"
-                }
-            }
+      "mcpServers": {
+        "jupyter-${USERNAME}": {
+          "type": "http",
+          "url": "${MCP_URL}",
+          "headers": {
+            "Authorization": "token \${JUPYTERHUB_TOKEN}"
+          }
         }
+      }
     }
     EOF
+    echo ""
+    echo "Then set the environment variable:"
+    echo "  export JUPYTERHUB_TOKEN=${API_TOKEN}"
+    echo ""
+    echo "Or add to your shell profile (~/.bashrc, ~/.zshrc):"
+    echo "  export JUPYTERHUB_TOKEN=${API_TOKEN}"
 
-    echo "✅ MCP server configuration created at: ${MCP_CONFIG_FILE}"
+# Show MCP server status for a user
+mcp-status username='':
+    #!/bin/bash
+    set -euo pipefail
+
+    USERNAME="{{ username }}"
+    if [ -z "${USERNAME}" ]; then
+        USERNAME=$(gum input --prompt="JupyterHub username: " --width=100 --placeholder="e.g., buun")
+    fi
+
+    if [ -z "${USERNAME}" ]; then
+        echo "Error: Username is required" >&2
+        exit 1
+    fi
+
+    # Check if user pod is running
+    POD_NAME=$(kubectl get pods -n ${JUPYTERHUB_NAMESPACE} \
+        -l "app=jupyterhub,component=singleuser-server,hub.jupyter.org/username=${USERNAME}" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+
+    if [ -z "${POD_NAME}" ]; then
+        echo "❌ No running pod found for user '${USERNAME}'"
+        echo "   Start a Jupyter session first at: https://${JUPYTERHUB_HOST}"
+        exit 1
+    fi
+
+    echo "✅ User pod running: ${POD_NAME}"
+
+    # Check if jupyter-mcp-server extension is enabled
     echo ""
-    echo "Configuration details:"
-    echo "  Server name: jupyter-${USERNAME}"
-    echo "  Jupyter URL: https://${JUPYTERHUB_HOST}/user/${USERNAME}"
-    echo "  Token: ${API_TOKEN:0:8}..."
+    echo "Checking jupyter-mcp-server extension status..."
+    kubectl exec -n ${JUPYTERHUB_NAMESPACE} ${POD_NAME} -- \
+        jupyter server extension list 2>/dev/null | grep -E "(jupyter_mcp_server|enabled)" || \
+        echo "⚠️  jupyter-mcp-server extension not found in listing"
+
+    # Try to access MCP endpoint
     echo ""
-    echo "To use this configuration:"
-    echo "1. Open Claude Code in this directory (${PWD})"
-    echo "2. The MCP server will be automatically loaded from .mcp.json"
-    echo "3. You can access Jupyter notebooks through the MCP server"
-    echo ""
-    if [ -n "${NOTEBOOK}" ]; then
-        echo "  Notebook: ${NOTEBOOK}"
-    else
-        echo ""
-        echo "Note: No specific notebook configured."
-        echo "To reconfigure with a specific notebook:"
-        echo "  just jupyterhub::setup-mcp-server ${USERNAME} <notebook-path>"
+    echo "Testing MCP endpoint..."
+    API_TOKEN=$(just jupyterhub::get-api-token ${USERNAME} 2>/dev/null || true)
+    if [ -n "${API_TOKEN}" ]; then
+        RESPONSE=$(kubectl exec -n ${JUPYTERHUB_NAMESPACE} ${POD_NAME} -- \
+            curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token ${API_TOKEN}" \
+            "http://localhost:8888/mcp" 2>/dev/null || echo "000")
+        if [ "${RESPONSE}" = "200" ] || [ "${RESPONSE}" = "405" ]; then
+            echo "✅ MCP endpoint responding (HTTP ${RESPONSE})"
+            echo "   URL: https://${JUPYTERHUB_HOST}/user/${USERNAME}/mcp"
+        else
+            echo "⚠️  MCP endpoint returned HTTP ${RESPONSE}"
+        fi
     fi

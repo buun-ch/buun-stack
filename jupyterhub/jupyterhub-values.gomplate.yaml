@@ -5,6 +5,11 @@ hub:
         secretKeyRef:
           name: jupyterhub-crypt-key
           key: crypt-key
+    JUPYTERHUB_ADMIN_SERVICE_TOKEN:
+      valueFrom:
+        secretKeyRef:
+          name: jupyterhub-admin-service-token
+          key: token
     VAULT_ADDR: {{ .Env.VAULT_ADDR | quote }}
     NOTEBOOK_VAULT_TOKEN_TTL: {{ .Env.NOTEBOOK_VAULT_TOKEN_TTL | quote }}
     NOTEBOOK_VAULT_TOKEN_MAX_TTL: {{ .Env.NOTEBOOK_VAULT_TOKEN_MAX_TTL | quote }}
@@ -80,6 +85,25 @@ hub:
               'drop': ['ALL']
           }
       }
+
+    admin-service: |
+      # Admin service for token management via API (used by get-token recipe)
+      import os
+      admin_token = os.environ.get('JUPYTERHUB_ADMIN_SERVICE_TOKEN', '')
+      if admin_token:
+          c.JupyterHub.services = [
+              {
+                  'name': 'admin-service',
+                  'api_token': admin_token,
+              }
+          ]
+          c.JupyterHub.load_roles = [
+              {
+                  'name': 'admin-service-role',
+                  'scopes': ['admin:users', 'tokens', 'admin:servers'],
+                  'services': ['admin-service'],
+              }
+          ]
 
   {{- if eq .Env.JUPYTERHUB_VAULT_INTEGRATION_ENABLED "true" }}
   # Vault token renewal sidecar configuration
@@ -172,34 +196,6 @@ singleuser:
   allowPrivilegeEscalation: false
 
   # Additional security context via extraPodConfig
-  extraPodConfig:
-    securityContext:
-      runAsNonRoot: true
-      seccompProfile:
-        type: RuntimeDefault
-
-  storage:
-    {{ if env.Getenv "PVC_NAME" -}}
-    type: static
-    static:
-      pvcName: {{ .Env.PVC_NAME }}
-    {{ else -}}
-    type: dynamic
-    dynamic:
-      {{ if env.Getenv "JUPYTERHUB_STORAGE_CLASS" -}}
-      storageClass: {{ .Env.JUPYTERHUB_STORAGE_CLASS }}
-      {{ end -}}
-      storageAccessModes:
-        - ReadWriteOnce
-    {{ end -}}
-    capacity: 10Gi
-
-  extraEnv:
-    VAULT_ADDR: "{{ .Env.VAULT_ADDR }}"
-    NOTEBOOK_VAULT_TOKEN_TTL: "{{ .Env.NOTEBOOK_VAULT_TOKEN_TTL }}"
-    NOTEBOOK_VAULT_TOKEN_MAX_TTL: "{{ .Env.NOTEBOOK_VAULT_TOKEN_MAX_TTL }}"
-    # JUPYTERHUB_SINGLEUSER_EXTENSION: "0"
-
   {{- if eq .Env.JUPYTERHUB_GPU_ENABLED "true" }}
   extraPodConfig:
     runtimeClassName: nvidia
@@ -210,7 +206,23 @@ singleuser:
   extraResource:
     limits:
       nvidia.com/gpu: "{{ .Env.JUPYTERHUB_GPU_LIMIT }}"
+  {{- else }}
+  extraPodConfig:
+    securityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
   {{- end }}
+
+  extraEnv:
+    VAULT_ADDR: "{{ .Env.VAULT_ADDR }}"
+    NOTEBOOK_VAULT_TOKEN_TTL: "{{ .Env.NOTEBOOK_VAULT_TOKEN_TTL }}"
+    NOTEBOOK_VAULT_TOKEN_MAX_TTL: "{{ .Env.NOTEBOOK_VAULT_TOKEN_MAX_TTL }}"
+    {{- if eq .Env.JUPYTER_MCP_SERVER_ENABLED "true" }}
+    # Enable WebSocket token authentication for jupyter-mcp-server extension
+    # https://github.com/datalayer/jupyter-mcp-server/issues/61
+    JUPYTERHUB_ALLOW_TOKEN_IN_URL: "1"
+    {{- end }}
 
   storage:
     {{ if env.Getenv "PVC_NAME" -}}
@@ -228,7 +240,6 @@ singleuser:
     {{ end -}}
     capacity: 10Gi
     {{- if eq .Env.JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED "true" }}
-    # Mount Airflow DAGs when both are in the same namespace (jupyter)
     extraVolumes:
       - name: airflow-dags
         persistentVolumeClaim:
