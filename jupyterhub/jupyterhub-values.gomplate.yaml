@@ -316,6 +316,14 @@ singleuser:
         ports:
           - port: 8181
             protocol: TCP
+      # Allow communication with FalkorDB
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: falkordb
+        ports:
+          - port: 6379
+            protocol: TCP
       # Allow DNS resolution
       - to:
         - ipBlock:

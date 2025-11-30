@@ -146,7 +146,12 @@ ARG pip_repository_url="https://pypi.org/simple/"
 
 RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_repository_url}" \
     agno \
+    cognee \
+    cognee-integration-langgraph \
+    cognee-community-hybrid-adapter-falkor \
+    cognee-community-vector-adapter-qdrant \
     dagster-dlt \
+    falkordb \
     fastembed \
     feature-engine \
     kreuzberg \
