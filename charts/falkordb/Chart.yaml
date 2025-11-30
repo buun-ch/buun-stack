@@ -1,0 +1,15 @@
+apiVersion: v2
+name: falkordb
+description: FalkorDB - A graph database with vector similarity search
+type: application
+version: 0.1.0
+appVersion: "v4.14.8"
+keywords:
+  - falkordb
+  - graph
+  - database
+  - redis
+  - cypher
+home: https://www.falkordb.com/
+sources:
+  - https://github.com/FalkorDB/FalkorDB

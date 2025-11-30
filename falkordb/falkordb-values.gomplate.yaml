@@ -1,0 +1,19 @@
+image:
+  tag: {{ .Env.FALKORDB_VERSION }}
+
+auth:
+  enabled: true
+  existingSecret: falkordb-password
+  existingSecretPasswordKey: redis-password
+
+persistence:
+  enabled: true
+  size: {{ .Env.FALKORDB_STORAGE_SIZE }}
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

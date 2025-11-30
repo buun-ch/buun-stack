@@ -14,6 +14,7 @@ mod dagster
 mod datahub
 mod env
 mod external-secrets
+mod falkordb
 mod goldilocks
 mod keycloak
 mod jupyterhub

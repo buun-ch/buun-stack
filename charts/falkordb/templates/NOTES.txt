@@ -1,0 +1,33 @@
+FalkorDB has been deployed!
+
+Get the connection information:
+
+  Host: {{ include "falkordb.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  Port: {{ .Values.service.port }}
+
+{{- if .Values.auth.enabled }}
+
+Get the password:
+
+  kubectl get secret {{ .Values.auth.existingSecret | default (printf "%s-password" (include "falkordb.fullname" .)) }} \
+    -n {{ .Release.Namespace }} \
+    -o jsonpath="{.data.{{ .Values.auth.existingSecretPasswordKey }}}" | base64 -d
+{{- end }}
+
+Test the connection:
+
+  redis-cli -h {{ include "falkordb.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local \
+    -p {{ .Values.service.port }} \
+    {{- if .Values.auth.enabled }}
+    -a <password> \
+    {{- end }}
+    PING
+
+Run a Cypher query:
+
+  redis-cli -h {{ include "falkordb.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local \
+    -p {{ .Values.service.port }} \
+    {{- if .Values.auth.enabled }}
+    -a <password> \
+    {{- end }}
+    GRAPH.QUERY mygraph "CREATE (:Person {name: 'Alice'})"

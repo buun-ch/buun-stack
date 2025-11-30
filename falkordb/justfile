@@ -1,0 +1,193 @@
+set fallback := true
+
+export FALKORDB_NAMESPACE := env("FALKORDB_NAMESPACE", "falkordb")
+export FALKORDB_VERSION := env("FALKORDB_VERSION", "v4.14.8")
+export FALKORDB_STORAGE_SIZE := env("FALKORDB_STORAGE_SIZE", "8Gi")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Create FalkorDB namespace
+create-namespace:
+    @kubectl get namespace ${FALKORDB_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${FALKORDB_NAMESPACE}
+    @kubectl label namespace ${FALKORDB_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=baseline \
+        pod-security.kubernetes.io/warn=restricted \
+        --overwrite
+
+# Delete FalkorDB namespace
+delete-namespace:
+    @kubectl delete namespace ${FALKORDB_NAMESPACE} --ignore-not-found
+
+# Create FalkorDB password secret
+create-password-secret:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up FalkorDB password..."
+
+    PASSWORD=$(just utils::random-password)
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing password in Vault and creating ExternalSecret..."
+        just vault::put falkordb/auth password="$PASSWORD"
+        gomplate -f falkordb-password-external-secret.gomplate.yaml -o falkordb-password-external-secret.yaml
+        kubectl apply -f falkordb-password-external-secret.yaml
+        echo "Waiting for password secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/falkordb-password-external-secret \
+            -n ${FALKORDB_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret falkordb-password -n ${FALKORDB_NAMESPACE} --ignore-not-found
+        kubectl create secret generic falkordb-password -n ${FALKORDB_NAMESPACE} \
+            --from-literal=redis-password="$PASSWORD"
+        if helm status vault -n vault &>/dev/null; then
+            just vault::put falkordb/auth password="$PASSWORD"
+        fi
+    fi
+    echo "FalkorDB password setup completed"
+
+# Delete FalkorDB password secret
+delete-password-secret:
+    @kubectl delete secret falkordb-password -n ${FALKORDB_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret falkordb-password-external-secret -n ${FALKORDB_NAMESPACE} --ignore-not-found
+
+# Install FalkorDB
+install:
+    #!/bin/bash
+    set -euo pipefail
+    just create-namespace
+    just create-password-secret
+
+    METRICS_ENABLED="false"
+    SERVICEMONITOR_ENABLED="false"
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            else
+                MONITORING_ENABLED="false"
+            fi
+        fi
+        if [ "${MONITORING_ENABLED}" = "true" ]; then
+            METRICS_ENABLED="true"
+            SERVICEMONITOR_ENABLED="true"
+            kubectl label namespace ${FALKORDB_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+        fi
+    fi
+
+    gomplate -f falkordb-values.gomplate.yaml -o falkordb-values.yaml
+    helm upgrade --install falkordb ../charts/falkordb \
+        -n ${FALKORDB_NAMESPACE} --create-namespace --wait \
+        -f falkordb-values.yaml \
+        --set metrics.enabled=${METRICS_ENABLED} \
+        --set metrics.serviceMonitor.enabled=${SERVICEMONITOR_ENABLED} \
+        --set metrics.serviceMonitor.labels.release=kube-prometheus-stack
+
+    echo ""
+    echo "FalkorDB installed successfully!"
+    echo "Connection: falkordb.${FALKORDB_NAMESPACE}.svc.cluster.local:6379"
+
+# Uninstall FalkorDB
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    if gum confirm "Are you sure you want to uninstall FalkorDB?"; then
+        helm uninstall falkordb -n ${FALKORDB_NAMESPACE} --wait --ignore-not-found
+        just delete-password-secret
+        just delete-namespace
+        echo "FalkorDB uninstalled"
+    else
+        echo "Uninstall cancelled"
+    fi
+
+# Get FalkorDB password
+get-password:
+    @kubectl get secret falkordb-password -n ${FALKORDB_NAMESPACE} \
+        -o jsonpath="{.data.redis-password}" | base64 -d
+    @echo
+
+# Get FalkorDB service URL
+[private]
+get-service-url:
+    @echo "redis://falkordb.${FALKORDB_NAMESPACE}.svc.cluster.local:6379"
+
+# Check if telepresence is connected
+[private]
+check-telepresence:
+    #!/bin/bash
+    set -euo pipefail
+    if ! command -v telepresence &>/dev/null; then
+        echo "Error: telepresence is not installed" >&2
+        exit 1
+    fi
+    if ! telepresence status &>/dev/null; then
+        echo "Error: telepresence is not connected" >&2
+        echo "Please run: telepresence connect" >&2
+        exit 1
+    fi
+
+# Check FalkorDB health
+health-check:
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    PASSWORD=$(just get-password)
+    HOST="falkordb.${FALKORDB_NAMESPACE}.svc.cluster.local"
+    echo "Checking FalkorDB health at ${HOST}:6379..."
+    redis-cli -h ${HOST} -p 6379 -a "${PASSWORD}" --no-auth-warning PING
+
+# Test FalkorDB with basic graph operations
+test:
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    PASSWORD=$(just get-password)
+    HOST="falkordb.${FALKORDB_NAMESPACE}.svc.cluster.local"
+    GRAPH_NAME="test_graph_$(date +%s)"
+
+    echo "Testing FalkorDB at ${HOST}:6379"
+    echo "Using graph: ${GRAPH_NAME}"
+    echo
+
+    echo "1. Creating nodes..."
+    redis-cli -h ${HOST} -p 6379 -a "${PASSWORD}" --no-auth-warning \
+        GRAPH.QUERY ${GRAPH_NAME} "CREATE (:Person {name: 'Alice', age: 30})"
+    redis-cli -h ${HOST} -p 6379 -a "${PASSWORD}" --no-auth-warning \
+        GRAPH.QUERY ${GRAPH_NAME} "CREATE (:Person {name: 'Bob', age: 25})"
+    echo
+
+    echo "2. Creating relationship..."
+    redis-cli -h ${HOST} -p 6379 -a "${PASSWORD}" --no-auth-warning \
+        GRAPH.QUERY ${GRAPH_NAME} "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS {since: 2020}]->(b)"
+    echo
+
+    echo "3. Querying graph..."
+    redis-cli -h ${HOST} -p 6379 -a "${PASSWORD}" --no-auth-warning \
+        GRAPH.QUERY ${GRAPH_NAME} "MATCH (p:Person)-[:KNOWS]->(friend) RETURN p.name, friend.name"
+    echo
+
+    echo "4. Deleting test graph..."
+    redis-cli -h ${HOST} -p 6379 -a "${PASSWORD}" --no-auth-warning \
+        GRAPH.DELETE ${GRAPH_NAME}
+    echo
+
+    echo "Test completed successfully!"
+
+# Clean up FalkorDB resources
+cleanup:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete all FalkorDB resources and secrets."
+    if gum confirm "Are you sure you want to proceed?"; then
+        echo "Cleaning up FalkorDB resources..."
+        just vault::delete falkordb/auth || true
+        echo "Cleanup completed"
+    else
+        echo "Cleanup cancelled"
+    fi
