@@ -14,13 +14,10 @@ const main = async () => {
   const realmName = process.env.KEYCLOAK_REALM;
   invariant(realmName, "KEYCLOAK_REALM environment variable is required");
 
-  // Token lifespan settings (with defaults suitable for JupyterHub)
-  const accessTokenLifespan = parseInt(process.env.ACCESS_TOKEN_LIFESPAN || "3600"); // 1 hour
-  const refreshTokenLifespan = parseInt(process.env.REFRESH_TOKEN_LIFESPAN || "14400"); // 4 hours - changed from 30min
-  const ssoSessionMaxLifespan = parseInt(
-    process.env.SSO_SESSION_MAX_LIFESPAN || refreshTokenLifespan.toString()
-  ); // Use refreshTokenLifespan
-  const ssoSessionIdleTimeout = parseInt(process.env.SSO_SESSION_IDLE_TIMEOUT || "7200"); // 2 hours
+  // Token lifespan settings (with defaults suitable for development/personal use)
+  const accessTokenLifespan = parseInt(process.env.ACCESS_TOKEN_LIFESPAN || "43200"); // 12 hours
+  const ssoSessionIdleTimeout = parseInt(process.env.SSO_SESSION_IDLE_TIMEOUT || "86400"); // 1 day
+  const ssoSessionMaxLifespan = parseInt(process.env.SSO_SESSION_MAX_LIFESPAN || "604800"); // 7 days
 
   const kcAdminClient = new KcAdminClient({
     baseUrl: `https://${keycloakHost}`,
@@ -49,29 +46,27 @@ const main = async () => {
       // Token lifespan settings
       accessTokenLifespan: accessTokenLifespan,
       accessTokenLifespanForImplicitFlow: accessTokenLifespan,
+      // SSO session settings
       ssoSessionMaxLifespan: ssoSessionMaxLifespan,
-      ssoSessionIdleTimeout: Math.min(ssoSessionMaxLifespan, ssoSessionIdleTimeout),
+      ssoSessionIdleTimeout: ssoSessionIdleTimeout,
       // Refresh token settings
       refreshTokenMaxReuse: 0,
       // Offline session settings
       offlineSessionMaxLifespan: ssoSessionMaxLifespan * 2,
       offlineSessionMaxLifespanEnabled: true,
-      // Client session settings
-      clientSessionMaxLifespan: accessTokenLifespan,
-      clientSessionIdleTimeout: Math.min(accessTokenLifespan, ssoSessionIdleTimeout),
+      // Client session settings (inherit from SSO session)
+      clientSessionMaxLifespan: ssoSessionMaxLifespan,
+      clientSessionIdleTimeout: ssoSessionIdleTimeout,
     });
     console.log(`Realm '${realmName}' created successfully with token settings:`);
     console.log(
-      `  - Access Token Lifespan: ${accessTokenLifespan} seconds (${accessTokenLifespan / 60} minutes)`
+      `  - Access Token Lifespan: ${accessTokenLifespan}s (${accessTokenLifespan / 3600}h)`
     );
     console.log(
-      `  - Refresh Token Lifespan: ${refreshTokenLifespan} seconds (${refreshTokenLifespan / 60} minutes)`
+      `  - SSO Session Idle Timeout: ${ssoSessionIdleTimeout}s (${ssoSessionIdleTimeout / 3600}h)`
     );
     console.log(
-      `  - SSO Session Max: ${ssoSessionMaxLifespan} seconds (${ssoSessionMaxLifespan / 60} minutes)`
-    );
-    console.log(
-      `  - SSO Session Idle: ${ssoSessionIdleTimeout} seconds (${ssoSessionIdleTimeout / 60} minutes)`
+      `  - SSO Session Max Lifespan: ${ssoSessionMaxLifespan}s (${ssoSessionMaxLifespan / 86400}d)`
     );
   } catch (error) {
     console.error("An error occurred:", error);

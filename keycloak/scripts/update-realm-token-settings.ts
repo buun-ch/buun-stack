@@ -3,13 +3,26 @@
 import KcAdminClient from "@keycloak/keycloak-admin-client";
 import invariant from "tiny-invariant";
 
+const formatDuration = (seconds: number): string => {
+  if (seconds >= 86400) {
+    return `${seconds}s (${seconds / 86400}d)`;
+  } else if (seconds >= 3600) {
+    return `${seconds}s (${seconds / 3600}h)`;
+  } else {
+    return `${seconds}s (${seconds / 60}m)`;
+  }
+};
+
 const main = async () => {
   const keycloakHost = process.env.KEYCLOAK_HOST;
   const adminUser = process.env.KEYCLOAK_ADMIN_USER;
   const adminPassword = process.env.KEYCLOAK_ADMIN_PASSWORD;
   const realm = process.env.KEYCLOAK_REALM;
-  const accessTokenLifespan = parseInt(process.env.ACCESS_TOKEN_LIFESPAN || "3600");
-  const refreshTokenLifespan = parseInt(process.env.REFRESH_TOKEN_LIFESPAN || "1800");
+
+  // Token settings with defaults suitable for development/personal use
+  const accessTokenLifespan = parseInt(process.env.ACCESS_TOKEN_LIFESPAN || "43200"); // 12 hours
+  const ssoSessionIdleTimeout = parseInt(process.env.SSO_SESSION_IDLE_TIMEOUT || "86400"); // 1 day
+  const ssoSessionMaxLifespan = parseInt(process.env.SSO_SESSION_MAX_LIFESPAN || "604800"); // 7 days
 
   invariant(keycloakHost, "KEYCLOAK_HOST is required");
   invariant(adminUser, "KEYCLOAK_ADMIN_USER is required");
@@ -17,12 +30,9 @@ const main = async () => {
   invariant(realm, "KEYCLOAK_REALM is required");
 
   console.log(`Updating token settings for realm: ${realm}`);
-  console.log(
-    `Access token lifespan: ${accessTokenLifespan} seconds (${accessTokenLifespan / 60} minutes)`
-  );
-  console.log(
-    `Refresh token lifespan: ${refreshTokenLifespan} seconds (${refreshTokenLifespan / 60} minutes)`
-  );
+  console.log(`  Access Token Lifespan: ${formatDuration(accessTokenLifespan)}`);
+  console.log(`  SSO Session Idle Timeout: ${formatDuration(ssoSessionIdleTimeout)}`);
+  console.log(`  SSO Session Max Lifespan: ${formatDuration(ssoSessionMaxLifespan)}`);
 
   const kcAdminClient = new KcAdminClient({
     baseUrl: `https://${keycloakHost}`,
@@ -47,9 +57,9 @@ const main = async () => {
     }
 
     console.log(`Current settings:`);
-    console.log(`  - Access token lifespan: ${currentRealm.accessTokenLifespan} seconds`);
-    console.log(`  - Refresh token lifespan: ${currentRealm.ssoSessionMaxLifespan} seconds`);
-    console.log(`  - SSO session idle: ${currentRealm.ssoSessionIdleTimeout} seconds`);
+    console.log(`  - Access Token Lifespan: ${formatDuration(currentRealm.accessTokenLifespan || 0)}`);
+    console.log(`  - SSO Session Idle Timeout: ${formatDuration(currentRealm.ssoSessionIdleTimeout || 0)}`);
+    console.log(`  - SSO Session Max Lifespan: ${formatDuration(currentRealm.ssoSessionMaxLifespan || 0)}`);
 
     await kcAdminClient.realms.update(
       { realm },
@@ -58,16 +68,17 @@ const main = async () => {
         // Access token settings
         accessTokenLifespan: accessTokenLifespan,
         accessTokenLifespanForImplicitFlow: accessTokenLifespan,
+        // SSO session settings
+        ssoSessionIdleTimeout: ssoSessionIdleTimeout,
+        ssoSessionMaxLifespan: ssoSessionMaxLifespan,
         // Refresh token settings
         refreshTokenMaxReuse: 0,
-        ssoSessionMaxLifespan: refreshTokenLifespan,
-        ssoSessionIdleTimeout: Math.min(refreshTokenLifespan, 1800), // Max 30 minutes idle
-        // Other token settings
-        offlineSessionMaxLifespan: refreshTokenLifespan * 2,
+        // Offline session settings
+        offlineSessionMaxLifespan: ssoSessionMaxLifespan * 2,
         offlineSessionMaxLifespanEnabled: true,
-        // Client session settings
-        clientSessionMaxLifespan: accessTokenLifespan,
-        clientSessionIdleTimeout: Math.min(accessTokenLifespan, 1800),
+        // Client session settings (inherit from SSO session)
+        clientSessionMaxLifespan: ssoSessionMaxLifespan,
+        clientSessionIdleTimeout: ssoSessionIdleTimeout,
       }
     );
 
@@ -75,9 +86,9 @@ const main = async () => {
 
     const updatedRealm = await kcAdminClient.realms.findOne({ realm });
     console.log(`Updated settings:`);
-    console.log(`  - Access token lifespan: ${updatedRealm?.accessTokenLifespan} seconds`);
-    console.log(`  - Refresh token lifespan: ${updatedRealm?.ssoSessionMaxLifespan} seconds`);
-    console.log(`  - SSO session idle: ${updatedRealm?.ssoSessionIdleTimeout} seconds`);
+    console.log(`  - Access Token Lifespan: ${formatDuration(updatedRealm?.accessTokenLifespan || 0)}`);
+    console.log(`  - SSO Session Idle Timeout: ${formatDuration(updatedRealm?.ssoSessionIdleTimeout || 0)}`);
+    console.log(`  - SSO Session Max Lifespan: ${formatDuration(updatedRealm?.ssoSessionMaxLifespan || 0)}`);
   } catch (error) {
     console.error("✗ Failed to update realm token settings:", error);
     process.exit(1);

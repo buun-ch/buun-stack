@@ -576,22 +576,29 @@ show-realm-token-settings realm:
     export KEYCLOAK_REALM={{ realm }}
     dotenvx run -q -f ../.env.local -- tsx ./scripts/show-realm-token-settings.ts
 
-# Update realm token settings (access token lifespan, refresh token lifespan, etc.)
-update-realm-token-settings realm access_token_lifespan='' refresh_token_lifespan='':
+# Update realm token settings (access token lifespan, SSO session settings)
+update-realm-token-settings realm access_token_lifespan='' sso_session_idle_timeout='' sso_session_max_lifespan='':
     #!/bin/bash
     set -euo pipefail
     export ACCESS_TOKEN_LIFESPAN={{ access_token_lifespan }}
-    export REFRESH_TOKEN_LIFESPAN={{ refresh_token_lifespan }}
+    export SSO_SESSION_IDLE_TIMEOUT={{ sso_session_idle_timeout }}
+    export SSO_SESSION_MAX_LIFESPAN={{ sso_session_max_lifespan }}
     while [ -z "${ACCESS_TOKEN_LIFESPAN}" ]; do
         ACCESS_TOKEN_LIFESPAN=$(
-            gum input --prompt="Access token lifespan (in seconds): " --width=100 \
+            gum input --prompt="Access token lifespan (seconds): " --width=100 \
             --placeholder="e.g., 43200 for 12 hours" --value="43200"
         )
     done
-    while [ -z "${REFRESH_TOKEN_LIFESPAN}" ]; do
-        REFRESH_TOKEN_LIFESPAN=$(
-            gum input --prompt="Refresh token lifespan (in seconds): " --width=100 \
-            --placeholder="e.g., 86400 for 24 hours" --value="86400"
+    while [ -z "${SSO_SESSION_IDLE_TIMEOUT}" ]; do
+        SSO_SESSION_IDLE_TIMEOUT=$(
+            gum input --prompt="SSO session idle timeout (seconds): " --width=100 \
+            --placeholder="e.g., 86400 for 1 day" --value="86400"
+        )
+    done
+    while [ -z "${SSO_SESSION_MAX_LIFESPAN}" ]; do
+        SSO_SESSION_MAX_LIFESPAN=$(
+            gum input --prompt="SSO session max lifespan (seconds): " --width=100 \
+            --placeholder="e.g., 604800 for 7 days" --value="604800"
         )
     done
     export KEYCLOAK_ADMIN_USER=$(just admin-username)
