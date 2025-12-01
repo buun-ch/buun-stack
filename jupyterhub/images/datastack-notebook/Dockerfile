@@ -158,7 +158,7 @@ RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_
     langfuse \
     mlflow \
     pydantic-ai \
-    ragas \
+    ragas[all,tracing] \
     smolagents \
     tavily-python \
     tweet-preprocessor
