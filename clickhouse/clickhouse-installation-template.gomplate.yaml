@@ -1,0 +1,60 @@
+apiVersion: clickhouse.altinity.com/v1
+kind: ClickHouseInstallationTemplate
+metadata:
+  name: clickhouse-security-template
+spec:
+  defaults:
+    templates:
+      podTemplate: clickhouse-secure-pod
+  configuration:
+    settings:
+      max_server_memory_usage: {{ .Env.CLICKHOUSE_MAX_SERVER_MEMORY }}
+  templates:
+    podTemplates:
+      - name: clickhouse-secure-pod
+        spec:
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 101
+            fsGroup: 101
+          containers:
+            - name: clickhouse
+              image: {{ .Env.CLICKHOUSE_IMAGE }}
+              resources:
+                requests:
+                  cpu: {{ .Env.CLICKHOUSE_CPU_REQUEST }}
+                  memory: {{ .Env.CLICKHOUSE_MEMORY_REQUEST }}
+                limits:
+                  cpu: "{{ .Env.CLICKHOUSE_CPU_LIMIT }}"
+                  memory: {{ .Env.CLICKHOUSE_MEMORY_LIMIT }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsNonRoot: true
+                capabilities:
+                  drop: [ALL]
+                  # IPC_LOCK: mlock to prevent binary from being paged out (optional, for stability under high I/O)
+                  # SYS_NICE: os_thread_priority setting (optional, for thread priority control)
+                  # Uncomment below if namespace allows privileged pods:
+                  # add: [IPC_LOCK, SYS_NICE]
+                seccompProfile:
+                  type: RuntimeDefault
+              command:
+                - clickhouse-server
+                - --config-file=/etc/clickhouse-server/config.xml
+            - name: clickhouse-log
+              image: registry.access.redhat.com/ubi8/ubi-minimal:latest
+              resources:
+                requests:
+                  cpu: {{ .Env.CLICKHOUSE_LOG_CPU_REQUEST }}
+                  memory: {{ .Env.CLICKHOUSE_LOG_MEMORY_REQUEST }}
+                limits:
+                  cpu: {{ .Env.CLICKHOUSE_LOG_CPU_LIMIT }}
+                  memory: {{ .Env.CLICKHOUSE_LOG_MEMORY_LIMIT }}
+              command:
+                - /bin/sh
+                - -c
+                - --
+              args:
+                - while true; do sleep 30; done;
+  templating:
+    policy: auto

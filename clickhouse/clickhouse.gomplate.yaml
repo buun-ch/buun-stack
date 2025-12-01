@@ -25,8 +25,9 @@ spec:
       default/password: "disabled"
       default/networks/ip: "127.0.0.1"
     profiles:
-      default/max_memory_usage: 4000000000 # 4GB
-      default/max_bytes_before_external_group_by: 2000000000 # 2GB
+      default/max_memory_usage: {{ .Env.CLICKHOUSE_MAX_MEMORY_USAGE }}
+      default/max_bytes_before_external_group_by: {{ .Env.CLICKHOUSE_MAX_BYTES_BEFORE_EXTERNAL_GROUP_BY }}
+      default/max_bytes_before_external_sort: {{ .Env.CLICKHOUSE_MAX_BYTES_BEFORE_EXTERNAL_SORT }}
       default/add_http_cors_header: 1
   templates:
     volumeClaimTemplates:

@@ -1,0 +1,17 @@
+operator:
+  resources:
+    requests:
+      cpu: {{ .Env.CLICKHOUSE_OPERATOR_CPU_REQUEST }}
+      memory: {{ .Env.CLICKHOUSE_OPERATOR_MEMORY_REQUEST }}
+    limits:
+      cpu: {{ .Env.CLICKHOUSE_OPERATOR_CPU_LIMIT }}
+      memory: {{ .Env.CLICKHOUSE_OPERATOR_MEMORY_LIMIT }}
+
+metrics:
+  resources:
+    requests:
+      cpu: {{ .Env.CLICKHOUSE_OPERATOR_CPU_REQUEST }}
+      memory: {{ .Env.CLICKHOUSE_OPERATOR_MEMORY_REQUEST }}
+    limits:
+      cpu: {{ .Env.CLICKHOUSE_OPERATOR_CPU_LIMIT }}
+      memory: {{ .Env.CLICKHOUSE_OPERATOR_MEMORY_LIMIT }}

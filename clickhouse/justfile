@@ -2,8 +2,37 @@ set fallback := true
 
 export CLICKHOUSE_NAMESPACE := env("CLICKHOUSE_NAMESPACE", "clickhouse")
 export CLICKHOUSE_HOST := env("CLICKHOUSE_HOST", "")
-export CLICKHOUSE_CHART_VERSION := env("CLICKHOUSE_CHART_VERSION", "0.25.3")
+export CLICKHOUSE_CHART_VERSION := env("CLICKHOUSE_CHART_VERSION", "0.25.5")
+export CLICKHOUSE_IMAGE := env("CLICKHOUSE_IMAGE", "clickhouse/clickhouse-server:25.10")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+
+# ClickHouse resource settings
+export CLICKHOUSE_MEMORY_REQUEST := env("CLICKHOUSE_MEMORY_REQUEST", "1Gi")
+export CLICKHOUSE_MEMORY_LIMIT := env("CLICKHOUSE_MEMORY_LIMIT", "8Gi")
+export CLICKHOUSE_CPU_REQUEST := env("CLICKHOUSE_CPU_REQUEST", "200m")
+export CLICKHOUSE_CPU_LIMIT := env("CLICKHOUSE_CPU_LIMIT", "2")
+
+# ClickHouse memory settings (bytes)
+# max_server_memory_usage: Server-wide limit, should be ~75% of MEMORY_LIMIT (default: 0 = auto 90% of RAM)
+export CLICKHOUSE_MAX_SERVER_MEMORY := env("CLICKHOUSE_MAX_SERVER_MEMORY", "6442450944")
+# max_memory_usage: Per-query limit (default: 10GB)
+export CLICKHOUSE_MAX_MEMORY_USAGE := env("CLICKHOUSE_MAX_MEMORY_USAGE", "4294967296")
+# max_bytes_before_external_group_by: Spill to disk threshold for GROUP BY (default: 0 = disabled)
+export CLICKHOUSE_MAX_BYTES_BEFORE_EXTERNAL_GROUP_BY := env("CLICKHOUSE_MAX_BYTES_BEFORE_EXTERNAL_GROUP_BY", "2147483648")
+# max_bytes_before_external_sort: Spill to disk threshold for ORDER BY (default: 0 = disabled)
+export CLICKHOUSE_MAX_BYTES_BEFORE_EXTERNAL_SORT := env("CLICKHOUSE_MAX_BYTES_BEFORE_EXTERNAL_SORT", "2147483648")
+
+# ClickHouse log sidecar resource settings
+export CLICKHOUSE_LOG_MEMORY_REQUEST := env("CLICKHOUSE_LOG_MEMORY_REQUEST", "64Mi")
+export CLICKHOUSE_LOG_MEMORY_LIMIT := env("CLICKHOUSE_LOG_MEMORY_LIMIT", "128Mi")
+export CLICKHOUSE_LOG_CPU_REQUEST := env("CLICKHOUSE_LOG_CPU_REQUEST", "10m")
+export CLICKHOUSE_LOG_CPU_LIMIT := env("CLICKHOUSE_LOG_CPU_LIMIT", "100m")
+
+# ClickHouse Operator resource settings
+export CLICKHOUSE_OPERATOR_MEMORY_REQUEST := env("CLICKHOUSE_OPERATOR_MEMORY_REQUEST", "64Mi")
+export CLICKHOUSE_OPERATOR_MEMORY_LIMIT := env("CLICKHOUSE_OPERATOR_MEMORY_LIMIT", "256Mi")
+export CLICKHOUSE_OPERATOR_CPU_REQUEST := env("CLICKHOUSE_OPERATOR_CPU_REQUEST", "50m")
+export CLICKHOUSE_OPERATOR_CPU_LIMIT := env("CLICKHOUSE_OPERATOR_CPU_LIMIT", "500m")
 
 [private]
 default:
@@ -20,8 +49,17 @@ remove-helm-repo:
 
 # Create ClickHouse namespace
 create-namespace:
-    @kubectl get namespace ${CLICKHOUSE_NAMESPACE} &>/dev/null || \
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace ${CLICKHOUSE_NAMESPACE} &>/dev/null; then
         kubectl create namespace ${CLICKHOUSE_NAMESPACE}
+    fi
+    kubectl label namespace ${CLICKHOUSE_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=baseline \
+        pod-security.kubernetes.io/enforce-version=latest \
+        pod-security.kubernetes.io/warn=baseline \
+        pod-security.kubernetes.io/warn-version=latest \
+        --overwrite
 
 # Delete ClickHouse namespace
 delete-namespace:
@@ -74,8 +112,13 @@ install:
     just install-zookeeper
     just create-credentials
     just add-helm-repo
+    gomplate -f clickhouse-operator-values.gomplate.yaml -o clickhouse-operator-values.yaml
     helm upgrade --install clickhouse-operator clickhouse-operator/altinity-clickhouse-operator \
-        --version ${CLICKHOUSE_CHART_VERSION} -n ${CLICKHOUSE_NAMESPACE} --wait
+        --version ${CLICKHOUSE_CHART_VERSION} -n ${CLICKHOUSE_NAMESPACE} \
+        -f clickhouse-operator-values.yaml --wait
+    gomplate -f clickhouse-installation-template.gomplate.yaml -o clickhouse-installation-template.yaml
+    gomplate -f clickhouse.gomplate.yaml -o clickhouse.yaml
+    kubectl apply -n ${CLICKHOUSE_NAMESPACE} -f ./clickhouse-installation-template.yaml
     kubectl apply -n ${CLICKHOUSE_NAMESPACE} -f ./clickhouse.yaml
     echo "Waiting for ClickHouse installation to be ready..."
     kubectl wait --for=jsonpath='{.status.status}'=Completed \
@@ -103,7 +146,7 @@ uninstall:
         -n ${CLICKHOUSE_NAMESPACE} &>/dev/null; then
         echo "Deleting ClickHouseInstallation resources..."
         kubectl delete clickhouseinstallations.clickhouse.altinity.com --all \
-            -n ${CLICKHOUSE_NAMESPACE} --timeout=30s --ignore-not-found || {
+            -n ${CLICKHOUSE_NAMESPACE} --timeout=60s --ignore-not-found || {
             echo "Graceful deletion timed out, forcing finalizer removal..."
             for chi in $(kubectl get clickhouseinstallations.clickhouse.altinity.com \
                 -n ${CLICKHOUSE_NAMESPACE} -o name 2>/dev/null); do
@@ -480,7 +523,7 @@ install-zookeeper:
 
 # Uninstall ZooKeeper
 uninstall-zookeeper:
-    kubectl delete -n ${CLICKHOUSE_NAMESPACE} -f ./zookeeper.yaml
+    kubectl delete -n ${CLICKHOUSE_NAMESPACE} -f ./zookeeper.yaml --ignore-not-found
 
 # Clean up ClickHouse resources
 cleanup:

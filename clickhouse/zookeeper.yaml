@@ -115,11 +115,17 @@ spec:
           env:
             - name: SERVERS
               value: "1"
-
-# See those links for proper startup settings:
-# https://github.com/kow3ns/kubernetes-zookeeper/blob/master/docker/scripts/start-zookeeper
-# https://clickhouse.yandex/docs/en/operations/tips/#zookeeper
-# https://github.com/ClickHouse/ClickHouse/issues/11781
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          # See those links for proper startup settings:
+          # https://github.com/kow3ns/kubernetes-zookeeper/blob/master/docker/scripts/start-zookeeper
+          # https://clickhouse.yandex/docs/en/operations/tips/#zookeeper
+          # https://github.com/ClickHouse/ClickHouse/issues/11781
           command:
             - bash
             - -x
@@ -174,8 +180,6 @@ spec:
               fi &&
               mkdir -pv ${ZOO_DATA_DIR} &&
               mkdir -pv ${ZOO_DATA_LOG_DIR} &&
-              whoami &&
-              chown -Rv zookeeper "$ZOO_DATA_DIR" "$ZOO_DATA_LOG_DIR" &&
               export MY_ID=$((ORD+1)) &&
               echo $MY_ID > $ZOO_DATA_DIR/myid &&
               for (( i=1; i<=$SERVERS; i++ )); do
@@ -246,9 +250,9 @@ spec:
           volumeMounts:
             - name: datadir-volume
               mountPath: /var/lib/zookeeper
-      # Run as a non-privileged user
       securityContext:
         runAsUser: 1000
+        runAsGroup: 1000
         fsGroup: 1000
   volumeClaimTemplates:
     - metadata:
