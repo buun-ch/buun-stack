@@ -49,6 +49,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - **[Querybook](https://www.querybook.org/)**: Big data querying UI with notebook interface
 - **[ClickHouse](https://clickhouse.com/)**: High-performance columnar analytics database
 - **[Qdrant](https://qdrant.tech/)**: Vector database for AI/ML applications
+- **[FalkorDB](https://www.falkordb.com/)**: Graph database with vector similarity search for knowledge graphs
 - **[Lakekeeper](https://lakekeeper.io/)**: Apache Iceberg REST Catalog for data lake management
 - **[Apache Superset](https://superset.apache.org/)**: BI platform with rich chart types and high customizability
 - **[Metabase](https://www.metabase.com/)**: Lightweight BI with simple configuration and clean, modern interface
@@ -287,6 +288,16 @@ High-performance vector database:
 - **Scalable**: Distributed deployment for large-scale embeddings
 
 [📖 See Qdrant Documentation](./qdrant/README.md)
+
+### FalkorDB
+
+High-performance graph database with vector capabilities:
+
+- **Knowledge Graphs**: Build and query complex relationship networks with OpenCypher
+- **Vector Search**: Native vector similarity for GraphRAG applications
+- **Redis Compatible**: Uses Redis protocol for easy integration
+
+[📖 See FalkorDB Documentation](./falkordb/README.md)
 
 ### Lakekeeper
 
