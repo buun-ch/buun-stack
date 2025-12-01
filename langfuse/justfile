@@ -1,7 +1,7 @@
 set fallback := true
 
 export LANGFUSE_NAMESPACE := env("LANGFUSE_NAMESPACE", "langfuse")
-export LANGFUSE_CHART_VERSION := env("LANGFUSE_CHART_VERSION", "1.5.10")
+export LANGFUSE_CHART_VERSION := env("LANGFUSE_CHART_VERSION", "1.5.12")
 export LANGFUSE_HOST := env("LANGFUSE_HOST", "")
 export LANGFUSE_OIDC_CLIENT_ID := env("LANGFUSE_OIDC_CLIENT_ID", "langfuse")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
@@ -26,8 +26,17 @@ remove-helm-repo:
 
 # Create Langfuse namespace
 create-namespace:
-    kubectl get namespace ${LANGFUSE_NAMESPACE} &>/dev/null || \
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace ${LANGFUSE_NAMESPACE} &>/dev/null; then
         kubectl create namespace ${LANGFUSE_NAMESPACE}
+    fi
+    kubectl label namespace ${LANGFUSE_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=restricted \
+        pod-security.kubernetes.io/enforce-version=latest \
+        pod-security.kubernetes.io/warn=restricted \
+        pod-security.kubernetes.io/warn-version=latest \
+        --overwrite
 
 # Delete Langfuse namespace
 delete-namespace:

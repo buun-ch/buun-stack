@@ -325,12 +325,27 @@ Key configuration files:
 
 ## Security Considerations
 
+- **Pod Security Standards**: Namespace configured with **restricted** enforcement
 - **Secrets Management**: All credentials stored in Vault and synced via External Secrets Operator
 - **OIDC Authentication**: No local password storage, authentication delegated to Keycloak
 - **API Key Security**: Keys are hashed and stored securely in PostgreSQL
 - **TLS/HTTPS**: All external traffic encrypted via Traefik Ingress
 - **Network Isolation**: Internal services communicate via cluster network
 - **Database Credentials**: Unique user per application with minimal privileges
+
+### Pod Security Standards
+
+The Langfuse namespace is configured with **restricted** Pod Security Standards:
+
+- `pod-security.kubernetes.io/enforce=restricted`
+- `pod-security.kubernetes.io/warn=restricted`
+
+All pods (Langfuse web, worker, and Valkey) run with restricted-compliant security contexts:
+
+- `runAsNonRoot: true` - Prevents containers from running as root
+- `allowPrivilegeEscalation: false` - Blocks privilege escalation
+- `seccompProfile.type: RuntimeDefault` - Enables seccomp filtering
+- `capabilities.drop: [ALL]` - Drops all Linux capabilities
 
 ## References
 

@@ -1,4 +1,21 @@
 langfuse:
+  # Pod Security Context (restricted PSS compliant)
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    runAsGroup: 1001
+    fsGroup: 1001
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Container Security Context (restricted PSS compliant)
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: false
+
   salt:
     value: {{ .Env.LANGFUSE_SALT }}
   features:
