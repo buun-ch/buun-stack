@@ -137,8 +137,8 @@ setup-ingress host:
     kubectl apply -n ${CLICKHOUSE_NAMESPACE} -f clickhouse-ingress.yaml
     echo "ClickHouse Ingress configured successfully"
 
-# Uninstall ClickHouse
-uninstall:
+# Uninstall ClickHouse (delete_volumes='false' to preserve PVCs and namespace)
+uninstall delete-volumes='true':
     #!/bin/bash
     set -euo pipefail
     echo "Uninstalling ClickHouse..."
@@ -146,7 +146,7 @@ uninstall:
         -n ${CLICKHOUSE_NAMESPACE} &>/dev/null; then
         echo "Deleting ClickHouseInstallation resources..."
         kubectl delete clickhouseinstallations.clickhouse.altinity.com --all \
-            -n ${CLICKHOUSE_NAMESPACE} --timeout=60s --ignore-not-found || {
+            -n ${CLICKHOUSE_NAMESPACE} --timeout=90s --ignore-not-found || {
             echo "Graceful deletion timed out, forcing finalizer removal..."
             for chi in $(kubectl get clickhouseinstallations.clickhouse.altinity.com \
                 -n ${CLICKHOUSE_NAMESPACE} -o name 2>/dev/null); do
@@ -158,7 +158,13 @@ uninstall:
     helm uninstall clickhouse-operator -n ${CLICKHOUSE_NAMESPACE} --wait --ignore-not-found
     just uninstall-zookeeper
     just delete-credentials-secret
-    just delete-namespace
+    if [ "{{ delete-volumes }}" = "true" ]; then
+        just delete-namespace
+    else
+        echo "Keeping namespace and PVCs for data preservation"
+        echo "PVCs in namespace '${CLICKHOUSE_NAMESPACE}':"
+        kubectl get pvc -n ${CLICKHOUSE_NAMESPACE}
+    fi
     echo "ClickHouse uninstalled successfully"
 
 # Get ClickHouse admin password

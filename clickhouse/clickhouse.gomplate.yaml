@@ -32,6 +32,7 @@ spec:
   templates:
     volumeClaimTemplates:
       - name: data-volume-template
+        reclaimPolicy: Retain
         spec:
           accessModes:
             - ReadWriteOnce
@@ -39,6 +40,7 @@ spec:
             requests:
               storage: 50Gi
       - name: log-volume-template
+        reclaimPolicy: Retain
         spec:
           accessModes:
             - ReadWriteOnce
