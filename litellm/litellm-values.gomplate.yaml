@@ -1,0 +1,65 @@
+# https://github.com/BerriAI/litellm/tree/main/deploy/charts/litellm-helm
+# https://github.com/BerriAI/litellm/tree/main/litellm/proxy/example_config_yaml
+
+masterkeySecretName: ""
+masterkeySecretKey: ""
+
+# Note: LiteLLM image requires write access to /.cache for Prisma
+# Pod Security Standards must be set to "baseline" for this namespace
+podSecurityContext: {}
+
+securityContext: {}
+
+migrationJob:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+environmentSecrets:
+  - apikey
+
+proxy_config:
+  model_list:
+{{ file.Read "models.yaml" | indent 4 }}
+
+db:
+  useExisting: true
+
+  endpoint: postgres-cluster-rw.postgres
+  database: litellm
+  secret:
+    name: postgres-auth
+    usernameKey: username
+    passwordKey: password
+
+  deployStandalone: false
+
+redis:
+  enabled: true
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: {{ .Env.LITELLM_HOST }}
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls:
+    - hosts:
+      - {{ .Env.LITELLM_HOST }}
+
+{{- if .Env.MONITORING_ENABLED }}
+serviceMonitor:
+  enabled: true
+  labels:
+    release: kube-prometheus-stack
+  interval: 30s
+  scrapeTimeout: 10s
+{{- end }}

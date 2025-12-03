@@ -1,0 +1,440 @@
+set fallback := true
+
+export LITELLM_NAMESPACE := env("LITELLM_NAMESPACE", "litellm")
+export LITELLM_CHART_VERSION := env("LITELLM_CHART_VERSION", "0.1.825")
+export LITELLM_HOST := env("LITELLM_HOST", "")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export OLLAMA_NAMESPACE := env("OLLAMA_NAMESPACE", "ollama")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Create LiteLLM namespace
+create-namespace:
+    kubectl get namespace ${LITELLM_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${LITELLM_NAMESPACE}
+
+# Delete LiteLLM namespace
+delete-namespace:
+    kubectl delete namespace ${LITELLM_NAMESPACE} --ignore-not-found
+
+# Check prerequisites
+check-prerequisites:
+    #!/bin/bash
+    set -euo pipefail
+    if ! helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Error: External Secrets Operator is required but not installed."
+        echo "Please install External Secrets Operator first:"
+        echo "  just external-secrets::install"
+        exit 1
+    fi
+    if [ ! -f models.yaml ]; then
+        echo "Error: models.yaml not found."
+        echo "Please create models.yaml from the example:"
+        echo "  cp models.example.yaml models.yaml"
+        echo "Then edit models.yaml to configure your models."
+        exit 1
+    fi
+    echo "Prerequisites check passed."
+
+# Extract required providers from models.yaml
+[private]
+get-required-providers:
+    #!/bin/bash
+    set -euo pipefail
+    # Extract providers that require API keys (exclude ollama)
+    yq -r '.[] | select(.litellm_params.api_key != null) | .litellm_params.model' models.yaml | \
+        cut -d'/' -f1 | sort -u
+
+# Verify all required API keys are set in Vault
+verify-api-keys:
+    #!/bin/bash
+    set -euo pipefail
+    providers=$(just get-required-providers)
+    missing=()
+    for provider in $providers; do
+        if ! just vault::get "litellm/${provider}" apikey &>/dev/null; then
+            missing+=("$provider")
+        fi
+    done
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "Error: Missing API keys for the following providers:"
+        for p in "${missing[@]}"; do
+            echo "  - $p"
+        done
+        echo ""
+        echo "Please set the API keys:"
+        for p in "${missing[@]}"; do
+            echo "  just litellm::set-api-key provider=$p"
+        done
+        exit 1
+    fi
+    echo "All required API keys are configured."
+
+# Set API key for a provider
+set-api-key provider='':
+    #!/bin/bash
+    set -euo pipefail
+    provider="{{ provider }}"
+    if [ -z "${provider}" ]; then
+        available=$(just get-required-providers 2>/dev/null || echo "anthropic openai mistral groq cohere")
+        provider=$(echo "$available" | tr ' ' '\n' | gum choose --header="Select provider:")
+    fi
+    apikey=$(gum input --prompt="${provider} API key: " --password --width=80)
+    if [ -z "${apikey}" ]; then
+        echo "Error: API key cannot be empty"
+        exit 1
+    fi
+    just vault::put "litellm/${provider}" apikey="${apikey}"
+    echo "API key for ${provider} has been stored in Vault location 'litellm/${provider}'."
+
+# Get API key for a provider
+get-api-key provider='':
+    #!/bin/bash
+    set -euo pipefail
+    provider="{{ provider }}"
+    if [ -z "${provider}" ]; then
+        echo "Usage: just litellm::get-api-key provider=<provider>"
+        exit 1
+    fi
+    just vault::get "litellm/${provider}" apikey
+
+# Add a model interactively
+add-model:
+    #!/bin/bash
+    set -euo pipefail
+    if [ ! -f models.yaml ]; then
+        echo "Creating models.yaml from example..."
+        cp models.example.yaml models.yaml
+    fi
+
+    echo "Add a new model to LiteLLM"
+    echo ""
+
+    provider=$(gum choose --header="Select provider:" \
+        "anthropic" "openai" "ollama" "mistral" "groq" "cohere" "azure" "bedrock" "vertexai")
+
+    model_name=$(gum input --prompt="Model alias (e.g., claude-sonnet): " --width=60)
+    if [ -z "${model_name}" ]; then
+        echo "Error: Model name is required"
+        exit 1
+    fi
+
+    case $provider in
+        anthropic)
+            model=$(gum choose --header="Select Anthropic model:" \
+                "claude-sonnet-4-20250514" \
+                "claude-haiku-4-20251015" \
+                "claude-opus-4-20250514")
+            api_key_line="    api_key: os.environ/ANTHROPIC_API_KEY"
+            ;;
+        openai)
+            model=$(gum choose --header="Select OpenAI model:" \
+                "gpt-4o" \
+                "gpt-4o-mini" \
+                "o3" \
+                "o4-mini")
+            api_key_line="    api_key: os.environ/OPENAI_API_KEY"
+            ;;
+        ollama)
+            model=$(gum input --prompt="Ollama model name: " --width=60 --placeholder="qwen3:8b")
+            api_key_line="    api_base: http://ollama.${OLLAMA_NAMESPACE}:11434"
+            ;;
+        mistral)
+            model=$(gum choose --header="Select Mistral model:" \
+                "mistral-large-latest" \
+                "ministral-8b-latest" \
+                "codestral-latest")
+            api_key_line="    api_key: os.environ/MISTRAL_API_KEY"
+            ;;
+        groq)
+            model=$(gum choose --header="Select Groq model:" \
+                "meta-llama/llama-4-scout-17b-16e-instruct" \
+                "llama-3.3-70b-versatile" \
+                "llama-3.1-8b-instant")
+            api_key_line="    api_key: os.environ/GROQ_API_KEY"
+            ;;
+        cohere)
+            model=$(gum choose --header="Select Cohere model:" \
+                "command-r-plus" \
+                "command-r" \
+                "command-light")
+            api_key_line="    api_key: os.environ/COHERE_API_KEY"
+            ;;
+        *)
+            model=$(gum input --prompt="Model identifier: " --width=60)
+            api_key_line="    api_key: os.environ/${provider^^}_API_KEY"
+            ;;
+    esac
+
+    echo "" >> models.yaml
+    echo "- model_name: ${model_name}" >> models.yaml
+    echo "  litellm_params:" >> models.yaml
+    echo "    model: ${provider}/${model}" >> models.yaml
+    echo "${api_key_line}" >> models.yaml
+
+    echo ""
+    echo "Model '${model_name}' added to models.yaml"
+    if [ "$provider" != "ollama" ]; then
+        echo ""
+        echo "Don't forget to set the API key if not already done:"
+        echo "  just litellm::set-api-key provider=${provider}"
+    fi
+    echo ""
+    echo "Run 'just litellm::install' or 'just litellm::upgrade' to apply changes."
+
+# Remove a model interactively
+remove-model:
+    #!/bin/bash
+    set -euo pipefail
+    if [ ! -f models.yaml ]; then
+        echo "Error: models.yaml not found"
+        exit 1
+    fi
+    models=$(yq -r '.[].model_name' models.yaml)
+    if [ -z "$models" ]; then
+        echo "No models configured."
+        exit 0
+    fi
+    model=$(echo "$models" | gum choose --header="Select model to remove:")
+    if gum confirm "Remove model '${model}'?"; then
+        yq -i "del(.[] | select(.model_name == \"${model}\"))" models.yaml
+        echo "Model '${model}' removed from models.yaml"
+        echo "Run 'just litellm::upgrade' to apply changes."
+    else
+        echo "Cancelled."
+    fi
+
+# List configured models
+list-models:
+    #!/bin/bash
+    set -euo pipefail
+    if [ ! -f models.yaml ]; then
+        echo "No models.yaml found. Create one with:"
+        echo "  cp models.example.yaml models.yaml"
+        exit 0
+    fi
+    echo "Configured models:"
+    yq -r '.[] | "  - \(.model_name): \(.litellm_params.model)"' models.yaml
+
+# Create API key external secret
+create-api-key-external-secret:
+    #!/bin/bash
+    set -euo pipefail
+    gomplate -d models=models.yaml -f apikey-external-secret.gomplate.yaml -o apikey-external-secret.yaml
+    kubectl apply -f apikey-external-secret.yaml
+    echo "Waiting for API key secret to be ready..."
+    kubectl wait --for=condition=Ready externalsecret/apikey-external-secret \
+        -n ${LITELLM_NAMESPACE} --timeout=60s
+
+# Delete API key external secret
+delete-api-key-external-secret:
+    kubectl delete externalsecret apikey-external-secret -n ${LITELLM_NAMESPACE} --ignore-not-found
+    kubectl delete secret apikey -n ${LITELLM_NAMESPACE} --ignore-not-found
+
+# Create Postgres user and database
+create-postgres-user-and-db:
+    #!/bin/bash
+    set -euo pipefail
+    if just postgres::user-exists litellm &>/dev/null; then
+        echo "PostgreSQL user 'litellm' already exists"
+    else
+        echo "Creating PostgreSQL user and database..."
+        PG_PASSWORD=$(just utils::random-password)
+        just postgres::create-user-and-db litellm litellm "${PG_PASSWORD}"
+        just vault::put litellm/db username=litellm password="${PG_PASSWORD}"
+        echo "PostgreSQL user and database created."
+    fi
+
+# Delete Postgres user and database
+delete-postgres-user-and-db:
+    #!/bin/bash
+    set -euo pipefail
+    if gum confirm "Delete PostgreSQL user and database 'litellm'?"; then
+        just postgres::delete-user-and-db litellm litellm || true
+        just vault::delete litellm/db || true
+        echo "PostgreSQL user and database deleted."
+    else
+        echo "Cancelled."
+    fi
+
+# Create Postgres secret
+create-postgres-secret:
+    #!/bin/bash
+    set -euo pipefail
+    if kubectl get secret postgres-auth -n ${LITELLM_NAMESPACE} &>/dev/null; then
+        echo "Postgres auth secret already exists"
+        exit 0
+    fi
+    PG_USERNAME=$(just vault::get litellm/db username)
+    PG_PASSWORD=$(just vault::get litellm/db password)
+    kubectl create secret generic postgres-auth \
+        --from-literal=username="${PG_USERNAME}" \
+        --from-literal=password="${PG_PASSWORD}" \
+        -n ${LITELLM_NAMESPACE}
+
+# Delete Postgres secret
+delete-postgres-secret:
+    kubectl delete secret postgres-auth -n ${LITELLM_NAMESPACE} --ignore-not-found
+
+# Install LiteLLM
+install:
+    #!/bin/bash
+    set -euo pipefail
+
+    just check-prerequisites
+    just verify-api-keys
+
+    while [ -z "${LITELLM_HOST}" ]; do
+        LITELLM_HOST=$(gum input --prompt="LiteLLM host (FQDN): " --width=80 \
+            --placeholder="e.g., litellm.example.com")
+    done
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            fi
+        fi
+    fi
+
+    echo "Installing LiteLLM..."
+
+    just create-namespace
+
+    # Note: LiteLLM requires baseline due to Prisma needing /.cache write access
+    kubectl label namespace ${LITELLM_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=baseline --overwrite
+
+    if [ "${MONITORING_ENABLED}" = "true" ]; then
+        kubectl label namespace ${LITELLM_NAMESPACE} \
+            buun.channel/enable-monitoring=true --overwrite
+    fi
+
+    just create-api-key-external-secret
+
+    echo "Setting up PostgreSQL database..."
+    just create-postgres-user-and-db
+    just create-postgres-secret
+
+    echo "Generating Helm values..."
+    gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml
+
+    echo "Installing LiteLLM Helm chart..."
+    helm upgrade --install litellm oci://ghcr.io/berriai/litellm-helm \
+        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait \
+        -f litellm-values.yaml
+
+    echo ""
+    echo "LiteLLM installed successfully!"
+    echo "Access LiteLLM at: https://${LITELLM_HOST}"
+
+# Upgrade LiteLLM
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+
+    just check-prerequisites
+    just verify-api-keys
+
+    while [ -z "${LITELLM_HOST}" ]; do
+        LITELLM_HOST=$(gum input --prompt="LiteLLM host (FQDN): " --width=80)
+    done
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            fi
+        fi
+    fi
+
+    echo "Upgrading LiteLLM..."
+
+    if [ "${MONITORING_ENABLED}" = "true" ]; then
+        kubectl label namespace ${LITELLM_NAMESPACE} \
+            buun.channel/enable-monitoring=true --overwrite
+    fi
+
+    just create-api-key-external-secret
+
+    echo "Generating Helm values..."
+    gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml
+
+    echo "Upgrading LiteLLM Helm chart..."
+    helm upgrade litellm oci://ghcr.io/berriai/litellm-helm \
+        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait \
+        -f litellm-values.yaml
+
+    echo ""
+    echo "LiteLLM upgraded successfully!"
+    echo "Access LiteLLM at: https://${LITELLM_HOST}"
+
+# Uninstall LiteLLM
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    if ! gum confirm "Uninstall LiteLLM?"; then
+        echo "Cancelled."
+        exit 0
+    fi
+    echo "Uninstalling LiteLLM..."
+    helm uninstall litellm -n ${LITELLM_NAMESPACE} --ignore-not-found --wait
+    just delete-api-key-external-secret
+    just delete-postgres-secret
+    just delete-namespace
+    echo "LiteLLM uninstalled."
+
+# Clean up all resources including database
+cleanup:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete:"
+    echo "  - LiteLLM deployment"
+    echo "  - LiteLLM database"
+    echo "  - All API keys from Vault"
+    echo ""
+    if ! gum confirm "Are you sure?"; then
+        echo "Cancelled."
+        exit 0
+    fi
+    just uninstall || true
+    just postgres::delete-db litellm || true
+    # Clean up API keys from Vault
+    providers=$(just get-required-providers 2>/dev/null || true)
+    for provider in $providers; do
+        just vault::delete "litellm/${provider}" || true
+    done
+    echo "Cleanup completed."
+
+# Generate virtual key
+generate-virtual-key user='' model='':
+    #!/bin/bash
+    set -euo pipefail
+    user="{{ user }}"
+    while [ -z "${user}" ]; do
+        user=$(gum input --prompt="User email: " --width=80)
+    done
+    model="{{ model }}"
+    if [ -z "${model}" ]; then
+        models=$(yq -r '.[].model_name' models.yaml 2>/dev/null || echo "")
+        if [ -n "$models" ]; then
+            model=$(echo "$models" | gum choose --header="Select model:")
+        else
+            model=$(gum input --prompt="Model: " --width=80)
+        fi
+    fi
+    master_key=$(kubectl get secret litellm-masterkey -n ${LITELLM_NAMESPACE} \
+        -o jsonpath="{.data.masterkey}" | base64 --decode)
+    curl "https://${LITELLM_HOST}/key/generate" \
+        --header "Authorization: Bearer ${master_key}" \
+        --header "Content-Type: application/json" \
+        --data-raw "{\"models\": [\"${model}\"], \"metadata\": {\"user\": \"${user}\"}}" | jq .
+
+# Get master key
+master-key:
+    @kubectl get secret litellm-masterkey -n ${LITELLM_NAMESPACE} \
+        -o jsonpath="{.data.masterkey}" | base64 --decode

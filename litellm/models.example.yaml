@@ -1,0 +1,106 @@
+# LiteLLM Model Configuration
+# Copy this file to models.yaml and customize for your environment.
+#
+# Usage:
+#   cp litellm/models.example.yaml litellm/models.yaml
+#   # Edit models.yaml to add/remove models
+#   just litellm::install
+#
+# API keys are stored in Vault and injected as environment variables.
+# Use: just litellm::set-api-key provider=<provider>
+#
+# Supported providers:
+#   - anthropic: Claude models (Opus, Sonnet, Haiku)
+#   - openai: GPT and o-series models
+#   - ollama: Local models (no API key required)
+#   - azure: Azure OpenAI
+#   - bedrock: AWS Bedrock
+#   - vertexai: Google Vertex AI
+#   - mistral: Mistral AI
+#   - groq: Groq (fast inference)
+#   - cohere: Cohere
+
+# Anthropic Claude (https://docs.anthropic.com/en/docs/about-claude/models/overview)
+- model_name: claude-sonnet
+  litellm_params:
+    model: anthropic/claude-sonnet-4-20250514
+    api_key: os.environ/ANTHROPIC_API_KEY
+
+- model_name: claude-haiku
+  litellm_params:
+    model: anthropic/claude-haiku-4-20251015
+    api_key: os.environ/ANTHROPIC_API_KEY
+
+# - model_name: claude-opus
+#   litellm_params:
+#     model: anthropic/claude-opus-4-20250514
+#     api_key: os.environ/ANTHROPIC_API_KEY
+
+# OpenAI (https://platform.openai.com/docs/models)
+# - model_name: gpt-4o
+#   litellm_params:
+#     model: openai/gpt-4o
+#     api_key: os.environ/OPENAI_API_KEY
+
+# - model_name: gpt-4o-mini
+#   litellm_params:
+#     model: openai/gpt-4o-mini
+#     api_key: os.environ/OPENAI_API_KEY
+
+# - model_name: o3
+#   litellm_params:
+#     model: openai/o3
+#     api_key: os.environ/OPENAI_API_KEY
+
+# - model_name: o4-mini
+#   litellm_params:
+#     model: openai/o4-mini
+#     api_key: os.environ/OPENAI_API_KEY
+
+# Ollama (local models - no API key required)
+# - model_name: llama4-scout
+#   litellm_params:
+#     model: ollama/llama4:scout
+#     api_base: http://ollama.ollama:11434
+
+# - model_name: qwen3
+#   litellm_params:
+#     model: ollama/qwen3:8b
+#     api_base: http://ollama.ollama:11434
+
+# - model_name: deepseek-r1
+#   litellm_params:
+#     model: ollama/deepseek-r1:8b
+#     api_base: http://ollama.ollama:11434
+
+# Mistral AI (https://docs.mistral.ai/getting-started/models/models_overview/)
+# - model_name: mistral-large
+#   litellm_params:
+#     model: mistral/mistral-large-latest
+#     api_key: os.environ/MISTRAL_API_KEY
+
+# - model_name: ministral-8b
+#   litellm_params:
+#     model: mistral/ministral-8b-latest
+#     api_key: os.environ/MISTRAL_API_KEY
+
+# - model_name: codestral
+#   litellm_params:
+#     model: mistral/codestral-latest
+#     api_key: os.environ/MISTRAL_API_KEY
+
+# Groq (fast inference - https://console.groq.com/docs/models)
+# - model_name: groq-llama4-scout
+#   litellm_params:
+#     model: groq/meta-llama/llama-4-scout-17b-16e-instruct
+#     api_key: os.environ/GROQ_API_KEY
+
+# - model_name: groq-llama3.3
+#   litellm_params:
+#     model: groq/llama-3.3-70b-versatile
+#     api_key: os.environ/GROQ_API_KEY
+
+# - model_name: groq-llama3.1
+#   litellm_params:
+#     model: groq/llama-3.1-8b-instant
+#     api_key: os.environ/GROQ_API_KEY
