@@ -63,6 +63,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 ### LLM & AI Applications (Optional)
 
 - **[Ollama](https://ollama.com/)**: Local LLM inference server with GPU acceleration
+- **[LiteLLM](https://litellm.ai/)**: Unified LLM gateway for accessing multiple providers through OpenAI-compatible API
 - **[LibreChat](https://www.librechat.ai/)**: Web-based chat interface with multi-model support and MCP integration
 - **[Langfuse](https://langfuse.com/)**: LLM observability and analytics platform for tracking and debugging AI applications
 
@@ -346,6 +347,18 @@ LLM observability and analytics platform:
 
 [📖 See Langfuse Documentation](./langfuse/README.md)
 
+### LiteLLM
+
+Unified LLM gateway and proxy:
+
+- **Multi-Provider Support**: Anthropic, OpenAI, Ollama, Mistral, Groq, and more through single API
+- **OpenAI-Compatible**: Drop-in replacement for OpenAI SDK
+- **Virtual Keys**: Generate scoped API keys for users with usage tracking
+- **Cost Tracking**: Monitor spending across all LLM providers
+- **Keycloak Authentication**: OAuth2 for Admin UI with role-based access
+
+[📖 See LiteLLM Documentation](./litellm/README.md)
+
 ### Dagster
 
 Modern data orchestration platform:
@@ -485,6 +498,7 @@ kubectl --context yourpc-oidc get nodes
 # JupyterHub: https://jupyter.yourdomain.com
 # MLflow: https://mlflow.yourdomain.com
 # Langfuse: https://langfuse.yourdomain.com
+# LiteLLM: https://litellm.yourdomain.com
 # LibreChat: https://chat.yourdomain.com
 ```
 
