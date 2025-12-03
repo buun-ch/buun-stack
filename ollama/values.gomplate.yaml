@@ -1,3 +1,7 @@
+{{- if eq .Env.OLLAMA_GPU_ENABLED "true" }}
+runtimeClassName: "nvidia"
+{{- end }}
+
 ollama:
   gpu:
     enabled: {{ if eq .Env.OLLAMA_GPU_ENABLED "true" }}true{{ else }}false{{ end }}
