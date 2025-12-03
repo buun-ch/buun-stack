@@ -150,6 +150,81 @@ just litellm::verify-api-keys
 | `OLLAMA_NAMESPACE` | `ollama` | Ollama namespace for local models |
 | `MONITORING_ENABLED` | (prompt) | Enable Prometheus ServiceMonitor |
 
+## Authentication
+
+LiteLLM has two types of authentication:
+
+1. **API Access**: Uses Master Key or Virtual Keys for programmatic access
+2. **Admin UI**: Uses Keycloak SSO for browser-based access
+
+### Enable SSO for Admin UI
+
+After installing LiteLLM, enable Keycloak authentication for the Admin UI:
+
+```bash
+just litellm::setup-oidc
+```
+
+This will:
+
+- Create a Keycloak client for LiteLLM
+- Store the client secret in Vault
+- Configure LiteLLM with OIDC environment variables
+- Upgrade the deployment with SSO enabled
+
+### Disable SSO
+
+To disable SSO and return to unauthenticated Admin UI access:
+
+```bash
+just litellm::disable-oidc
+```
+
+### SSO Configuration Details
+
+| Setting | Value |
+| ------- | ----- |
+| Callback URL | `https://<litellm-host>/sso/callback` |
+| Authorization Endpoint | `https://<keycloak-host>/realms/<realm>/protocol/openid-connect/auth` |
+| Token Endpoint | `https://<keycloak-host>/realms/<realm>/protocol/openid-connect/token` |
+| Userinfo Endpoint | `https://<keycloak-host>/realms/<realm>/protocol/openid-connect/userinfo` |
+| Scope | `openid email profile` |
+
+## User Management
+
+SSO users are automatically created in LiteLLM when they first log in. By default, new users are assigned the `internal_user_viewer` role (read-only access).
+
+### List Users
+
+```bash
+just litellm::list-users
+```
+
+### Assign Role to User
+
+Interactively select user and role:
+
+```bash
+just litellm::assign-role
+```
+
+Or specify directly:
+
+```bash
+just litellm::assign-role buun proxy_admin
+```
+
+### User Roles
+
+| Role | Description |
+| ---- | ----------- |
+| `proxy_admin` | Full admin access (manage keys, users, models, settings) |
+| `proxy_admin_viewer` | Admin read-only access |
+| `internal_user` | Can create and manage own API keys |
+| `internal_user_viewer` | Read-only access (default for SSO users) |
+
+**Note**: To manage API keys in the Admin UI, users need at least `internal_user` or `proxy_admin` role.
+
 ## API Usage
 
 LiteLLM exposes an OpenAI-compatible API at `https://your-litellm-host/`.
@@ -163,8 +238,10 @@ just litellm::master-key
 ### Generate Virtual Key for a User
 
 ```bash
-just litellm::generate-virtual-key user@example.com
+just litellm::generate-virtual-key buun
 ```
+
+This will prompt for a model selection and generate an API key for the specified user.
 
 ### OpenAI SDK Example
 
@@ -330,6 +407,7 @@ kubectl exec -n litellm deployment/litellm -- \
 | `models.example.yaml` | Example model configuration |
 | `litellm-values.gomplate.yaml` | Helm values template |
 | `apikey-external-secret.gomplate.yaml` | ExternalSecret for API keys |
+| `keycloak-auth-external-secret.gomplate.yaml` | ExternalSecret for Keycloak OIDC |
 
 ## Security Considerations
 

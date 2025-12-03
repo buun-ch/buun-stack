@@ -3,10 +3,15 @@ set fallback := true
 export LITELLM_NAMESPACE := env("LITELLM_NAMESPACE", "litellm")
 export LITELLM_CHART_VERSION := env("LITELLM_CHART_VERSION", "0.1.825")
 export LITELLM_HOST := env("LITELLM_HOST", "")
+export LITELLM_OIDC_CLIENT_ID := env("LITELLM_OIDC_CLIENT_ID", "litellm")
+export LITELLM_OIDC_ENABLED := env("LITELLM_OIDC_ENABLED", "")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 export OLLAMA_NAMESPACE := env("OLLAMA_NAMESPACE", "ollama")
 export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
 export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 
 [private]
 default:
@@ -293,6 +298,11 @@ install:
             --placeholder="e.g., litellm.example.com")
     done
 
+    while [ -z "${KEYCLOAK_HOST}" ]; do
+        KEYCLOAK_HOST=$(gum input --prompt="Keycloak host (FQDN): " --width=80 \
+            --placeholder="e.g., auth.example.com")
+    done
+
     if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
         if [ -z "${MONITORING_ENABLED}" ]; then
             if gum confirm "Enable Prometheus monitoring?"; then
@@ -320,6 +330,11 @@ install:
     just create-postgres-user-and-db
     just create-postgres-secret
 
+    echo "Setting up Keycloak OIDC authentication..."
+    just create-keycloak-client
+    just create-keycloak-auth-secret
+    LITELLM_OIDC_ENABLED="true"
+
     echo "Generating Helm values..."
     gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml
 
@@ -331,6 +346,7 @@ install:
     echo ""
     echo "LiteLLM installed successfully!"
     echo "Access LiteLLM at: https://${LITELLM_HOST}"
+    echo "SSO Callback URL: https://${LITELLM_HOST}/sso/callback"
 
 # Upgrade LiteLLM
 upgrade:
@@ -363,6 +379,9 @@ upgrade:
 
     echo "Generating Helm values..."
     gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml
+
+    # Delete the migration job as it's immutable and blocks helm upgrade
+    kubectl delete job litellm-migrations -n ${LITELLM_NAMESPACE} --ignore-not-found
 
     echo "Upgrading LiteLLM Helm chart..."
     helm upgrade litellm oci://ghcr.io/berriai/litellm-helm \
@@ -416,7 +435,7 @@ generate-virtual-key user='' model='':
     set -euo pipefail
     user="{{ user }}"
     while [ -z "${user}" ]; do
-        user=$(gum input --prompt="User email: " --width=80)
+        user=$(gum input --prompt="Username: " --width=80)
     done
     model="{{ model }}"
     if [ -z "${model}" ]; then
@@ -429,12 +448,247 @@ generate-virtual-key user='' model='':
     fi
     master_key=$(kubectl get secret litellm-masterkey -n ${LITELLM_NAMESPACE} \
         -o jsonpath="{.data.masterkey}" | base64 --decode)
-    curl "https://${LITELLM_HOST}/key/generate" \
+    response=$(curl -s "https://${LITELLM_HOST}/key/generate" \
         --header "Authorization: Bearer ${master_key}" \
         --header "Content-Type: application/json" \
-        --data-raw "{\"models\": [\"${model}\"], \"metadata\": {\"user\": \"${user}\"}}" | jq .
+        --data-raw "{\"models\": [\"${model}\"], \"metadata\": {\"user\": \"${user}\"}}")
+    echo "${response}" | jq .
+    echo ""
+    echo "API Key: $(echo "${response}" | jq -r '.key')"
 
 # Get master key
 master-key:
     @kubectl get secret litellm-masterkey -n ${LITELLM_NAMESPACE} \
         -o jsonpath="{.data.masterkey}" | base64 --decode
+
+# List users
+list-users:
+    kubectl exec -n postgres postgres-cluster-1 -- psql -U postgres -d litellm -c \
+        "SELECT user_id, user_email, user_role FROM \"LiteLLM_UserTable\";"
+
+# Assign role to user
+assign-role user='' role='':
+    #!/bin/bash
+    set -euo pipefail
+    user="{{ user }}"
+    role="{{ role }}"
+    if [ -z "${user}" ]; then
+        users=$(kubectl exec -n postgres postgres-cluster-1 -- psql -U postgres -d litellm -t -c \
+            "SELECT user_id FROM \"LiteLLM_UserTable\";" 2>/dev/null | tr -d ' ' | grep -v '^$')
+        if [ -z "${users}" ]; then
+            echo "No users found"
+            exit 1
+        fi
+        user=$(echo "${users}" | gum choose --header="Select user:")
+    fi
+    if [ -z "${role}" ]; then
+        role=$(gum choose --header="Select role:" \
+            "proxy_admin" \
+            "proxy_admin_viewer" \
+            "internal_user" \
+            "internal_user_viewer")
+    fi
+    kubectl exec -n postgres postgres-cluster-1 -- psql -U postgres -d litellm -c \
+        "UPDATE \"LiteLLM_UserTable\" SET user_role = '${role}' WHERE user_id = '${user}';"
+    echo "Assigned role '${role}' to user '${user}'"
+
+# Create Keycloak client for LiteLLM OIDC
+create-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${LITELLM_HOST}" ]; do
+        LITELLM_HOST=$(
+            gum input --prompt="LiteLLM host (FQDN): " --width=100 \
+            --placeholder="e.g., litellm.example.com"
+        )
+    done
+
+    echo "Creating Keycloak client for LiteLLM..."
+
+    just keycloak::delete-client ${KEYCLOAK_REALM} ${LITELLM_OIDC_CLIENT_ID} || true
+
+    CLIENT_SECRET=$(just utils::random-password)
+
+    just keycloak::create-client \
+        realm=${KEYCLOAK_REALM} \
+        client_id=${LITELLM_OIDC_CLIENT_ID} \
+        redirect_url="https://${LITELLM_HOST}/sso/callback" \
+        client_secret="${CLIENT_SECRET}"
+
+    # Store temporarily in k8s secret for create-keycloak-auth-secret to pick up
+    kubectl delete secret litellm-oauth-temp -n ${LITELLM_NAMESPACE} --ignore-not-found
+    kubectl create secret generic litellm-oauth-temp -n ${LITELLM_NAMESPACE} \
+        --from-literal=client_id="${LITELLM_OIDC_CLIENT_ID}" \
+        --from-literal=client_secret="${CLIENT_SECRET}"
+
+    echo "Keycloak client created successfully"
+    echo "Client ID: ${LITELLM_OIDC_CLIENT_ID}"
+    echo "Redirect URI: https://${LITELLM_HOST}/sso/callback"
+
+# Delete Keycloak client for LiteLLM
+delete-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deleting Keycloak client for LiteLLM..."
+    just keycloak::delete-client ${KEYCLOAK_REALM} ${LITELLM_OIDC_CLIENT_ID} || true
+    kubectl delete secret litellm-oauth-temp -n ${LITELLM_NAMESPACE} --ignore-not-found
+    if just vault::exist keycloak/client/litellm &>/dev/null; then
+        just vault::delete keycloak/client/litellm
+    fi
+
+# Create Keycloak auth secret
+create-keycloak-auth-secret:
+    #!/bin/bash
+    set -euo pipefail
+
+    # Prioritize temporary secret (freshly created) over Vault (potentially stale)
+    if kubectl get secret litellm-oauth-temp -n ${LITELLM_NAMESPACE} &>/dev/null; then
+        oauth_client_id=$(kubectl get secret litellm-oauth-temp -n ${LITELLM_NAMESPACE} \
+            -o jsonpath='{.data.client_id}' | base64 -d)
+        oauth_client_secret=$(kubectl get secret litellm-oauth-temp -n ${LITELLM_NAMESPACE} \
+            -o jsonpath='{.data.client_secret}' | base64 -d)
+    elif helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null && \
+         just vault::get keycloak/client/litellm client_secret &>/dev/null; then
+        oauth_client_id=$(just vault::get keycloak/client/litellm client_id)
+        oauth_client_secret=$(just vault::get keycloak/client/litellm client_secret)
+    else
+        echo "Error: Cannot retrieve OAuth client secret. Please run 'just litellm::create-keycloak-client' first."
+        exit 1
+    fi
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Storing secrets in Vault..."
+
+        # Store OAuth credentials in Vault
+        just vault::put keycloak/client/litellm \
+            client_id="${oauth_client_id}" \
+            client_secret="${oauth_client_secret}"
+
+        # Delete existing secrets and ExternalSecrets
+        kubectl delete secret keycloak-auth -n ${LITELLM_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret keycloak-auth-external-secret -n ${LITELLM_NAMESPACE} --ignore-not-found
+
+        # Create ExternalSecret
+        gomplate -f keycloak-auth-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/keycloak-auth-external-secret \
+            -n ${LITELLM_NAMESPACE} --timeout=60s
+
+        echo "ExternalSecret created successfully"
+    else
+        echo "External Secrets Operator not found. Creating Kubernetes Secret directly..."
+
+        # Create Keycloak OAuth Secret
+        kubectl delete secret keycloak-auth -n ${LITELLM_NAMESPACE} --ignore-not-found
+        kubectl create secret generic keycloak-auth -n ${LITELLM_NAMESPACE} \
+            --from-literal=GENERIC_CLIENT_ID="${oauth_client_id}" \
+            --from-literal=GENERIC_CLIENT_SECRET="${oauth_client_secret}"
+
+        # Store credentials in Vault if available (backup for admin credentials)
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put keycloak/client/litellm \
+                client_id="${oauth_client_id}" \
+                client_secret="${oauth_client_secret}"
+        fi
+
+        echo "Kubernetes Secret created successfully"
+    fi
+
+    # Clean up temporary OAuth secret
+    kubectl delete secret litellm-oauth-temp -n ${LITELLM_NAMESPACE} --ignore-not-found
+
+# Delete Keycloak auth secret
+delete-keycloak-auth-secret:
+    kubectl delete externalsecret keycloak-auth-external-secret -n ${LITELLM_NAMESPACE} --ignore-not-found
+    kubectl delete secret keycloak-auth -n ${LITELLM_NAMESPACE} --ignore-not-found
+
+# Setup OIDC authentication for Admin UI
+setup-oidc:
+    #!/bin/bash
+    set -euo pipefail
+
+    echo "Setting up OIDC authentication for LiteLLM Admin UI..."
+
+    while [ -z "${LITELLM_HOST}" ]; do
+        LITELLM_HOST=$(
+            gum input --prompt="LiteLLM host (FQDN): " --width=100 \
+            --placeholder="e.g., litellm.example.com"
+        )
+    done
+
+    while [ -z "${KEYCLOAK_HOST}" ]; do
+        KEYCLOAK_HOST=$(
+            gum input --prompt="Keycloak host (FQDN): " --width=100 \
+            --placeholder="e.g., auth.example.com"
+        )
+    done
+
+    just create-keycloak-client
+    just create-keycloak-auth-secret
+
+    LITELLM_OIDC_ENABLED="true"
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            fi
+        fi
+    fi
+
+    echo "Generating Helm values with OIDC configuration..."
+    gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml
+
+    # Delete the migration job as it's immutable and blocks helm upgrade
+    kubectl delete job litellm-migrations -n ${LITELLM_NAMESPACE} --ignore-not-found
+
+    echo "Upgrading LiteLLM with OIDC configuration..."
+    helm upgrade litellm oci://ghcr.io/berriai/litellm-helm \
+        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait \
+        -f litellm-values.yaml
+
+    echo ""
+    echo "OIDC authentication configured successfully!"
+    echo "Access LiteLLM at: https://${LITELLM_HOST}"
+    echo "SSO Callback URL: https://${LITELLM_HOST}/sso/callback"
+
+# Disable OIDC authentication
+disable-oidc:
+    #!/bin/bash
+    set -euo pipefail
+
+    echo "Disabling OIDC authentication for LiteLLM Admin UI..."
+
+    LITELLM_OIDC_ENABLED=""
+
+    while [ -z "${LITELLM_HOST}" ]; do
+        LITELLM_HOST=$(
+            gum input --prompt="LiteLLM host (FQDN): " --width=100 \
+            --placeholder="e.g., litellm.example.com"
+        )
+    done
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            fi
+        fi
+    fi
+
+    echo "Generating Helm values without OIDC..."
+    gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml
+
+    # Delete the migration job as it's immutable and blocks helm upgrade
+    kubectl delete job litellm-migrations -n ${LITELLM_NAMESPACE} --ignore-not-found
+
+    echo "Upgrading LiteLLM without OIDC..."
+    helm upgrade litellm oci://ghcr.io/berriai/litellm-helm \
+        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait \
+        -f litellm-values.yaml
+
+    echo ""
+    echo "OIDC authentication disabled."
+    echo "Note: Keycloak client was NOT deleted. To clean up, run:"
+    echo "  just litellm::delete-keycloak-client"

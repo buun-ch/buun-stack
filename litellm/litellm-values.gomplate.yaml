@@ -18,8 +18,26 @@ migrationJob:
     limits:
       memory: 1Gi
 
+{{- if .Env.LITELLM_OIDC_ENABLED }}
 environmentSecrets:
   - apikey
+  - keycloak-auth
+
+extraEnvVars:
+  - name: PROXY_BASE_URL
+    value: "https://{{ .Env.LITELLM_HOST }}"
+  - name: GENERIC_AUTHORIZATION_ENDPOINT
+    value: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/auth"
+  - name: GENERIC_TOKEN_ENDPOINT
+    value: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/token"
+  - name: GENERIC_USERINFO_ENDPOINT
+    value: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/userinfo"
+  - name: GENERIC_SCOPE
+    value: "openid email profile"
+{{- else }}
+environmentSecrets:
+  - apikey
+{{- end }}
 
 proxy_config:
   model_list:
