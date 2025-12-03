@@ -19,6 +19,21 @@ ollama:
 {{- end }}
 {{- end }}
 
+podSecurityContext:
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  runAsUser: 1000
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop:
+      - ALL
+
 persistentVolume:
   enabled: true
   size: {{ .Env.OLLAMA_STORAGE_SIZE }}

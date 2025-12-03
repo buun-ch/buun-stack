@@ -29,6 +29,12 @@ create-namespace:
     if ! kubectl get namespace ${OLLAMA_NAMESPACE} &>/dev/null; then
         kubectl create namespace ${OLLAMA_NAMESPACE}
     fi
+    kubectl label namespace ${OLLAMA_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=restricted \
+        pod-security.kubernetes.io/enforce-version=latest \
+        pod-security.kubernetes.io/warn=restricted \
+        pod-security.kubernetes.io/warn-version=latest \
+        --overwrite
 
 # Delete Ollama namespace
 delete-namespace:
