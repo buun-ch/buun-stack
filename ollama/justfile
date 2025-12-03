@@ -1,0 +1,125 @@
+set fallback := true
+
+export OLLAMA_NAMESPACE := env("OLLAMA_NAMESPACE", "ollama")
+export OLLAMA_CHART_VERSION := env("OLLAMA_CHART_VERSION", "1.35.0")
+export OLLAMA_HOST := env("OLLAMA_HOST", "")
+export OLLAMA_GPU_ENABLED := env("OLLAMA_GPU_ENABLED", "")
+export OLLAMA_GPU_TYPE := env("OLLAMA_GPU_TYPE", "nvidia")
+export OLLAMA_GPU_COUNT := env("OLLAMA_GPU_COUNT", "1")
+export OLLAMA_MODELS := env("OLLAMA_MODELS", "")
+export OLLAMA_STORAGE_SIZE := env("OLLAMA_STORAGE_SIZE", "30Gi")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add ollama https://otwld.github.io/ollama-helm
+    helm repo update ollama
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove ollama
+
+# Create Ollama namespace
+create-namespace:
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace ${OLLAMA_NAMESPACE} &>/dev/null; then
+        kubectl create namespace ${OLLAMA_NAMESPACE}
+    fi
+
+# Delete Ollama namespace
+delete-namespace:
+    kubectl delete namespace ${OLLAMA_NAMESPACE} --ignore-not-found
+
+# Install Ollama
+install:
+    #!/bin/bash
+    set -euo pipefail
+
+    just create-namespace
+    just add-helm-repo
+
+    if [ -z "${OLLAMA_GPU_ENABLED}" ]; then
+        if gum confirm "Enable GPU support?"; then
+            OLLAMA_GPU_ENABLED="true"
+        else
+            OLLAMA_GPU_ENABLED="false"
+        fi
+    fi
+
+    if [ -z "${OLLAMA_MODELS}" ]; then
+        OLLAMA_MODELS=$(
+            gum input --prompt="Models to pull (comma-separated): " --width=100 \
+            --placeholder="e.g., llama3.2:1b,deepseek-r1:7b" \
+            --value="llama3.2:1b"
+        )
+    fi
+
+    gomplate -f values.gomplate.yaml -o values.yaml
+    helm upgrade --install ollama ollama/ollama \
+        --version ${OLLAMA_CHART_VERSION} -n ${OLLAMA_NAMESPACE} --wait \
+        -f values.yaml
+
+    echo ""
+    echo "Ollama installed successfully"
+    echo "GPU enabled: ${OLLAMA_GPU_ENABLED}"
+    echo "Models: ${OLLAMA_MODELS}"
+
+# Upgrade Ollama
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+
+    if [ -z "${OLLAMA_GPU_ENABLED}" ]; then
+        if gum confirm "Enable GPU support?"; then
+            OLLAMA_GPU_ENABLED="true"
+        else
+            OLLAMA_GPU_ENABLED="false"
+        fi
+    fi
+
+    if [ -z "${OLLAMA_MODELS}" ]; then
+        OLLAMA_MODELS=$(
+            gum input --prompt="Models to pull (comma-separated): " --width=100 \
+            --placeholder="e.g., llama3.2:1b,deepseek-r1:7b" \
+            --value="llama3.2:1b"
+        )
+    fi
+
+    gomplate -f values.gomplate.yaml -o values.yaml
+    helm upgrade ollama ollama/ollama \
+        --version ${OLLAMA_CHART_VERSION} -n ${OLLAMA_NAMESPACE} --wait \
+        -f values.yaml
+
+    echo "Ollama upgraded successfully"
+
+# Uninstall Ollama
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall ollama -n ${OLLAMA_NAMESPACE} --wait --ignore-not-found
+    just delete-namespace
+    echo "Ollama uninstalled"
+
+# Pull a model
+pull model:
+    kubectl exec -it -n ${OLLAMA_NAMESPACE} deploy/ollama -- ollama pull {{ model }}
+
+# Run a model
+run model:
+    kubectl exec -it -n ${OLLAMA_NAMESPACE} deploy/ollama -- ollama run {{ model }}
+
+# List models
+list:
+    kubectl exec -it -n ${OLLAMA_NAMESPACE} deploy/ollama -- ollama list
+
+# Show Ollama logs
+logs:
+    kubectl logs -n ${OLLAMA_NAMESPACE} deploy/ollama -f
+
+# Get pod status
+status:
+    kubectl get pods -n ${OLLAMA_NAMESPACE}

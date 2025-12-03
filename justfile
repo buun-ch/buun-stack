@@ -29,6 +29,7 @@ mod minio
 mod nvidia-device-plugin
 mod fairwinds-polaris
 mod oauth2-proxy
+mod ollama
 mod postgres
 mod prometheus
 mod qdrant

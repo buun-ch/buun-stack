@@ -1,0 +1,20 @@
+ollama:
+  gpu:
+    enabled: {{ if eq .Env.OLLAMA_GPU_ENABLED "true" }}true{{ else }}false{{ end }}
+    type: {{ .Env.OLLAMA_GPU_TYPE }}
+    number: {{ .Env.OLLAMA_GPU_COUNT }}
+
+  models:
+    # https://ollama.com/search
+    pull:
+{{- $models := .Env.OLLAMA_MODELS | strings.Split "," }}
+{{- range $models }}
+{{- $model := . | strings.TrimSpace }}
+{{- if ne $model "" }}
+      - {{ $model }}
+{{- end }}
+{{- end }}
+
+persistentVolume:
+  enabled: true
+  size: {{ .Env.OLLAMA_STORAGE_SIZE }}
