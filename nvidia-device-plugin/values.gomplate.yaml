@@ -1,0 +1,25 @@
+# Enable GPU Feature Discovery
+gfd:
+  enabled: true
+
+# Enable Node Feature Discovery (dependency)
+nfd:
+  enabled: true
+
+# Configure runtime for k3s
+runtimeClassName: "nvidia"
+
+# Enable GPU Time-Slicing for sharing GPUs between workloads
+# This allows multiple pods to use the same physical GPU
+config:
+  map:
+    default: |-
+      version: v1
+      sharing:
+        timeSlicing:
+          renameByDefault: false
+          failRequestsGreaterThanOne: false
+          resources:
+            - name: nvidia.com/gpu
+              replicas: {{ .Env.GPU_TIME_SLICING_REPLICAS }}
+  default: "default"
