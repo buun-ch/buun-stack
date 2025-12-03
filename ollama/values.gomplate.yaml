@@ -34,6 +34,14 @@ securityContext:
     drop:
       - ALL
 
+resources:
+  requests:
+    cpu: 25m
+    memory: 2Gi
+  limits:
+    cpu: 100m
+    memory: 8Gi
+
 persistentVolume:
   enabled: true
   size: {{ .Env.OLLAMA_STORAGE_SIZE }}
