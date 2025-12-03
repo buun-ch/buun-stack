@@ -22,6 +22,7 @@ mod k8s
 mod kserve
 mod langfuse
 mod lakekeeper
+mod librechat
 mod longhorn
 mod metabase
 mod mlflow

@@ -62,6 +62,8 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 
 ### LLM & AI Applications (Optional)
 
+- **[Ollama](https://ollama.com/)**: Local LLM inference server with GPU acceleration
+- **[LibreChat](https://www.librechat.ai/)**: Web-based chat interface with multi-model support and MCP integration
 - **[Langfuse](https://langfuse.com/)**: LLM observability and analytics platform for tracking and debugging AI applications
 
 ### Orchestration (Optional)
@@ -116,21 +118,13 @@ Lightweight Kubernetes distribution optimized for edge computing:
 - **Production Ready**: Full Kubernetes functionality with minimal overhead
 - **Easy Deployment**: Single binary installation with built-in ingress
 
-### Longhorn
+### PostgreSQL
 
-Enterprise-grade distributed storage system:
+Production-ready relational database:
 
-- **Highly Available**: Block storage with no single point of failure
-- **Backup & Recovery**: Built-in disaster recovery capabilities
-- **NFS Support**: Persistent volumes with NFS compatibility
-
-### HashiCorp Vault
-
-Centralized secrets management:
-
-- **Secure Storage**: Encrypted secret storage with access control
-- **Dynamic Secrets**: Automatic credential generation and rotation
-- **External Secrets Integration**: Syncs with Kubernetes via External Secrets Operator
+- **High Availability**: Clustered deployment with CloudNativePG
+- **pgvector Extension**: Vector similarity search for AI/ML workloads
+- **Multi-Tenant**: Shared database for Keycloak and applications
 
 ### Keycloak
 
@@ -140,13 +134,21 @@ Open-source identity and access management:
 - **User Federation**: Identity brokering and external provider integration
 - **Group-Based Access**: Role and permission management
 
-### PostgreSQL
+### HashiCorp Vault
 
-Production-ready relational database:
+Centralized secrets management:
 
-- **High Availability**: Clustered deployment with CloudNativePG
-- **pgvector Extension**: Vector similarity search for AI/ML workloads
-- **Multi-Tenant**: Shared database for Keycloak and applications
+- **Secure Storage**: Encrypted secret storage with access control
+- **Dynamic Secrets**: Automatic credential generation and rotation
+- **External Secrets Integration**: Syncs with Kubernetes via External Secrets Operator
+
+### External Secrets Operator
+
+Kubernetes operator for secret synchronization:
+
+- **Vault Integration**: Automatically syncs secrets from Vault to Kubernetes
+- **Multiple Backends**: Supports various secret management systems
+- **Secure Rotation**: Automatic secret lifecycle management
 
 ### Prometheus and Grafana
 
@@ -160,13 +162,27 @@ Comprehensive monitoring and observability stack:
 
 [📖 See Prometheus Documentation](./prometheus/README.md)
 
-### External Secrets Operator
+### Goldilocks
 
-Kubernetes operator for secret synchronization:
+Resource recommendation dashboard for right-sizing workloads:
 
-- **Vault Integration**: Automatically syncs secrets from Vault to Kubernetes
-- **Multiple Backends**: Supports various secret management systems
-- **Secure Rotation**: Automatic secret lifecycle management
+- **VPA Integration**: Powered by Vertical Pod Autoscaler for metrics-based recommendations
+- **Visual Dashboard**: User-friendly interface for viewing resource recommendations
+- **QoS Guidance**: Recommendations for Guaranteed, Burstable, and BestEffort classes
+- **Monitoring-Only Mode**: Observes workloads without automatic scaling
+- **Namespace-Based**: Enable monitoring per namespace with labels
+
+[📖 See Goldilocks Documentation](./goldilocks/README.md)
+
+[📖 See VPA Documentation](./vpa/README.md)
+
+### Longhorn
+
+Enterprise-grade distributed storage system:
+
+- **Highly Available**: Block storage with no single point of failure
+- **Backup & Recovery**: Built-in disaster recovery capabilities
+- **NFS Support**: Persistent volumes with NFS compatibility
 
 ### MinIO
 
@@ -187,68 +203,6 @@ Multi-user platform for interactive computing:
 
 [📖 See JupyterHub Documentation](./jupyterhub/README.md)
 
-### MLflow
-
-Machine learning lifecycle management platform:
-
-- **Experiment Tracking**: Log parameters, metrics, and artifacts for ML experiments
-- **Model Registry**: Version and manage ML models with deployment lifecycle
-- **Keycloak Authentication**: OAuth2 integration with group-based access control
-
-[📖 See MLflow Documentation](./mlflow/README.md)
-
-### KServe
-
-Model serving platform for deploying ML models on Kubernetes:
-
-- **Multi-Framework Support**: TensorFlow, PyTorch, scikit-learn, XGBoost, MLflow, and more
-- **MLflow Integration**: Deploy models directly from MLflow Model Registry
-- **Inference Protocols**: REST and gRPC with v2 Open Inference Protocol
-- **RawDeployment Mode**: Uses native Kubernetes Deployments without Knative dependency
-
-[📖 See KServe Documentation](./kserve/README.md)
-
-### Langfuse
-
-LLM observability and analytics platform:
-
-- **Trace Tracking**: Monitor LLM calls, chains, and agent executions with detailed traces
-- **Prompt Management**: Version and test prompts with playground interface
-- **Analytics**: Track costs, latency, and token usage across all LLM applications
-- **Keycloak Authentication**: OAuth2 integration with automatic user provisioning
-
-[📖 See Langfuse Documentation](./langfuse/README.md)
-
-### Apache Superset
-
-Modern business intelligence platform:
-
-- **Rich Visualizations**: 40+ chart types including mixed charts, treemaps, and heatmaps
-- **SQL Lab**: Powerful editor for complex queries and dataset creation
-- **Keycloak & Trino**: OAuth2 authentication and Iceberg data lake integration
-
-[📖 See Superset Documentation](./superset/README.md)
-
-### Metabase
-
-Lightweight business intelligence:
-
-- **Simple Setup**: Quick configuration with clean, modern UI
-- **Multiple Databases**: Connect to PostgreSQL, Trino, and more
-- **Keycloak Authentication**: OAuth2 integration for user management
-
-[📖 See Metabase Documentation](./metabase/README.md)
-
-### Querybook
-
-Big data querying UI with notebook interface:
-
-- **Trino Integration**: SQL queries against multiple data sources with user impersonation
-- **Notebook Interface**: Shareable datadocs with queries and visualizations
-- **Real-time Execution**: WebSocket-based query progress updates
-
-[📖 See Querybook Documentation](./querybook/README.md)
-
 ### Trino
 
 Fast distributed SQL query engine:
@@ -259,15 +213,15 @@ Fast distributed SQL query engine:
 
 [📖 See Trino Documentation](./trino/README.md)
 
-### DataHub
+### Querybook
 
-Modern data catalog and metadata management:
+Big data querying UI with notebook interface:
 
-- **OIDC Integration**: Keycloak authentication for unified access
-- **Metadata Discovery**: Search and browse data assets across platforms
-- **Lineage Tracking**: Visualize data flow and dependencies
+- **Trino Integration**: SQL queries against multiple data sources with user impersonation
+- **Notebook Interface**: Shareable datadocs with queries and visualizations
+- **Real-time Execution**: WebSocket-based query progress updates
 
-[📖 See DataHub Documentation](./datahub/README.md)
+[📖 See Querybook Documentation](./querybook/README.md)
 
 ### ClickHouse
 
@@ -309,15 +263,88 @@ Apache Iceberg REST Catalog:
 
 [📖 See Lakekeeper Documentation](./lakekeeper/README.md)
 
-### Apache Airflow
+### Apache Superset
 
-Workflow orchestration platform:
+Modern business intelligence platform:
 
-- **DAG-Based**: Define data pipelines as code with Python
-- **JupyterHub Integration**: Develop and test workflows in notebooks
-- **Keycloak Authentication**: OAuth2 for user management
+- **Rich Visualizations**: 40+ chart types including mixed charts, treemaps, and heatmaps
+- **SQL Lab**: Powerful editor for complex queries and dataset creation
+- **Keycloak & Trino**: OAuth2 authentication and Iceberg data lake integration
 
-[📖 See Airflow Documentation](./airflow/README.md)
+[📖 See Superset Documentation](./superset/README.md)
+
+### Metabase
+
+Lightweight business intelligence:
+
+- **Simple Setup**: Quick configuration with clean, modern UI
+- **Multiple Databases**: Connect to PostgreSQL, Trino, and more
+- **Keycloak Authentication**: OAuth2 integration for user management
+
+[📖 See Metabase Documentation](./metabase/README.md)
+
+### DataHub
+
+Modern data catalog and metadata management:
+
+- **OIDC Integration**: Keycloak authentication for unified access
+- **Metadata Discovery**: Search and browse data assets across platforms
+- **Lineage Tracking**: Visualize data flow and dependencies
+
+[📖 See DataHub Documentation](./datahub/README.md)
+
+### MLflow
+
+Machine learning lifecycle management platform:
+
+- **Experiment Tracking**: Log parameters, metrics, and artifacts for ML experiments
+- **Model Registry**: Version and manage ML models with deployment lifecycle
+- **Keycloak Authentication**: OAuth2 integration with group-based access control
+
+[📖 See MLflow Documentation](./mlflow/README.md)
+
+### KServe
+
+Model serving platform for deploying ML models on Kubernetes:
+
+- **Multi-Framework Support**: TensorFlow, PyTorch, scikit-learn, XGBoost, MLflow, and more
+- **MLflow Integration**: Deploy models directly from MLflow Model Registry
+- **Inference Protocols**: REST and gRPC with v2 Open Inference Protocol
+- **RawDeployment Mode**: Uses native Kubernetes Deployments without Knative dependency
+
+[📖 See KServe Documentation](./kserve/README.md)
+
+### Ollama
+
+Local LLM inference server:
+
+- **Local Inference**: Run LLMs locally without external API dependencies
+- **GPU Acceleration**: NVIDIA GPU support with automatic runtime configuration
+- **Model Library**: Access to thousands of open-source models (Llama, Qwen, DeepSeek, etc.)
+- **OpenAI-Compatible API**: Drop-in replacement for OpenAI API endpoints
+
+[📖 See Ollama Documentation](./ollama/README.md)
+
+### LibreChat
+
+Web-based chat interface for LLMs:
+
+- **Multi-Model Support**: Connect to Ollama, OpenAI, Anthropic, and custom endpoints
+- **MCP Integration**: Model Context Protocol support for web search and tools
+- **Keycloak Authentication**: OAuth2 integration for user management
+
+[📖 See LibreChat Documentation](./librechat/README.md)
+
+### Langfuse
+
+LLM observability and analytics platform:
+
+- **Trace Tracking**: Monitor LLM calls, chains, and agent executions with detailed traces
+- **Prompt Management**: Version and test prompts with playground interface
+- **Analytics**: Track costs, latency, and token usage across all LLM applications
+- **Keycloak Authentication**: OAuth2 integration with automatic user provisioning
+
+[📖 See Langfuse Documentation](./langfuse/README.md)
 
 ### Dagster
 
@@ -329,6 +356,16 @@ Modern data orchestration platform:
 
 [📖 See Dagster Documentation](./dagster/README.md)
 
+### Apache Airflow
+
+Workflow orchestration platform:
+
+- **DAG-Based**: Define data pipelines as code with Python
+- **JupyterHub Integration**: Develop and test workflows in notebooks
+- **Keycloak Authentication**: OAuth2 for user management
+
+[📖 See Airflow Documentation](./airflow/README.md)
+
 ### Fairwinds Polaris
 
 Kubernetes configuration validation and best practices auditing:
@@ -339,20 +376,6 @@ Kubernetes configuration validation and best practices auditing:
 - **Dashboard Interface**: Visual reporting of issues by severity
 
 [📖 See Fairwinds Polaris Documentation](./fairwinds-polaris/README.md)
-
-### Goldilocks
-
-Resource recommendation dashboard for right-sizing workloads:
-
-- **VPA Integration**: Powered by Vertical Pod Autoscaler for metrics-based recommendations
-- **Visual Dashboard**: User-friendly interface for viewing resource recommendations
-- **QoS Guidance**: Recommendations for Guaranteed, Burstable, and BestEffort classes
-- **Monitoring-Only Mode**: Observes workloads without automatic scaling
-- **Namespace-Based**: Enable monitoring per namespace with labels
-
-[📖 See Goldilocks Documentation](./goldilocks/README.md)
-
-[📖 See VPA Documentation](./vpa/README.md)
 
 ## Common Operations
 
@@ -462,6 +485,7 @@ kubectl --context yourpc-oidc get nodes
 # JupyterHub: https://jupyter.yourdomain.com
 # MLflow: https://mlflow.yourdomain.com
 # Langfuse: https://langfuse.yourdomain.com
+# LibreChat: https://chat.yourdomain.com
 ```
 
 ## Customization

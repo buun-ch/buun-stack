@@ -1,0 +1,89 @@
+version: 1.2.1
+
+cache: true
+
+interface:
+  endpointsMenu: true
+  modelSelect: true
+  parameters: true
+  sidePanel: true
+  presets: true
+
+registration:
+  socialLogins:
+    - openid
+
+endpoints:
+  # Ollama - Local LLM (configured as custom endpoint)
+  # Note: Name must NOT start with "ollama" to avoid legacy code issues
+  custom:
+    - name: "LocalLLM"
+      apiKey: "ollama"
+      baseURL: "http://{{ .Env.OLLAMA_HOST }}:11434/v1/"
+      models:
+        default:
+          - "qwen3:8b"
+          - "deepseek-r1:8b"
+        fetch: true
+      titleConvo: true
+      titleModel: "current_model"
+      summarize: false
+      summaryModel: "current_model"
+      forcePrompt: false
+      modelDisplayLabel: "LocalLLM"
+
+  # OpenAI - Optional, requires API key
+  # openAI:
+  #   apiKey: "${OPENAI_API_KEY}"
+  #   models:
+  #     default:
+  #       - gpt-4o
+  #       - gpt-4o-mini
+  #     fetch: true
+
+  # Anthropic - Optional, requires API key
+  # anthropic:
+  #   apiKey: "${ANTHROPIC_API_KEY}"
+  #   models:
+  #     default:
+  #       - claude-sonnet-4-20250514
+  #       - claude-3-5-haiku-20241022
+
+  # Additional custom endpoints example (OpenRouter, etc.)
+  # - name: "OpenRouter"
+  #   apiKey: "${OPENROUTER_KEY}"
+  #   baseURL: "https://openrouter.ai/api/v1"
+  #   models:
+  #     default:
+  #       - "anthropic/claude-sonnet-4"
+  #     fetch: true
+  #   titleConvo: true
+  #   modelDisplayLabel: "OpenRouter"
+
+# MCP Servers configuration
+{{- if eq .Env.TAVILY_MCP_ENABLED "true" }}
+mcpServers:
+  tavily:
+    command: npx
+    args:
+      - "-y"
+      - "tavily-mcp@latest"
+    env:
+      TAVILY_API_KEY: "${TAVILY_API_KEY}"
+{{- end }}
+
+# Additional MCP Servers (examples)
+# mcpServers:
+#   filesystem:
+#     command: npx
+#     args:
+#       - "-y"
+#       - "@anthropic/mcp-server-filesystem"
+#       - "/app/data"
+#   brave-search:
+#     command: npx
+#     args:
+#       - "-y"
+#       - "@anthropic/mcp-server-brave-search"
+#     env:
+#       BRAVE_API_KEY: "${BRAVE_API_KEY}"

@@ -1,0 +1,309 @@
+set fallback := true
+
+export LIBRECHAT_NAMESPACE := env("LIBRECHAT_NAMESPACE", "librechat")
+export LIBRECHAT_CHART_VERSION := env("LIBRECHAT_CHART_VERSION", "1.9.3")
+export LIBRECHAT_HOST := env("LIBRECHAT_HOST", "")
+export LIBRECHAT_OIDC_CLIENT_ID := env("LIBRECHAT_OIDC_CLIENT_ID", "librechat")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export OLLAMA_NAMESPACE := env("OLLAMA_NAMESPACE", "ollama")
+export OLLAMA_HOST := env("OLLAMA_HOST", "ollama.ollama.svc.cluster.local")
+export TAVILY_MCP_ENABLED := env("TAVILY_MCP_ENABLED", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Create LibreChat namespace
+create-namespace:
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace ${LIBRECHAT_NAMESPACE} &>/dev/null; then
+        kubectl create namespace ${LIBRECHAT_NAMESPACE}
+    fi
+    kubectl label namespace ${LIBRECHAT_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=restricted \
+        pod-security.kubernetes.io/enforce-version=latest \
+        pod-security.kubernetes.io/warn=restricted \
+        pod-security.kubernetes.io/warn-version=latest \
+        --overwrite
+
+# Delete LibreChat namespace
+delete-namespace:
+    kubectl delete namespace ${LIBRECHAT_NAMESPACE} --ignore-not-found
+
+# Generate credentials and store in Vault
+generate-credentials:
+    #!/bin/bash
+    set -euo pipefail
+    if just vault::exist librechat/credentials &>/dev/null; then
+        echo "LibreChat credentials already exist in Vault"
+        exit 0
+    fi
+    echo "Generating LibreChat credentials..."
+    CREDS_KEY=$(openssl rand -hex 32)
+    CREDS_IV=$(openssl rand -hex 16)
+    JWT_SECRET=$(openssl rand -hex 32)
+    JWT_REFRESH_SECRET=$(openssl rand -hex 32)
+    MEILI_MASTER_KEY=$(openssl rand -hex 32)
+    OPENID_SESSION_SECRET=$(openssl rand -hex 32)
+
+    just vault::put librechat/credentials \
+        creds_key="${CREDS_KEY}" \
+        creds_iv="${CREDS_IV}" \
+        jwt_secret="${JWT_SECRET}" \
+        jwt_refresh_secret="${JWT_REFRESH_SECRET}" \
+        meili_master_key="${MEILI_MASTER_KEY}" \
+        openid_session_secret="${OPENID_SESSION_SECRET}"
+    echo "Credentials stored in Vault"
+
+# Create Keycloak client for LibreChat
+create-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${LIBRECHAT_HOST}" ]; do
+        LIBRECHAT_HOST=$(
+            gum input --prompt="LibreChat host (FQDN): " --width=100 \
+            --placeholder="e.g., chat.example.com"
+        )
+    done
+
+    echo "Creating Keycloak client for LibreChat..."
+
+    just keycloak::delete-client ${KEYCLOAK_REALM} ${LIBRECHAT_OIDC_CLIENT_ID} || true
+
+    CLIENT_SECRET=$(just utils::random-password)
+
+    just keycloak::create-client \
+        realm=${KEYCLOAK_REALM} \
+        client_id=${LIBRECHAT_OIDC_CLIENT_ID} \
+        redirect_url="https://${LIBRECHAT_HOST}/oauth/openid/callback" \
+        client_secret="${CLIENT_SECRET}"
+
+    just vault::put keycloak/client/librechat \
+        client_id="${LIBRECHAT_OIDC_CLIENT_ID}" \
+        client_secret="${CLIENT_SECRET}"
+
+    echo "Keycloak client created successfully"
+    echo "Client ID: ${LIBRECHAT_OIDC_CLIENT_ID}"
+    echo "Redirect URI: https://${LIBRECHAT_HOST}/oauth/openid/callback"
+
+# Delete Keycloak client
+delete-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deleting Keycloak client for LibreChat..."
+    just keycloak::delete-client ${KEYCLOAK_REALM} ${LIBRECHAT_OIDC_CLIENT_ID} || true
+    if just vault::exist keycloak/client/librechat &>/dev/null; then
+        just vault::delete keycloak/client/librechat
+    fi
+
+# Create Kubernetes secrets
+create-secrets:
+    #!/bin/bash
+    set -euo pipefail
+    just create-namespace
+
+    CREDS_KEY=$(just vault::get librechat/credentials creds_key)
+    CREDS_IV=$(just vault::get librechat/credentials creds_iv)
+    JWT_SECRET=$(just vault::get librechat/credentials jwt_secret)
+    JWT_REFRESH_SECRET=$(just vault::get librechat/credentials jwt_refresh_secret)
+    MEILI_MASTER_KEY=$(just vault::get librechat/credentials meili_master_key)
+    OPENID_SESSION_SECRET=$(just vault::get librechat/credentials openid_session_secret)
+    OPENID_CLIENT_ID=$(just vault::get keycloak/client/librechat client_id)
+    OPENID_CLIENT_SECRET=$(just vault::get keycloak/client/librechat client_secret)
+
+    kubectl delete secret librechat-credentials-env -n ${LIBRECHAT_NAMESPACE} --ignore-not-found
+    kubectl create secret generic librechat-credentials-env -n ${LIBRECHAT_NAMESPACE} \
+        --from-literal=CREDS_KEY="${CREDS_KEY}" \
+        --from-literal=CREDS_IV="${CREDS_IV}" \
+        --from-literal=JWT_SECRET="${JWT_SECRET}" \
+        --from-literal=JWT_REFRESH_SECRET="${JWT_REFRESH_SECRET}" \
+        --from-literal=MEILI_MASTER_KEY="${MEILI_MASTER_KEY}" \
+        --from-literal=OPENID_SESSION_SECRET="${OPENID_SESSION_SECRET}" \
+        --from-literal=OPENID_CLIENT_ID="${OPENID_CLIENT_ID}" \
+        --from-literal=OPENID_CLIENT_SECRET="${OPENID_CLIENT_SECRET}"
+
+    echo "Secrets created successfully"
+
+# Install LibreChat
+install:
+    #!/bin/bash
+    set -euo pipefail
+
+    while [ -z "${LIBRECHAT_HOST}" ]; do
+        LIBRECHAT_HOST=$(
+            gum input --prompt="LibreChat host (FQDN): " --width=100 \
+            --placeholder="e.g., chat.example.com"
+        )
+    done
+
+    while [ -z "${KEYCLOAK_HOST}" ]; do
+        KEYCLOAK_HOST=$(
+            gum input --prompt="Keycloak host (FQDN): " --width=100 \
+            --placeholder="e.g., auth.example.com"
+        )
+    done
+
+    # Ask about Tavily MCP if not set
+    if [ -z "${TAVILY_MCP_ENABLED}" ]; then
+        if gum confirm "Enable Tavily MCP for web search?"; then
+            TAVILY_MCP_ENABLED="true"
+        else
+            TAVILY_MCP_ENABLED="false"
+        fi
+    fi
+
+    # Check External Secrets Operator if Tavily is enabled
+    if [ "${TAVILY_MCP_ENABLED}" = "true" ]; then
+        if ! helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            echo "Error: Tavily MCP requires External Secrets Operator, but it is not installed."
+            echo "Please install External Secrets Operator first or set TAVILY_MCP_ENABLED=false"
+            exit 1
+        fi
+        # Check if Tavily API key exists in Vault
+        if ! just vault::exist tavily/api &>/dev/null; then
+            echo "Tavily API key not found in Vault."
+            TAVILY_API_KEY=$(
+                gum input --prompt="Enter Tavily API Key: " --width=100 \
+                --placeholder="tvly-xxxxxxxxxxxxxxxx"
+            )
+            just vault::put tavily/api api_key="${TAVILY_API_KEY}"
+            echo "Tavily API key stored in Vault"
+        fi
+    fi
+
+    just create-namespace
+    just generate-credentials
+    just create-keycloak-client
+    just create-secrets
+
+    # Create Tavily ExternalSecret if enabled
+    if [ "${TAVILY_MCP_ENABLED}" = "true" ]; then
+        gomplate -f tavily-external-secret.gomplate.yaml | kubectl apply -f -
+        echo "Waiting for Tavily secret to be synced..."
+        kubectl wait --for=condition=Ready externalsecret/tavily-api-key \
+            -n ${LIBRECHAT_NAMESPACE} --timeout=60s
+    fi
+
+    gomplate -f values.gomplate.yaml -o values.yaml
+    gomplate -f librechat-config.gomplate.yaml -o librechat-config.yaml
+
+    kubectl delete configmap librechat-config -n ${LIBRECHAT_NAMESPACE} --ignore-not-found
+    kubectl create configmap librechat-config -n ${LIBRECHAT_NAMESPACE} \
+        --from-file=librechat.yaml=librechat-config.yaml
+
+    helm upgrade --install librechat oci://ghcr.io/danny-avila/librechat-chart/librechat \
+        --version ${LIBRECHAT_CHART_VERSION} \
+        -n ${LIBRECHAT_NAMESPACE} \
+        --wait --timeout=10m \
+        -f values.yaml
+
+    echo ""
+    echo "LibreChat installed successfully"
+    echo "URL: https://${LIBRECHAT_HOST}"
+    echo "Login with Keycloak OIDC"
+    if [ "${TAVILY_MCP_ENABLED}" = "true" ]; then
+        echo "Tavily MCP: Enabled"
+    fi
+
+# Upgrade LibreChat
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+
+    while [ -z "${LIBRECHAT_HOST}" ]; do
+        LIBRECHAT_HOST=$(
+            gum input --prompt="LibreChat host (FQDN): " --width=100 \
+            --placeholder="e.g., chat.example.com"
+        )
+    done
+
+    while [ -z "${KEYCLOAK_HOST}" ]; do
+        KEYCLOAK_HOST=$(
+            gum input --prompt="Keycloak host (FQDN): " --width=100 \
+            --placeholder="e.g., auth.example.com"
+        )
+    done
+
+    # Ask about Tavily MCP if not set
+    if [ -z "${TAVILY_MCP_ENABLED}" ]; then
+        if gum confirm "Enable Tavily MCP for web search?"; then
+            TAVILY_MCP_ENABLED="true"
+        else
+            TAVILY_MCP_ENABLED="false"
+        fi
+    fi
+
+    # Check External Secrets Operator if Tavily is enabled
+    if [ "${TAVILY_MCP_ENABLED}" = "true" ]; then
+        if ! helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            echo "Error: Tavily MCP requires External Secrets Operator, but it is not installed."
+            echo "Please install External Secrets Operator first or set TAVILY_MCP_ENABLED=false"
+            exit 1
+        fi
+        # Check if Tavily API key exists in Vault
+        if ! just vault::exist tavily/api &>/dev/null; then
+            echo "Tavily API key not found in Vault."
+            TAVILY_API_KEY=$(
+                gum input --prompt="Enter Tavily API Key: " --width=100 \
+                --placeholder="tvly-xxxxxxxxxxxxxxxx"
+            )
+            just vault::put tavily/api api_key="${TAVILY_API_KEY}"
+            echo "Tavily API key stored in Vault"
+        fi
+        # Create/update Tavily ExternalSecret
+        gomplate -f tavily-external-secret.gomplate.yaml | kubectl apply -f -
+        echo "Waiting for Tavily secret to be synced..."
+        kubectl wait --for=condition=Ready externalsecret/tavily-api-key \
+            -n ${LIBRECHAT_NAMESPACE} --timeout=60s
+    fi
+
+    gomplate -f values.gomplate.yaml -o values.yaml
+    gomplate -f librechat-config.gomplate.yaml -o librechat-config.yaml
+
+    kubectl delete configmap librechat-config -n ${LIBRECHAT_NAMESPACE} --ignore-not-found
+    kubectl create configmap librechat-config -n ${LIBRECHAT_NAMESPACE} \
+        --from-file=librechat.yaml=librechat-config.yaml
+
+    helm upgrade librechat oci://ghcr.io/danny-avila/librechat-chart/librechat \
+        --version ${LIBRECHAT_CHART_VERSION} \
+        -n ${LIBRECHAT_NAMESPACE} \
+        --wait --timeout=10m \
+        -f values.yaml
+
+    echo "LibreChat upgraded successfully"
+    if [ "${TAVILY_MCP_ENABLED}" = "true" ]; then
+        echo "Tavily MCP: Enabled"
+    fi
+
+# Uninstall LibreChat
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall librechat -n ${LIBRECHAT_NAMESPACE} --wait --ignore-not-found
+    just delete-namespace
+
+    just delete-keycloak-client || true
+
+    echo "LibreChat uninstalled successfully"
+    echo ""
+    echo "Note: Vault secrets were NOT deleted:"
+    echo "  - librechat/credentials"
+    echo ""
+    echo "To delete, run:"
+    echo "  just vault::delete librechat/credentials"
+
+# Show LibreChat logs
+logs:
+    kubectl logs -n ${LIBRECHAT_NAMESPACE} -l app.kubernetes.io/name=librechat -f
+
+# Get pod status
+status:
+    kubectl get pods -n ${LIBRECHAT_NAMESPACE}
+
+# Restart LibreChat
+restart:
+    kubectl rollout restart deployment/librechat-librechat -n ${LIBRECHAT_NAMESPACE}
