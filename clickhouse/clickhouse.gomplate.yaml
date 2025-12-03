@@ -17,6 +17,18 @@ spec:
       nodes:
         - host: zookeeper
           port: 2181
+    files:
+      # Use transposed schema for system log tables to reduce memory usage during merges
+      # See: https://altinity.com/blog/a-clickhouse-25-8-detective-story-high-memory-usage-and-how-to-fix-it
+      system_logs.xml: |
+        <clickhouse>
+          <metric_log>
+            <schema_type>transposed</schema_type>
+          </metric_log>
+          <asynchronous_metric_log>
+            <schema_type>transposed</schema_type>
+          </asynchronous_metric_log>
+        </clickhouse>
     users:
       admin/k8s_secret_password: clickhouse-credentials/admin
       admin/networks/ip: "::/0"
@@ -46,4 +58,4 @@ spec:
             - ReadWriteOnce
           resources:
             requests:
-              storage: 100Mi
+              storage: 1Gi
