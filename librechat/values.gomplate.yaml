@@ -94,10 +94,10 @@ ingress:
 
 resources:
   requests:
-    cpu: 100m
+    cpu: 25m
     memory: 512Mi
   limits:
-    cpu: 1000m
+    cpu: 100m
     memory: 1Gi
 
 mongodb:
@@ -110,6 +110,13 @@ mongodb:
     tag: "latest"
   persistence:
     size: 8Gi
+  resources:
+    requests:
+      cpu: 75m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 2Gi
   podSecurityContext:
     fsGroup: 1001
     seccompProfile:
@@ -132,6 +139,13 @@ meilisearch:
     tag: "v1.7.3"
   auth:
     existingMasterKeySecret: "librechat-credentials-env"
+  resources:
+    requests:
+      cpu: 25m
+      memory: 256Mi
+    limits:
+      cpu: 100m
+      memory: 1Gi
   podSecurityContext:
     fsGroup: 1000
     seccompProfile:
