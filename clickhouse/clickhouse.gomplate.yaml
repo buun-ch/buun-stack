@@ -29,6 +29,17 @@ spec:
             <schema_type>transposed</schema_type>
           </asynchronous_metric_log>
         </clickhouse>
+      # Enable Prometheus metrics endpoint
+      prometheus.xml: |
+        <clickhouse>
+          <prometheus>
+            <endpoint>/metrics</endpoint>
+            <port>9363</port>
+            <metrics>true</metrics>
+            <events>true</events>
+            <asynchronous_metrics>true</asynchronous_metrics>
+          </prometheus>
+        </clickhouse>
     users:
       admin/k8s_secret_password: clickhouse-credentials/admin
       admin/networks/ip: "::/0"

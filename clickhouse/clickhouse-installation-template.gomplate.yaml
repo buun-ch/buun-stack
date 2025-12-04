@@ -20,6 +20,10 @@ spec:
           containers:
             - name: clickhouse
               image: {{ .Env.CLICKHOUSE_IMAGE }}
+              ports:
+                - name: prometheus
+                  containerPort: 9363
+                  protocol: TCP
               resources:
                 requests:
                   cpu: {{ .Env.CLICKHOUSE_CPU_REQUEST }}

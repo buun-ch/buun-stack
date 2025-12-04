@@ -2,4 +2,5 @@ clickhouse-credentials-external-secret.yaml
 clickhouse-ingress.yaml
 clickhouse-installation-template.yaml
 clickhouse-operator-values.yaml
+clickhouse-servicemonitor.yaml
 clickhouse.yaml

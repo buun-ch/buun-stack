@@ -1,0 +1,67 @@
+{{- if .Env.MONITORING_ENABLED }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse-metrics
+  namespace: {{ .Env.CLICKHOUSE_NAMESPACE }}
+  labels:
+    app: clickhouse
+    clickhouse.altinity.com/chi: clickhouse
+spec:
+  type: ClusterIP
+  ports:
+    - name: prometheus
+      port: 9363
+      targetPort: 9363
+      protocol: TCP
+  selector:
+    clickhouse.altinity.com/chi: clickhouse
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: clickhouse
+  namespace: {{ .Env.CLICKHOUSE_NAMESPACE }}
+  labels:
+    app: clickhouse
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: clickhouse
+      clickhouse.altinity.com/chi: clickhouse
+  namespaceSelector:
+    matchNames:
+      - {{ .Env.CLICKHOUSE_NAMESPACE }}
+  endpoints:
+    - port: prometheus
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: clickhouse-operator
+  namespace: {{ .Env.CLICKHOUSE_NAMESPACE }}
+  labels:
+    app: clickhouse-operator
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: altinity-clickhouse-operator
+  namespaceSelector:
+    matchNames:
+      - {{ .Env.CLICKHOUSE_NAMESPACE }}
+  endpoints:
+    - port: ch-metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+    - port: op-metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+{{- end }}

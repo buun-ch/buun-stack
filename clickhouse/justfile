@@ -5,6 +5,8 @@ export CLICKHOUSE_HOST := env("CLICKHOUSE_HOST", "")
 export CLICKHOUSE_CHART_VERSION := env("CLICKHOUSE_CHART_VERSION", "0.25.5")
 export CLICKHOUSE_IMAGE := env("CLICKHOUSE_IMAGE", "clickhouse/clickhouse-server:25.10")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
 
 # ClickHouse resource settings
 export CLICKHOUSE_MEMORY_REQUEST := env("CLICKHOUSE_MEMORY_REQUEST", "1Gi")
@@ -107,6 +109,16 @@ install:
             --placeholder="e.g., clickhouse.example.com"
         )
     done
+    # Check if Prometheus is available and ask about monitoring
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            else
+                MONITORING_ENABLED="false"
+            fi
+        fi
+    fi
     echo "Installing ClickHouse..."
     just create-namespace
     just install-zookeeper
@@ -124,6 +136,10 @@ install:
     kubectl wait --for=jsonpath='{.status.status}'=Completed \
         clickhouseinstallation/clickhouse -n ${CLICKHOUSE_NAMESPACE} --timeout=600s
     just setup-ingress ${CLICKHOUSE_HOST}
+    # Setup monitoring if enabled
+    if [ "${MONITORING_ENABLED}" = "true" ]; then
+        just setup-monitoring
+    fi
     echo "ClickHouse installation completed successfully"
     echo "ClickHouse API at: https://${CLICKHOUSE_HOST}"
 
@@ -136,6 +152,27 @@ setup-ingress host:
     gomplate -f clickhouse-ingress.gomplate.yaml -o clickhouse-ingress.yaml
     kubectl apply -n ${CLICKHOUSE_NAMESPACE} -f clickhouse-ingress.yaml
     echo "ClickHouse Ingress configured successfully"
+
+# Setup Prometheus monitoring for ClickHouse
+setup-monitoring:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up Prometheus monitoring for ClickHouse..."
+    kubectl label namespace ${CLICKHOUSE_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+    MONITORING_ENABLED="true" gomplate -f clickhouse-servicemonitor.gomplate.yaml \
+        -o clickhouse-servicemonitor.yaml
+    kubectl apply -f clickhouse-servicemonitor.yaml
+    echo "Prometheus monitoring configured successfully"
+
+# Remove Prometheus monitoring for ClickHouse
+remove-monitoring:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Removing Prometheus monitoring for ClickHouse..."
+    kubectl delete servicemonitor clickhouse clickhouse-operator -n ${CLICKHOUSE_NAMESPACE} --ignore-not-found
+    kubectl delete service clickhouse-metrics -n ${CLICKHOUSE_NAMESPACE} --ignore-not-found
+    kubectl label namespace ${CLICKHOUSE_NAMESPACE} buun.channel/enable-monitoring- --ignore-not-found
+    echo "Prometheus monitoring removed"
 
 # Uninstall ClickHouse (delete_volumes='false' to preserve PVCs and namespace)
 uninstall delete-volumes='true':
