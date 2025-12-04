@@ -28,6 +28,7 @@ mod longhorn
 mod metabase
 mod mlflow
 mod minio
+mod nats
 mod nvidia-device-plugin
 mod fairwinds-polaris
 mod oauth2-proxy

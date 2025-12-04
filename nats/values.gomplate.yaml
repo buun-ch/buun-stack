@@ -1,0 +1,64 @@
+config:
+  cluster:
+    enabled: {{ if gt (conv.ToInt .Env.NATS_REPLICAS) 1 }}true{{ else }}false{{ end }}
+    replicas: {{ .Env.NATS_REPLICAS }}
+
+  jetstream:
+    enabled: {{ .Env.NATS_JETSTREAM_ENABLED }}
+    fileStore:
+      enabled: true
+      dir: /data
+      pvc:
+        enabled: true
+        size: {{ .Env.NATS_JETSTREAM_STORAGE_SIZE }}
+    memoryStore:
+      enabled: true
+      maxSize: {{ .Env.NATS_JETSTREAM_MEMORY_SIZE }}
+
+  monitor:
+    enabled: true
+    port: 8222
+
+container:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  merge:
+    securityContext:
+      runAsUser: 1000
+      runAsNonRoot: true
+      allowPrivilegeEscalation: false
+      seccompProfile:
+        type: RuntimeDefault
+      capabilities:
+        drop:
+          - ALL
+
+reloader:
+  enabled: true
+  merge:
+    securityContext:
+      runAsUser: 1000
+      runAsNonRoot: true
+      allowPrivilegeEscalation: false
+      seccompProfile:
+        type: RuntimeDefault
+      capabilities:
+        drop:
+          - ALL
+
+podTemplate:
+  merge:
+    spec:
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+natsBox:
+  enabled: false

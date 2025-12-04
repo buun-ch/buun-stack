@@ -1,0 +1,113 @@
+set fallback := true
+
+export NATS_NAMESPACE := env("NATS_NAMESPACE", "nats")
+export NATS_CHART_VERSION := env("NATS_CHART_VERSION", "2.12.2")
+export NATS_REPLICAS := env("NATS_REPLICAS", "1")
+export NATS_JETSTREAM_ENABLED := env("NATS_JETSTREAM_ENABLED", "true")
+export NATS_JETSTREAM_STORAGE_SIZE := env("NATS_JETSTREAM_STORAGE_SIZE", "10Gi")
+export NATS_JETSTREAM_MEMORY_SIZE := env("NATS_JETSTREAM_MEMORY_SIZE", "256Mi")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add nats https://nats-io.github.io/k8s/helm/charts/
+    helm repo update nats
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove nats
+
+# Create NATS namespace
+create-namespace:
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace ${NATS_NAMESPACE} &>/dev/null; then
+        kubectl create namespace ${NATS_NAMESPACE}
+    fi
+    kubectl label namespace ${NATS_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=restricted \
+        pod-security.kubernetes.io/enforce-version=latest \
+        pod-security.kubernetes.io/warn=restricted \
+        pod-security.kubernetes.io/warn-version=latest \
+        --overwrite
+
+# Delete NATS namespace
+delete-namespace:
+    kubectl delete namespace ${NATS_NAMESPACE} --ignore-not-found
+
+# Install NATS
+install:
+    #!/bin/bash
+    set -euo pipefail
+
+    just create-namespace
+    just add-helm-repo
+
+    gomplate -f values.gomplate.yaml -o values.yaml
+    helm upgrade --install nats nats/nats \
+        --version ${NATS_CHART_VERSION} \
+        -n ${NATS_NAMESPACE} \
+        -f values.yaml \
+        --wait
+
+    echo ""
+    echo "NATS installed successfully"
+    echo "Namespace: ${NATS_NAMESPACE}"
+    echo "Replicas: ${NATS_REPLICAS}"
+    echo "JetStream enabled: ${NATS_JETSTREAM_ENABLED}"
+    echo ""
+    echo "Internal URL: nats://nats.${NATS_NAMESPACE}.svc:4222"
+
+# Upgrade NATS
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+
+    gomplate -f values.gomplate.yaml -o values.yaml
+    helm upgrade nats nats/nats \
+        --version ${NATS_CHART_VERSION} \
+        -n ${NATS_NAMESPACE} \
+        -f values.yaml \
+        --wait
+
+    echo "NATS upgraded successfully"
+
+# Uninstall NATS
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    if ! gum confirm "Are you sure you want to uninstall NATS?"; then
+        echo "Aborted"
+        exit 0
+    fi
+    helm uninstall nats -n ${NATS_NAMESPACE} --wait --ignore-not-found
+    just delete-namespace
+    echo "NATS uninstalled"
+
+# Show NATS status
+status:
+    kubectl get pods -n ${NATS_NAMESPACE}
+    kubectl get svc -n ${NATS_NAMESPACE}
+
+# Show NATS logs
+logs:
+    kubectl logs -n ${NATS_NAMESPACE} -l app.kubernetes.io/name=nats -f
+
+# Show server info via monitoring endpoint
+server-info:
+    kubectl exec -n ${NATS_NAMESPACE} nats-0 -c nats -- \
+        wget -qO- http://localhost:8222/varz | head -50
+
+# Show JetStream info via monitoring endpoint
+js-info:
+    kubectl exec -n ${NATS_NAMESPACE} nats-0 -c nats -- \
+        wget -qO- http://localhost:8222/jsz
+
+# Port forward for local testing
+port-forward:
+    @echo "NATS available at localhost:4222"
+    @echo "Monitor available at http://localhost:8222"
+    kubectl port-forward -n ${NATS_NAMESPACE} svc/nats 4222:4222 8222:8222
