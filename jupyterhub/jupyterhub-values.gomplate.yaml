@@ -445,6 +445,10 @@ ingress:
   annotations:
     kubernetes.io/ingress.class: traefik
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # Enable sticky sessions for WebSocket connections (required for Jupyter RTC/MCP)
+    traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+    traefik.ingress.kubernetes.io/service.sticky.cookie.name: jupyter-session
+    traefik.ingress.kubernetes.io/service.sticky.cookie.secure: "true"
   ingressClassName: traefik
   hosts:
     - {{ .Env.JUPYTERHUB_HOST }}
