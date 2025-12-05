@@ -69,13 +69,13 @@ langfuse:
     tls:
       enabled: true
 
-  # Resource configuration based on Goldilocks/VPA recommendations
-  # CPU limits increased to handle startup spikes
+  # Resource recommendations from Goldilocks VPA
+  # web target: cpu=15m, memory=717Mi
   web:
     resources:
       requests:
-        cpu: 15m
-        memory: 704Mi
+        cpu: 25m
+        memory: 768Mi
       limits:
         cpu: 100m
         memory: 1.5Gi
@@ -89,10 +89,12 @@ langfuse:
       timeoutSeconds: 30
       failureThreshold: 5
 
+  # Resource recommendations from Goldilocks VPA
+  # worker target: cpu=15m, memory=380Mi
   worker:
     resources:
       requests:
-        cpu: 15m
+        cpu: 25m
         memory: 512Mi
       limits:
         cpu: 100m
@@ -113,6 +115,16 @@ redis:
     username: "default"
     existingSecret: redis-auth
     existingSecretPasswordKey: secret
+  # Resource recommendations from Goldilocks VPA
+  # valkey target: cpu=15m, memory=100Mi
+  master:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 128Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
 
 clickhouse:
   deploy: false

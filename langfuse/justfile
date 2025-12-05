@@ -98,8 +98,8 @@ install:
         --version ${LANGFUSE_CHART_VERSION} -n ${LANGFUSE_NAMESPACE} --wait \
         -f langfuse-values.yaml
 
-# Uninstall Langfuse
-uninstall:
+# Uninstall Langfuse (delete-data: true to delete database and storage)
+uninstall delete-data='false':
     #!/bin/bash
     set -euo pipefail
     helm uninstall langfuse -n ${LANGFUSE_NAMESPACE} --wait --ignore-not-found
@@ -108,19 +108,29 @@ uninstall:
     # Clean up Keycloak client and Vault secrets to avoid stale credentials
     just delete-keycloak-client || true
 
-    echo "Langfuse uninstalled successfully"
-    echo ""
-    echo "Note: The following resources were NOT deleted:"
-    echo "  - PostgreSQL user and database (langfuse)"
-    echo "  - ClickHouse user and database (langfuse)"
-    echo "  - MinIO user and bucket (langfuse)"
-    echo "  - Keycloak user (langfuse)"
-    echo ""
-    echo "To delete these resources, run:"
-    echo "  just langfuse::delete-postgres-user-and-db"
-    echo "  just langfuse::delete-clickhouse-user"
-    echo "  just langfuse::delete-minio-user"
-    echo "  just langfuse::delete-keycloak-user"
+    if [ "{{ delete-data }}" = "true" ]; then
+        echo "Deleting database and storage..."
+        just delete-postgres-user-and-db || true
+        just delete-clickhouse-user || true
+        just delete-minio-user || true
+        just delete-keycloak-user || true
+        just delete-salt || true
+        just delete-nextauth-secret || true
+        just delete-redis-password || true
+        echo "Langfuse uninstalled with all data deleted."
+    else
+        echo "Langfuse uninstalled successfully"
+        echo ""
+        echo "Note: The following resources were NOT deleted:"
+        echo "  - PostgreSQL user and database (langfuse)"
+        echo "  - ClickHouse user and database (langfuse)"
+        echo "  - MinIO user and bucket (langfuse)"
+        echo "  - Keycloak user (langfuse)"
+        echo "  - Vault secrets (langfuse/*)"
+        echo ""
+        echo "To delete all data, run:"
+        echo "  just langfuse::uninstall true"
+    fi
 
 # Create all secrets (PostgreSQL, Keycloak, MinIO, Redis)
 create-secrets:
