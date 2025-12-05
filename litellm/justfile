@@ -5,12 +5,15 @@ export LITELLM_CHART_VERSION := env("LITELLM_CHART_VERSION", "0.1.825")
 export LITELLM_HOST := env("LITELLM_HOST", "")
 export LITELLM_OIDC_CLIENT_ID := env("LITELLM_OIDC_CLIENT_ID", "litellm")
 export LITELLM_OIDC_ENABLED := env("LITELLM_OIDC_ENABLED", "")
+export LITELLM_LANGFUSE_INTEGRATION_ENABLED := env("LITELLM_LANGFUSE_INTEGRATION_ENABLED", "")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 export OLLAMA_NAMESPACE := env("OLLAMA_NAMESPACE", "ollama")
 export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
 export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export LANGFUSE_HOST := env("LANGFUSE_HOST", "")
+export LANGFUSE_NAMESPACE := env("LANGFUSE_NAMESPACE", "langfuse")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 
 [private]
@@ -131,9 +134,9 @@ add-model:
     case $provider in
         anthropic)
             model=$(gum choose --header="Select Anthropic model:" \
-                "claude-sonnet-4-20250514" \
-                "claude-haiku-4-20251015" \
-                "claude-opus-4-20250514")
+                "claude-sonnet-4-5" \
+                "claude-haiku-4-5" \
+                "claude-opus-4-5")
             api_key_line="    api_key: os.environ/ANTHROPIC_API_KEY"
             ;;
         openai)
@@ -311,6 +314,19 @@ install:
         fi
     fi
 
+    if [ -z "${LITELLM_LANGFUSE_INTEGRATION_ENABLED}" ]; then
+        if gum confirm "Enable Langfuse integration?"; then
+            LITELLM_LANGFUSE_INTEGRATION_ENABLED="true"
+        fi
+    fi
+
+    if [ "${LITELLM_LANGFUSE_INTEGRATION_ENABLED}" = "true" ]; then
+        while [ -z "${LANGFUSE_HOST}" ]; do
+            LANGFUSE_HOST=$(gum input --prompt="Langfuse host (FQDN): " --width=80 \
+                --placeholder="e.g., langfuse.example.com")
+        done
+    fi
+
     echo "Installing LiteLLM..."
 
     just create-namespace
@@ -335,6 +351,18 @@ install:
     just create-keycloak-auth-secret
     LITELLM_OIDC_ENABLED="true"
 
+    if [ "${LITELLM_LANGFUSE_INTEGRATION_ENABLED}" = "true" ]; then
+        echo "Setting up Langfuse integration..."
+        if ! just vault::exist litellm/langfuse &>/dev/null; then
+            echo ""
+            echo "Langfuse API keys are required."
+            echo "You can get these from Langfuse UI: Settings > API Keys"
+            echo ""
+            just set-langfuse-keys
+        fi
+        just create-langfuse-auth-secret
+    fi
+
     echo "Generating Helm values..."
     gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml
 
@@ -347,6 +375,9 @@ install:
     echo "LiteLLM installed successfully!"
     echo "Access LiteLLM at: https://${LITELLM_HOST}"
     echo "SSO Callback URL: https://${LITELLM_HOST}/sso/callback"
+    if [ "${LITELLM_LANGFUSE_INTEGRATION_ENABLED}" = "true" ]; then
+        echo "Langfuse integration: enabled (https://${LANGFUSE_HOST})"
+    fi
 
 # Upgrade LiteLLM
 upgrade:
@@ -360,12 +391,41 @@ upgrade:
         LITELLM_HOST=$(gum input --prompt="LiteLLM host (FQDN): " --width=80)
     done
 
+    # Detect existing OIDC configuration
+    if [ -z "${LITELLM_OIDC_ENABLED}" ]; then
+        if kubectl get secret keycloak-auth -n ${LITELLM_NAMESPACE} &>/dev/null; then
+            echo "Detected existing OIDC configuration"
+            LITELLM_OIDC_ENABLED="true"
+            if [ -z "${KEYCLOAK_HOST}" ]; then
+                KEYCLOAK_HOST=$(gum input --prompt="Keycloak host (FQDN): " --width=80 \
+                    --placeholder="e.g., auth.example.com")
+            fi
+        fi
+    fi
+
     if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
         if [ -z "${MONITORING_ENABLED}" ]; then
             if gum confirm "Enable Prometheus monitoring?"; then
                 MONITORING_ENABLED="true"
             fi
         fi
+    fi
+
+    # Detect existing Langfuse configuration
+    if [ -z "${LITELLM_LANGFUSE_INTEGRATION_ENABLED}" ]; then
+        if kubectl get secret langfuse-auth -n ${LITELLM_NAMESPACE} &>/dev/null; then
+            echo "Detected existing Langfuse configuration"
+            LITELLM_LANGFUSE_INTEGRATION_ENABLED="true"
+        elif gum confirm "Enable Langfuse integration?"; then
+            LITELLM_LANGFUSE_INTEGRATION_ENABLED="true"
+        fi
+    fi
+
+    if [ "${LITELLM_LANGFUSE_INTEGRATION_ENABLED}" = "true" ]; then
+        while [ -z "${LANGFUSE_HOST}" ]; do
+            LANGFUSE_HOST=$(gum input --prompt="Langfuse host (FQDN): " --width=80 \
+                --placeholder="e.g., langfuse.example.com")
+        done
     fi
 
     echo "Upgrading LiteLLM..."
@@ -376,6 +436,17 @@ upgrade:
     fi
 
     just create-api-key-external-secret
+
+    if [ "${LITELLM_LANGFUSE_INTEGRATION_ENABLED}" = "true" ]; then
+        if ! just vault::exist litellm/langfuse &>/dev/null; then
+            echo ""
+            echo "Langfuse API keys are required."
+            echo "You can get these from Langfuse UI: Settings > API Keys"
+            echo ""
+            just set-langfuse-keys
+        fi
+        just create-langfuse-auth-secret
+    fi
 
     echo "Generating Helm values..."
     gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml
@@ -391,9 +462,15 @@ upgrade:
     echo ""
     echo "LiteLLM upgraded successfully!"
     echo "Access LiteLLM at: https://${LITELLM_HOST}"
+    if [ "${LITELLM_OIDC_ENABLED}" = "true" ]; then
+        echo "SSO authentication: enabled"
+    fi
+    if [ "${LITELLM_LANGFUSE_INTEGRATION_ENABLED}" = "true" ]; then
+        echo "Langfuse integration: enabled (https://${LANGFUSE_HOST})"
+    fi
 
-# Uninstall LiteLLM
-uninstall:
+# Uninstall LiteLLM (delete-data: true to delete database and Vault secrets)
+uninstall delete-data='false':
     #!/bin/bash
     set -euo pipefail
     if ! gum confirm "Uninstall LiteLLM?"; then
@@ -404,30 +481,33 @@ uninstall:
     helm uninstall litellm -n ${LITELLM_NAMESPACE} --ignore-not-found --wait
     just delete-api-key-external-secret
     just delete-postgres-secret
+    just delete-keycloak-client || true
+    just delete-keycloak-auth-secret || true
+    just delete-langfuse-auth-secret || true
     just delete-namespace
-    echo "LiteLLM uninstalled."
 
-# Clean up all resources including database
-cleanup:
-    #!/bin/bash
-    set -euo pipefail
-    echo "This will delete:"
-    echo "  - LiteLLM deployment"
-    echo "  - LiteLLM database"
-    echo "  - All API keys from Vault"
-    echo ""
-    if ! gum confirm "Are you sure?"; then
-        echo "Cancelled."
-        exit 0
+    if [ "{{ delete-data }}" = "true" ]; then
+        echo "Deleting database and Vault secrets..."
+        just postgres::delete-user-and-db litellm litellm || true
+        just vault::delete litellm/db || true
+        just vault::delete keycloak/client/litellm || true
+        just vault::delete litellm/langfuse || true
+        # Clean up API keys from Vault
+        providers=$(just get-required-providers 2>/dev/null || true)
+        for provider in $providers; do
+            just vault::delete "litellm/${provider}" || true
+        done
+        echo "LiteLLM uninstalled with all data deleted."
+    else
+        echo "LiteLLM uninstalled."
+        echo ""
+        echo "Note: The following resources were NOT deleted:"
+        echo "  - PostgreSQL user and database (litellm)"
+        echo "  - Vault secrets (litellm/*, keycloak/client/litellm)"
+        echo ""
+        echo "To delete all data, run:"
+        echo "  just litellm::uninstall true"
     fi
-    just uninstall || true
-    just postgres::delete-db litellm || true
-    # Clean up API keys from Vault
-    providers=$(just get-required-providers 2>/dev/null || true)
-    for provider in $providers; do
-        just vault::delete "litellm/${provider}" || true
-    done
-    echo "Cleanup completed."
 
 # Generate virtual key
 generate-virtual-key user='' model='':
@@ -441,17 +521,22 @@ generate-virtual-key user='' model='':
     if [ -z "${model}" ]; then
         models=$(yq -r '.[].model_name' models.yaml 2>/dev/null || echo "")
         if [ -n "$models" ]; then
-            model=$(echo "$models" | gum choose --header="Select model:")
+            model=$(echo -e "all\n$models" | gum choose --header="Select model (or 'all' for all models):")
         else
-            model=$(gum input --prompt="Model: " --width=80)
+            model=$(gum input --prompt="Model (or 'all' for all models): " --width=80)
         fi
     fi
     master_key=$(kubectl get secret litellm-masterkey -n ${LITELLM_NAMESPACE} \
         -o jsonpath="{.data.masterkey}" | base64 --decode)
+    if [ "${model}" = "all" ]; then
+        data="{\"metadata\": {\"user\": \"${user}\"}}"
+    else
+        data="{\"models\": [\"${model}\"], \"metadata\": {\"user\": \"${user}\"}}"
+    fi
     response=$(curl -s "https://${LITELLM_HOST}/key/generate" \
         --header "Authorization: Bearer ${master_key}" \
         --header "Content-Type: application/json" \
-        --data-raw "{\"models\": [\"${model}\"], \"metadata\": {\"user\": \"${user}\"}}")
+        --data-raw "${data}")
     echo "${response}" | jq .
     echo ""
     echo "API Key: $(echo "${response}" | jq -r '.key')"
@@ -692,3 +777,298 @@ disable-oidc:
     echo "OIDC authentication disabled."
     echo "Note: Keycloak client was NOT deleted. To clean up, run:"
     echo "  just litellm::delete-keycloak-client"
+
+# Set Langfuse API keys for LiteLLM integration
+set-langfuse-keys public_key='' secret_key='':
+    #!/bin/bash
+    set -euo pipefail
+    public_key="{{ public_key }}"
+    secret_key="{{ secret_key }}"
+    if [ -z "${public_key}" ]; then
+        public_key=$(gum input --prompt="Langfuse Public Key: " --width=80)
+    fi
+    if [ -z "${secret_key}" ]; then
+        secret_key=$(gum input --prompt="Langfuse Secret Key: " --password --width=80)
+    fi
+    if [ -z "${public_key}" ] || [ -z "${secret_key}" ]; then
+        echo "Error: Both public key and secret key are required"
+        exit 1
+    fi
+    just vault::put litellm/langfuse public_key="${public_key}" secret_key="${secret_key}"
+    echo "Langfuse API keys stored in Vault at 'litellm/langfuse'"
+
+# Get Langfuse API keys
+get-langfuse-keys:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Public Key: $(just vault::get litellm/langfuse public_key)"
+    echo "Secret Key: $(just vault::get litellm/langfuse secret_key)"
+
+# Delete Langfuse API keys
+delete-langfuse-keys:
+    #!/bin/bash
+    set -euo pipefail
+    if just vault::exist litellm/langfuse &>/dev/null; then
+        just vault::delete litellm/langfuse
+        echo "Langfuse API keys deleted from Vault"
+    else
+        echo "Langfuse API keys not found in Vault"
+    fi
+
+# Create Langfuse auth external secret
+create-langfuse-auth-secret:
+    #!/bin/bash
+    set -euo pipefail
+    if ! just vault::exist litellm/langfuse &>/dev/null; then
+        echo "Error: Langfuse API keys not found in Vault."
+        echo "Please set the keys first:"
+        echo "  just litellm::set-langfuse-keys"
+        exit 1
+    fi
+    kubectl delete externalsecret langfuse-auth-external-secret -n ${LITELLM_NAMESPACE} --ignore-not-found
+    kubectl delete secret langfuse-auth -n ${LITELLM_NAMESPACE} --ignore-not-found
+    gomplate -f langfuse-auth-external-secret.gomplate.yaml | kubectl apply -f -
+    echo "Waiting for Langfuse auth secret to be ready..."
+    kubectl wait --for=condition=Ready externalsecret/langfuse-auth-external-secret \
+        -n ${LITELLM_NAMESPACE} --timeout=60s
+    echo "Langfuse auth secret created"
+
+# Delete Langfuse auth external secret
+delete-langfuse-auth-secret:
+    kubectl delete externalsecret langfuse-auth-external-secret -n ${LITELLM_NAMESPACE} --ignore-not-found
+    kubectl delete secret langfuse-auth -n ${LITELLM_NAMESPACE} --ignore-not-found
+
+# Setup Langfuse integration
+setup-langfuse:
+    #!/bin/bash
+    set -euo pipefail
+
+    echo "Setting up Langfuse integration for LiteLLM..."
+
+    if ! helm status langfuse -n ${LANGFUSE_NAMESPACE} &>/dev/null; then
+        echo "Warning: Langfuse is not installed."
+        echo "Please install Langfuse first or provide external Langfuse credentials."
+    fi
+
+    while [ -z "${LANGFUSE_HOST}" ]; do
+        LANGFUSE_HOST=$(
+            gum input --prompt="Langfuse host (FQDN): " --width=100 \
+            --placeholder="e.g., langfuse.example.com"
+        )
+    done
+
+    if ! just vault::exist litellm/langfuse &>/dev/null; then
+        echo ""
+        echo "Langfuse API keys are required."
+        echo "You can get these from Langfuse UI: Settings > API Keys"
+        echo ""
+        just set-langfuse-keys
+    fi
+
+    just create-langfuse-auth-secret
+
+    while [ -z "${LITELLM_HOST}" ]; do
+        LITELLM_HOST=$(gum input --prompt="LiteLLM host (FQDN): " --width=80)
+    done
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            fi
+        fi
+    fi
+
+    LITELLM_LANGFUSE_INTEGRATION_ENABLED="true"
+
+    echo "Generating Helm values with Langfuse integration..."
+    gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml
+
+    kubectl delete job litellm-migrations -n ${LITELLM_NAMESPACE} --ignore-not-found
+
+    echo "Upgrading LiteLLM with Langfuse integration..."
+    helm upgrade litellm oci://ghcr.io/berriai/litellm-helm \
+        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait \
+        -f litellm-values.yaml
+
+    echo ""
+    echo "Langfuse integration configured successfully!"
+    echo "LiteLLM will now send traces to: https://${LANGFUSE_HOST}"
+
+# Disable Langfuse integration
+disable-langfuse:
+    #!/bin/bash
+    set -euo pipefail
+
+    echo "Disabling Langfuse integration for LiteLLM..."
+
+    LITELLM_LANGFUSE_INTEGRATION_ENABLED=""
+
+    while [ -z "${LITELLM_HOST}" ]; do
+        LITELLM_HOST=$(gum input --prompt="LiteLLM host (FQDN): " --width=80)
+    done
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            fi
+        fi
+    fi
+
+    echo "Generating Helm values without Langfuse..."
+    gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml
+
+    kubectl delete job litellm-migrations -n ${LITELLM_NAMESPACE} --ignore-not-found
+
+    echo "Upgrading LiteLLM without Langfuse..."
+    helm upgrade litellm oci://ghcr.io/berriai/litellm-helm \
+        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait \
+        -f litellm-values.yaml
+
+    echo ""
+    echo "Langfuse integration disabled."
+    echo "Note: Langfuse API keys were NOT deleted. To clean up, run:"
+    echo "  just litellm::delete-langfuse-keys"
+
+# Create a team
+create-team name='':
+    #!/bin/bash
+    set -euo pipefail
+    name="{{ name }}"
+    while [ -z "${name}" ]; do
+        name=$(gum input --prompt="Team name: " --width=80)
+    done
+    master_key=$(just master-key)
+    response=$(curl -s "https://${LITELLM_HOST}/team/new" \
+        --header "Authorization: Bearer ${master_key}" \
+        --header "Content-Type: application/json" \
+        --data-raw "{\"team_alias\": \"${name}\"}")
+    echo "${response}" | jq .
+    team_id=$(echo "${response}" | jq -r '.team_id')
+    echo ""
+    echo "Team created: ${name}"
+    echo "Team ID: ${team_id}"
+
+# List teams
+list-teams:
+    #!/bin/bash
+    set -euo pipefail
+    master_key=$(just master-key)
+    curl -s "https://${LITELLM_HOST}/team/list" \
+        --header "Authorization: Bearer ${master_key}" | jq .
+
+# Get team info
+get-team team_id='':
+    #!/bin/bash
+    set -euo pipefail
+    team_id="{{ team_id }}"
+    if [ -z "${team_id}" ]; then
+        echo "Usage: just litellm::get-team team_id=<team_id>"
+        exit 1
+    fi
+    master_key=$(just master-key)
+    curl -s "https://${LITELLM_HOST}/team/info?team_id=${team_id}" \
+        --header "Authorization: Bearer ${master_key}" | jq .
+
+# Delete a team
+delete-team team_id='':
+    #!/bin/bash
+    set -euo pipefail
+    team_id="{{ team_id }}"
+    if [ -z "${team_id}" ]; then
+        echo "Usage: just litellm::delete-team team_id=<team_id>"
+        exit 1
+    fi
+    if ! gum confirm "Delete team ${team_id}?"; then
+        echo "Cancelled."
+        exit 0
+    fi
+    master_key=$(just master-key)
+    curl -s "https://${LITELLM_HOST}/team/delete" \
+        --header "Authorization: Bearer ${master_key}" \
+        --header "Content-Type: application/json" \
+        --data-raw "{\"team_ids\": [\"${team_id}\"]}" | jq .
+    echo "Team deleted."
+
+# Set Langfuse project for a team
+set-team-langfuse-project team_id='' public_key='' secret_key='':
+    #!/bin/bash
+    set -euo pipefail
+    team_id="{{ team_id }}"
+    public_key="{{ public_key }}"
+    secret_key="{{ secret_key }}"
+    if [ -z "${team_id}" ]; then
+        master_key=$(just master-key)
+        teams=$(curl -s "https://${LITELLM_HOST}/team/list" \
+            --header "Authorization: Bearer ${master_key}")
+        team_aliases=$(echo "${teams}" | jq -r '.[] | "\(.team_id) (\(.team_alias // "no alias"))"')
+        if [ -z "${team_aliases}" ]; then
+            echo "No teams found. Create a team first:"
+            echo "  just litellm::create-team"
+            exit 1
+        fi
+        selected=$(echo "${team_aliases}" | gum choose --header="Select team:")
+        team_id=$(echo "${selected}" | cut -d' ' -f1)
+    fi
+    if [ -z "${public_key}" ]; then
+        public_key=$(gum input --prompt="Langfuse Public Key for this team: " --width=80)
+    fi
+    if [ -z "${secret_key}" ]; then
+        secret_key=$(gum input --prompt="Langfuse Secret Key for this team: " --password --width=80)
+    fi
+    if [ -z "${public_key}" ] || [ -z "${secret_key}" ]; then
+        echo "Error: Both public key and secret key are required"
+        exit 1
+    fi
+    master_key=$(just master-key)
+    response=$(curl -s "https://${LITELLM_HOST}/team/update" \
+        --header "Authorization: Bearer ${master_key}" \
+        --header "Content-Type: application/json" \
+        --data-raw "{
+            \"team_id\": \"${team_id}\",
+            \"metadata\": {
+                \"logging\": [{
+                    \"callback_name\": \"langfuse\",
+                    \"callback_vars\": {
+                        \"langfuse_public_key\": \"${public_key}\",
+                        \"langfuse_secret\": \"${secret_key}\",
+                        \"langfuse_host\": \"https://${LANGFUSE_HOST}\"
+                    }
+                }]
+            }
+        }")
+    echo "${response}" | jq .
+    echo ""
+    echo "Langfuse project configured for team ${team_id}"
+
+# Generate virtual key for a team
+generate-team-key team_id='' user='':
+    #!/bin/bash
+    set -euo pipefail
+    team_id="{{ team_id }}"
+    user="{{ user }}"
+    if [ -z "${team_id}" ]; then
+        master_key=$(just master-key)
+        teams=$(curl -s "https://${LITELLM_HOST}/team/list" \
+            --header "Authorization: Bearer ${master_key}")
+        team_aliases=$(echo "${teams}" | jq -r '.[] | "\(.team_id) (\(.team_alias // "no alias"))"')
+        if [ -z "${team_aliases}" ]; then
+            echo "No teams found. Create a team first:"
+            echo "  just litellm::create-team"
+            exit 1
+        fi
+        selected=$(echo "${team_aliases}" | gum choose --header="Select team:")
+        team_id=$(echo "${selected}" | cut -d' ' -f1)
+    fi
+    while [ -z "${user}" ]; do
+        user=$(gum input --prompt="Username: " --width=80)
+    done
+    master_key=$(just master-key)
+    response=$(curl -s "https://${LITELLM_HOST}/key/generate" \
+        --header "Authorization: Bearer ${master_key}" \
+        --header "Content-Type: application/json" \
+        --data-raw "{\"team_id\": \"${team_id}\", \"metadata\": {\"user\": \"${user}\"}}")
+    echo "${response}" | jq .
+    echo ""
+    echo "API Key: $(echo "${response}" | jq -r '.key')"

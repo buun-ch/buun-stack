@@ -241,7 +241,7 @@ just litellm::master-key
 just litellm::generate-virtual-key buun
 ```
 
-This will prompt for a model selection and generate an API key for the specified user.
+This will prompt for a model selection and generate an API key for the specified user. Select `all` to grant access to all models.
 
 ### OpenAI SDK Example
 
@@ -271,6 +271,123 @@ curl https://litellm.example.com/v1/chat/completions \
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
+
+## Team Management
+
+Teams allow you to group users and configure team-specific settings such as Langfuse projects for observability.
+
+### Create a Team
+
+```bash
+just litellm::create-team
+```
+
+Or with a name directly:
+
+```bash
+just litellm::create-team name="project-alpha"
+```
+
+### List Teams
+
+```bash
+just litellm::list-teams
+```
+
+### Get Team Info
+
+```bash
+just litellm::get-team team_id=<team-id>
+```
+
+### Delete a Team
+
+```bash
+just litellm::delete-team team_id=<team-id>
+```
+
+### Generate Virtual Key for a Team
+
+```bash
+just litellm::generate-team-key
+```
+
+This will prompt for team selection and username. The generated key inherits the team's settings (including Langfuse project configuration).
+
+## Langfuse Integration
+
+[Langfuse](https://langfuse.com/) provides LLM observability with tracing, monitoring, and analytics. LiteLLM can send traces to Langfuse for every API call.
+
+### Enable Langfuse Integration
+
+During installation (`just litellm::install`) or upgrade (`just litellm::upgrade`), you will be prompted to enable Langfuse integration. Alternatively:
+
+```bash
+just litellm::setup-langfuse
+```
+
+You will need Langfuse API keys (Public Key and Secret Key) from the Langfuse UI: **Settings > API Keys**.
+
+### Set Langfuse API Keys
+
+```bash
+just litellm::set-langfuse-keys
+```
+
+### Disable Langfuse Integration
+
+```bash
+just litellm::disable-langfuse
+```
+
+### Per-Team Langfuse Projects
+
+Each team can have its own Langfuse project for isolated observability. This is useful when different projects or departments need separate trace data.
+
+#### Setup Flow
+
+1. Create a team:
+
+   ```bash
+   just litellm::create-team name="project-alpha"
+   ```
+
+2. Create a Langfuse project for the team and get API keys from Langfuse UI
+
+3. Configure the team's Langfuse project:
+
+   ```bash
+   just litellm::set-team-langfuse-project
+   ```
+
+   This will prompt for team selection and Langfuse API keys.
+
+4. Generate a key for the team:
+
+   ```bash
+   just litellm::generate-team-key
+   ```
+
+5. Use the team key for API calls - traces will be sent to the team's Langfuse project
+
+#### Architecture
+
+```plain
+LiteLLM Proxy
+  |
+  +-- Default Langfuse Project (for keys without team)
+  |
+  +-- Team A --> Langfuse Project A
+  |
+  +-- Team B --> Langfuse Project B
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+| -------- | ------- | ----------- |
+| `LITELLM_LANGFUSE_INTEGRATION_ENABLED` | (prompt) | Enable Langfuse integration |
+| `LANGFUSE_HOST` | (prompt) | Langfuse instance hostname |
 
 ## Supported Providers
 
@@ -408,6 +525,7 @@ kubectl exec -n litellm deployment/litellm -- \
 | `litellm-values.gomplate.yaml` | Helm values template |
 | `apikey-external-secret.gomplate.yaml` | ExternalSecret for API keys |
 | `keycloak-auth-external-secret.gomplate.yaml` | ExternalSecret for Keycloak OIDC |
+| `langfuse-auth-external-secret.gomplate.yaml` | ExternalSecret for Langfuse API keys |
 
 ## Security Considerations
 
@@ -425,3 +543,5 @@ kubectl exec -n litellm deployment/litellm -- \
 - [LiteLLM Helm Chart](https://github.com/BerriAI/litellm/tree/main/deploy/charts/litellm-helm)
 - [Supported Models](https://docs.litellm.ai/docs/providers)
 - [Virtual Keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
+- [Langfuse Integration](https://docs.litellm.ai/docs/proxy/logging#langfuse)
+- [Team-based Logging](https://docs.litellm.ai/docs/proxy/team_logging)

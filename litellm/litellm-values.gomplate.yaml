@@ -10,6 +10,16 @@ podSecurityContext: {}
 
 securityContext: {}
 
+# Resource recommendations from Goldilocks VPA
+# litellm target: cpu=11m, memory=549Mi
+resources:
+  requests:
+    cpu: 25m
+    memory: 512Mi
+  limits:
+    cpu: 100m
+    memory: 1Gi
+
 migrationJob:
   resources:
     requests:
@@ -18,12 +28,17 @@ migrationJob:
     limits:
       memory: 1Gi
 
-{{- if .Env.LITELLM_OIDC_ENABLED }}
 environmentSecrets:
   - apikey
+{{- if .Env.LITELLM_OIDC_ENABLED }}
   - keycloak-auth
+{{- end }}
+{{- if .Env.LITELLM_LANGFUSE_INTEGRATION_ENABLED }}
+  - langfuse-auth
+{{- end }}
 
 extraEnvVars:
+{{- if .Env.LITELLM_OIDC_ENABLED }}
   - name: PROXY_BASE_URL
     value: "https://{{ .Env.LITELLM_HOST }}"
   - name: GENERIC_AUTHORIZATION_ENDPOINT
@@ -34,14 +49,20 @@ extraEnvVars:
     value: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/protocol/openid-connect/userinfo"
   - name: GENERIC_SCOPE
     value: "openid email profile"
-{{- else }}
-environmentSecrets:
-  - apikey
+{{- end }}
+{{- if .Env.LITELLM_LANGFUSE_INTEGRATION_ENABLED }}
+  - name: LANGFUSE_HOST
+    value: "https://{{ .Env.LANGFUSE_HOST }}"
 {{- end }}
 
 proxy_config:
   model_list:
 {{ file.Read "models.yaml" | indent 4 }}
+{{- if .Env.LITELLM_LANGFUSE_INTEGRATION_ENABLED }}
+  litellm_settings:
+    success_callback: ["langfuse"]
+    failure_callback: ["langfuse"]
+{{- end }}
 
 db:
   useExisting: true
@@ -57,6 +78,16 @@ db:
 
 redis:
   enabled: true
+  # Resource recommendations from Goldilocks VPA
+  # redis target: cpu=15m, memory=100Mi
+  master:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 128Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
 
 ingress:
   enabled: true

@@ -429,6 +429,7 @@ When writing Markdown documentation:
    ```
 
 2. **Always validate with markdownlint-cli2**:
-   - Run `markdownlint-cli2 <file>` before committing any Markdown files
+   - Run from the project root directory to use `.markdownlint.yaml` config:
+     `cd <top-dir> && markdownlint-cli2 <relative-path>`
    - Fix all linting errors to ensure consistent formatting
    - Pay attention to code block language specifications (MD040) and list formatting (MD029)
