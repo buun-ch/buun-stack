@@ -8,6 +8,7 @@ export OLLAMA_GPU_TYPE := env("OLLAMA_GPU_TYPE", "nvidia")
 export OLLAMA_GPU_COUNT := env("OLLAMA_GPU_COUNT", "1")
 export OLLAMA_MODELS := env("OLLAMA_MODELS", "")
 export OLLAMA_STORAGE_SIZE := env("OLLAMA_STORAGE_SIZE", "30Gi")
+export OLLAMA_HELM_TIMEOUT := env("OLLAMA_HELM_TIMEOUT", "10m")
 
 [private]
 default:
@@ -66,7 +67,8 @@ install:
 
     gomplate -f values.gomplate.yaml -o values.yaml
     helm upgrade --install ollama ollama/ollama \
-        --version ${OLLAMA_CHART_VERSION} -n ${OLLAMA_NAMESPACE} --wait \
+        --version ${OLLAMA_CHART_VERSION} -n ${OLLAMA_NAMESPACE} \
+        --wait --timeout ${OLLAMA_HELM_TIMEOUT} \
         -f values.yaml
 
     echo ""
@@ -97,7 +99,8 @@ upgrade:
 
     gomplate -f values.gomplate.yaml -o values.yaml
     helm upgrade ollama ollama/ollama \
-        --version ${OLLAMA_CHART_VERSION} -n ${OLLAMA_NAMESPACE} --wait \
+        --version ${OLLAMA_CHART_VERSION} -n ${OLLAMA_NAMESPACE} \
+        --wait --timeout ${OLLAMA_HELM_TIMEOUT} \
         -f values.yaml
 
     echo "Ollama upgraded successfully"
