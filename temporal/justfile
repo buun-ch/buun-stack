@@ -1,0 +1,412 @@
+set fallback := true
+
+export TEMPORAL_NAMESPACE := env("TEMPORAL_NAMESPACE", "temporal")
+export TEMPORAL_CHART_VERSION := env("TEMPORAL_CHART_VERSION", "0.52.0")
+export TEMPORAL_HOST := env("TEMPORAL_HOST", "")
+export TEMPORAL_OIDC_CLIENT_ID := env("TEMPORAL_OIDC_CLIENT_ID", "temporal")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add temporal https://go.temporal.io/helm-charts
+    helm repo update temporal
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove temporal
+
+# Create Temporal namespace
+create-namespace:
+    kubectl get namespace ${TEMPORAL_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${TEMPORAL_NAMESPACE}
+
+# Delete Temporal namespace
+delete-namespace:
+    kubectl delete namespace ${TEMPORAL_NAMESPACE} --ignore-not-found
+
+# Create PostgreSQL user and databases for Temporal
+create-postgres-user-and-db:
+    #!/bin/bash
+    set -euo pipefail
+    if just postgres::user-exists temporal &>/dev/null; then
+        echo "PostgreSQL user 'temporal' already exists"
+    else
+        echo "Creating PostgreSQL user and databases..."
+        PG_PASSWORD=$(just utils::random-password)
+        just postgres::create-user-and-db temporal temporal "${PG_PASSWORD}"
+        just postgres::create-db temporal_visibility
+        just postgres::grant temporal_visibility temporal
+        just vault::put temporal/db username=temporal password="${PG_PASSWORD}"
+        echo "PostgreSQL user and databases created."
+    fi
+
+# Delete PostgreSQL user and databases
+delete-postgres-user-and-db:
+    #!/bin/bash
+    set -euo pipefail
+    if gum confirm "Delete PostgreSQL user and databases for Temporal?"; then
+        just postgres::delete-db temporal || true
+        just postgres::delete-db temporal_visibility || true
+        just postgres::delete-user temporal || true
+        just vault::delete temporal/db || true
+        echo "PostgreSQL user and databases deleted."
+    else
+        echo "Cancelled."
+    fi
+
+# Create Postgres secret
+create-postgres-secret:
+    #!/bin/bash
+    set -euo pipefail
+    if kubectl get secret temporal-postgres-auth -n ${TEMPORAL_NAMESPACE} &>/dev/null; then
+        echo "Postgres auth secret already exists"
+        exit 0
+    fi
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Creating ExternalSecret..."
+        kubectl delete externalsecret temporal-postgres-auth -n ${TEMPORAL_NAMESPACE} --ignore-not-found
+        gomplate -f postgres-external-secret.gomplate.yaml | kubectl apply -f -
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/temporal-postgres-auth \
+            -n ${TEMPORAL_NAMESPACE} --timeout=60s
+    else
+        echo "Creating Kubernetes Secret directly..."
+        PG_USERNAME=$(just vault::get temporal/db username)
+        PG_PASSWORD=$(just vault::get temporal/db password)
+        kubectl create secret generic temporal-postgres-auth \
+            --from-literal=password="${PG_PASSWORD}" \
+            -n ${TEMPORAL_NAMESPACE}
+    fi
+
+# Delete Postgres secret
+delete-postgres-secret:
+    kubectl delete externalsecret temporal-postgres-auth -n ${TEMPORAL_NAMESPACE} --ignore-not-found
+    kubectl delete secret temporal-postgres-auth -n ${TEMPORAL_NAMESPACE} --ignore-not-found
+
+# Create Keycloak client for Temporal Web UI
+create-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${TEMPORAL_HOST}" ]; do
+        TEMPORAL_HOST=$(
+            gum input --prompt="Temporal host (FQDN): " --width=100 \
+            --placeholder="e.g., temporal.example.com"
+        )
+    done
+
+    echo "Creating Keycloak client for Temporal..."
+
+    just keycloak::delete-client ${KEYCLOAK_REALM} ${TEMPORAL_OIDC_CLIENT_ID} || true
+
+    CLIENT_SECRET=$(just utils::random-password)
+
+    just keycloak::create-client \
+        realm=${KEYCLOAK_REALM} \
+        client_id=${TEMPORAL_OIDC_CLIENT_ID} \
+        redirect_url="https://${TEMPORAL_HOST}/*" \
+        client_secret="${CLIENT_SECRET}"
+
+    kubectl delete secret temporal-oauth-temp -n ${TEMPORAL_NAMESPACE} --ignore-not-found
+    kubectl create secret generic temporal-oauth-temp -n ${TEMPORAL_NAMESPACE} \
+        --from-literal=client_id="${TEMPORAL_OIDC_CLIENT_ID}" \
+        --from-literal=client_secret="${CLIENT_SECRET}"
+
+    echo "Keycloak client created successfully"
+    echo "Client ID: ${TEMPORAL_OIDC_CLIENT_ID}"
+    echo "Redirect URI: https://${TEMPORAL_HOST}/*"
+
+# Delete Keycloak client
+delete-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Deleting Keycloak client for Temporal..."
+    just keycloak::delete-client ${KEYCLOAK_REALM} ${TEMPORAL_OIDC_CLIENT_ID} || true
+    kubectl delete secret temporal-oauth-temp -n ${TEMPORAL_NAMESPACE} --ignore-not-found
+    if just vault::exist keycloak/client/temporal &>/dev/null; then
+        just vault::delete keycloak/client/temporal
+    fi
+
+# Create Keycloak auth secret
+create-keycloak-auth-secret:
+    #!/bin/bash
+    set -euo pipefail
+
+    if kubectl get secret temporal-oauth-temp -n ${TEMPORAL_NAMESPACE} &>/dev/null; then
+        oauth_client_id=$(kubectl get secret temporal-oauth-temp -n ${TEMPORAL_NAMESPACE} \
+            -o jsonpath='{.data.client_id}' | base64 -d)
+        oauth_client_secret=$(kubectl get secret temporal-oauth-temp -n ${TEMPORAL_NAMESPACE} \
+            -o jsonpath='{.data.client_secret}' | base64 -d)
+    elif helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null && \
+         just vault::get keycloak/client/temporal client_secret &>/dev/null; then
+        oauth_client_id=$(just vault::get keycloak/client/temporal client_id)
+        oauth_client_secret=$(just vault::get keycloak/client/temporal client_secret)
+    else
+        echo "Error: Cannot retrieve OAuth client secret. Please run 'just temporal::create-keycloak-client' first."
+        exit 1
+    fi
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Storing secrets in Vault..."
+
+        just vault::put keycloak/client/temporal \
+            client_id="${oauth_client_id}" \
+            client_secret="${oauth_client_secret}"
+
+        kubectl delete secret temporal-web-auth -n ${TEMPORAL_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret temporal-web-auth -n ${TEMPORAL_NAMESPACE} --ignore-not-found
+
+        gomplate -f keycloak-auth-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/temporal-web-auth \
+            -n ${TEMPORAL_NAMESPACE} --timeout=60s
+
+        echo "ExternalSecret created successfully"
+    else
+        echo "External Secrets Operator not found. Creating Kubernetes Secret directly..."
+
+        kubectl delete secret temporal-web-auth -n ${TEMPORAL_NAMESPACE} --ignore-not-found
+        kubectl create secret generic temporal-web-auth -n ${TEMPORAL_NAMESPACE} \
+            --from-literal=TEMPORAL_AUTH_CLIENT_ID="${oauth_client_id}" \
+            --from-literal=TEMPORAL_AUTH_CLIENT_SECRET="${oauth_client_secret}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put keycloak/client/temporal \
+                client_id="${oauth_client_id}" \
+                client_secret="${oauth_client_secret}"
+        fi
+
+        echo "Kubernetes Secret created successfully"
+    fi
+
+    kubectl delete secret temporal-oauth-temp -n ${TEMPORAL_NAMESPACE} --ignore-not-found
+
+# Delete Keycloak auth secret
+delete-keycloak-auth-secret:
+    kubectl delete externalsecret temporal-web-auth -n ${TEMPORAL_NAMESPACE} --ignore-not-found
+    kubectl delete secret temporal-web-auth -n ${TEMPORAL_NAMESPACE} --ignore-not-found
+
+# Initialize Temporal database schema
+init-schema:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Initializing Temporal database schema..."
+
+    PG_HOST="postgres-cluster-rw.postgres"
+    PG_PORT="5432"
+    PG_USER=$(just vault::get temporal/db username)
+    PG_PASSWORD=$(just vault::get temporal/db password)
+
+    POD_NAME=$(kubectl get pods -n ${TEMPORAL_NAMESPACE} -l app.kubernetes.io/name=temporal-admintools \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+
+    if [ -z "${POD_NAME}" ]; then
+        echo "Admin tools pod not found. Running schema setup job..."
+        exit 0
+    fi
+
+    echo "Setting up main database schema..."
+    kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- \
+        temporal-sql-tool --plugin postgres12 \
+        --endpoint ${PG_HOST} --port ${PG_PORT} \
+        --user ${PG_USER} --password ${PG_PASSWORD} \
+        --database temporal \
+        setup-schema -v 0.0
+
+    kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- \
+        temporal-sql-tool --plugin postgres12 \
+        --endpoint ${PG_HOST} --port ${PG_PORT} \
+        --user ${PG_USER} --password ${PG_PASSWORD} \
+        --database temporal \
+        update-schema -d /etc/temporal/schema/postgresql/v12/temporal/versioned
+
+    echo "Setting up visibility database schema..."
+    kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- \
+        temporal-sql-tool --plugin postgres12 \
+        --endpoint ${PG_HOST} --port ${PG_PORT} \
+        --user ${PG_USER} --password ${PG_PASSWORD} \
+        --database temporal_visibility \
+        setup-schema -v 0.0
+
+    kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- \
+        temporal-sql-tool --plugin postgres12 \
+        --endpoint ${PG_HOST} --port ${PG_PORT} \
+        --user ${PG_USER} --password ${PG_PASSWORD} \
+        --database temporal_visibility \
+        update-schema -d /etc/temporal/schema/postgresql/v12/visibility/versioned
+
+    echo "Schema initialization complete."
+
+# Install Temporal
+install:
+    #!/bin/bash
+    set -euo pipefail
+
+    while [ -z "${TEMPORAL_HOST}" ]; do
+        TEMPORAL_HOST=$(gum input --prompt="Temporal host (FQDN): " --width=80 \
+            --placeholder="e.g., temporal.example.com")
+    done
+
+    while [ -z "${KEYCLOAK_HOST}" ]; do
+        KEYCLOAK_HOST=$(gum input --prompt="Keycloak host (FQDN): " --width=80 \
+            --placeholder="e.g., auth.example.com")
+    done
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            fi
+        fi
+    fi
+
+    echo "Installing Temporal..."
+
+    just create-namespace
+
+    kubectl label namespace ${TEMPORAL_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=baseline --overwrite
+
+    if [ "${MONITORING_ENABLED}" = "true" ]; then
+        kubectl label namespace ${TEMPORAL_NAMESPACE} \
+            buun.channel/enable-monitoring=true --overwrite
+    fi
+
+    echo "Setting up PostgreSQL database..."
+    just create-postgres-user-and-db
+    just create-postgres-secret
+
+    echo "Setting up Keycloak OIDC authentication..."
+    just create-keycloak-client
+    just create-keycloak-auth-secret
+
+    echo "Generating Helm values..."
+    just add-helm-repo
+    gomplate -f temporal-values.gomplate.yaml -o temporal-values.yaml
+
+    echo "Installing Temporal Helm chart..."
+    helm upgrade --cleanup-on-fail --install temporal temporal/temporal \
+        --version ${TEMPORAL_CHART_VERSION} -n ${TEMPORAL_NAMESPACE} --wait \
+        -f temporal-values.yaml --timeout 15m
+
+    echo ""
+    echo "Temporal installed successfully!"
+    echo "Access Temporal Web UI at: https://${TEMPORAL_HOST}"
+    echo ""
+    echo "OIDC authentication is configured with Keycloak."
+    echo "Users can login with their Keycloak credentials."
+
+# Upgrade Temporal
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+
+    while [ -z "${TEMPORAL_HOST}" ]; do
+        TEMPORAL_HOST=$(gum input --prompt="Temporal host (FQDN): " --width=80)
+    done
+
+    while [ -z "${KEYCLOAK_HOST}" ]; do
+        KEYCLOAK_HOST=$(gum input --prompt="Keycloak host (FQDN): " --width=80)
+    done
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            fi
+        fi
+    fi
+
+    if [ "${MONITORING_ENABLED}" = "true" ]; then
+        kubectl label namespace ${TEMPORAL_NAMESPACE} \
+            buun.channel/enable-monitoring=true --overwrite
+    fi
+
+    echo "Upgrading Temporal..."
+
+    gomplate -f temporal-values.gomplate.yaml -o temporal-values.yaml
+
+    helm upgrade temporal temporal/temporal \
+        --version ${TEMPORAL_CHART_VERSION} -n ${TEMPORAL_NAMESPACE} --wait \
+        -f temporal-values.yaml --timeout 15m
+
+    echo ""
+    echo "Temporal upgraded successfully!"
+    echo "Access Temporal Web UI at: https://${TEMPORAL_HOST}"
+
+# Uninstall Temporal (delete-data: true to delete database and Vault secrets)
+uninstall delete-data='false':
+    #!/bin/bash
+    set -euo pipefail
+    if ! gum confirm "Uninstall Temporal?"; then
+        echo "Cancelled."
+        exit 0
+    fi
+
+    echo "Uninstalling Temporal..."
+    helm uninstall temporal -n ${TEMPORAL_NAMESPACE} --ignore-not-found --wait
+
+    just delete-keycloak-auth-secret || true
+    just delete-keycloak-client || true
+    just delete-postgres-secret
+    just delete-namespace
+
+    if [ "{{ delete-data }}" = "true" ]; then
+        echo "Deleting database and Vault secrets..."
+        just postgres::delete-db temporal || true
+        just postgres::delete-db temporal_visibility || true
+        just postgres::delete-user temporal || true
+        just vault::delete temporal/db || true
+        just vault::delete keycloak/client/temporal || true
+        echo "Temporal uninstalled with all data deleted."
+    else
+        echo "Temporal uninstalled."
+        echo ""
+        echo "Note: The following resources were NOT deleted:"
+        echo "  - PostgreSQL user and databases (temporal, temporal_visibility)"
+        echo "  - Vault secrets (temporal/db, keycloak/client/temporal)"
+        echo ""
+        echo "To delete all data, run:"
+        echo "  just temporal::uninstall true"
+    fi
+
+# Create a Temporal namespace (workflow namespace, not Kubernetes)
+create-temporal-namespace name='' retention='3d':
+    #!/bin/bash
+    set -euo pipefail
+    name="{{ name }}"
+    retention="{{ retention }}"
+    while [ -z "${name}" ]; do
+        name=$(gum input --prompt="Namespace name: " --width=80 --placeholder="e.g., default")
+    done
+    POD_NAME=$(kubectl get pods -n ${TEMPORAL_NAMESPACE} -l app.kubernetes.io/name=temporal-admintools \
+        -o jsonpath='{.items[0].metadata.name}')
+    kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- \
+        tctl --namespace "${name}" namespace register --retention "${retention}"
+    echo "Namespace '${name}' created with retention ${retention}."
+
+# List Temporal namespaces
+list-temporal-namespaces:
+    #!/bin/bash
+    set -euo pipefail
+    POD_NAME=$(kubectl get pods -n ${TEMPORAL_NAMESPACE} -l app.kubernetes.io/name=temporal-admintools \
+        -o jsonpath='{.items[0].metadata.name}')
+    kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- tctl namespace list
+
+# Get Temporal cluster info
+cluster-info:
+    #!/bin/bash
+    set -euo pipefail
+    POD_NAME=$(kubectl get pods -n ${TEMPORAL_NAMESPACE} -l app.kubernetes.io/name=temporal-admintools \
+        -o jsonpath='{.items[0].metadata.name}')
+    kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- tctl cluster health

@@ -39,6 +39,7 @@ mod qdrant
 mod querybook
 mod security
 mod superset
+mod temporal
 mod trino
 mod utils
 mod vault
