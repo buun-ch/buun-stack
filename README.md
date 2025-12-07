@@ -71,6 +71,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 
 - **[Dagster](https://dagster.io/)**: Modern data orchestration platform
 - **[Apache Airflow](https://airflow.apache.org/)**: Workflow orchestration and task scheduling
+- **[Temporal](https://temporal.io/)**: Durable workflow execution for distributed applications
 
 ### Security & Compliance (Optional)
 
@@ -378,6 +379,17 @@ Workflow orchestration platform:
 - **Keycloak Authentication**: OAuth2 for user management
 
 [📖 See Airflow Documentation](./airflow/README.md)
+
+### Temporal
+
+Durable workflow execution platform:
+
+- **Durable Execution**: Workflows survive process and infrastructure failures
+- **Saga Pattern**: Implement distributed transactions with compensating actions
+- **Multi-Language SDKs**: Go, Python, TypeScript, Java, .NET, PHP
+- **Keycloak Authentication**: OAuth2 for Web UI access
+
+[📖 See Temporal Documentation](./temporal/README.md)
 
 ### Fairwinds Polaris
 
