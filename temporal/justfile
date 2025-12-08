@@ -299,6 +299,17 @@ install:
         --version ${TEMPORAL_CHART_VERSION} -n ${TEMPORAL_NAMESPACE} --wait \
         -f temporal-values.yaml --timeout 15m
 
+    echo "Configuring dynamic config for Worker Insights..."
+    kubectl patch configmap temporal-dynamic-config -n ${TEMPORAL_NAMESPACE} --type merge -p '{
+      "data": {
+        "dynamic_config.yaml": "frontend.WorkerHeartbeatsEnabled:\n  - value: true\nfrontend.ListWorkersEnabled:\n  - value: true\n"
+      }
+    }'
+
+    echo "Restarting frontend to apply dynamic config..."
+    kubectl rollout restart deployment temporal-frontend -n ${TEMPORAL_NAMESPACE}
+    kubectl rollout status deployment temporal-frontend -n ${TEMPORAL_NAMESPACE} --timeout=120s
+
     echo ""
     echo "Temporal installed successfully!"
     echo "Access Temporal Web UI at: https://${TEMPORAL_HOST}"
@@ -339,6 +350,17 @@ upgrade:
     helm upgrade temporal temporal/temporal \
         --version ${TEMPORAL_CHART_VERSION} -n ${TEMPORAL_NAMESPACE} --wait \
         -f temporal-values.yaml --timeout 15m
+
+    echo "Configuring dynamic config for Worker Insights..."
+    kubectl patch configmap temporal-dynamic-config -n ${TEMPORAL_NAMESPACE} --type merge -p '{
+      "data": {
+        "dynamic_config.yaml": "frontend.WorkerHeartbeatsEnabled:\n  - value: true\nfrontend.ListWorkersEnabled:\n  - value: true\n"
+      }
+    }'
+
+    echo "Restarting frontend to apply dynamic config..."
+    kubectl rollout restart deployment temporal-frontend -n ${TEMPORAL_NAMESPACE}
+    kubectl rollout status deployment temporal-frontend -n ${TEMPORAL_NAMESPACE} --timeout=120s
 
     echo ""
     echo "Temporal upgraded successfully!"
