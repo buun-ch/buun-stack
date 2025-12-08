@@ -33,33 +33,55 @@ install:
         )
     done
 
-    if [ -z "${MINIFLUX_DB_PASSWORD}" ]; then
-        MINIFLUX_DB_PASSWORD=$(
-            gum input --prompt="Database password (empty to auto-generate): " \
-            --width=100 --password
-        )
+    # Check if PostgreSQL user already exists
+    if just postgres::user-exists ${MINIFLUX_DB_USERNAME} &>/dev/null; then
+        echo "PostgreSQL user '${MINIFLUX_DB_USERNAME}' already exists."
+        # Use existing password from Vault
+        if existing_db_pw=$(just vault::get miniflux/db password 2>/dev/null); then
+            echo "Using existing database password from Vault."
+            export MINIFLUX_DB_PASSWORD="${existing_db_pw}"
+        else
+            echo "Error: User exists but password not found in Vault." >&2
+            echo "Please delete the user first: just postgres::delete-user ${MINIFLUX_DB_USERNAME}" >&2
+            exit 1
+        fi
+    else
         if [ -z "${MINIFLUX_DB_PASSWORD}" ]; then
-            MINIFLUX_DB_PASSWORD=$(just utils::random-password)
-            echo "Generated random password: ${MINIFLUX_DB_PASSWORD}"
+            MINIFLUX_DB_PASSWORD=$(
+                gum input --prompt="Database password (empty to auto-generate): " \
+                --width=100 --password
+            )
+            if [ -z "${MINIFLUX_DB_PASSWORD}" ]; then
+                MINIFLUX_DB_PASSWORD=$(just utils::random-password)
+                echo "Generated random password for database."
+            fi
         fi
+        export MINIFLUX_DB_PASSWORD
+        just postgres::create-user-and-db \
+            ${MINIFLUX_DB_USERNAME} ${MINIFLUX_DB_NAME} ${MINIFLUX_DB_PASSWORD}
+        just vault::put miniflux/db username=${MINIFLUX_DB_USERNAME} \
+                password=${MINIFLUX_DB_PASSWORD} database=${MINIFLUX_DB_NAME}
     fi
-    just postgres::create-user-and-db \
-        ${MINIFLUX_DB_USERNAME} ${MINIFLUX_DB_NAME} ${MINIFLUX_DB_PASSWORD}
-    just vault::put miniflux/db username=${MINIFLUX_DB_USERNAME} \
-            password=${MINIFLUX_DB_PASSWORD} database=${MINIFLUX_DB_NAME}
 
-    if [ -z "${MINIFLUX_ADMIN_PASSWORD}" ]; then
-        MINIFLUX_ADMIN_PASSWORD=$(
-            gum input --prompt="Admin password (empty to auto-generate): " \
-            --width=100 --password
-        )
+    # Check if admin password exists in Vault
+    if existing_admin_pw=$(just vault::get miniflux/admin password 2>/dev/null); then
+        echo "Using existing admin password from Vault."
+        export MINIFLUX_ADMIN_PASSWORD="${existing_admin_pw}"
+    else
         if [ -z "${MINIFLUX_ADMIN_PASSWORD}" ]; then
-            MINIFLUX_ADMIN_PASSWORD=$(just utils::random-password)
-            echo "Generated random password: ${MINIFLUX_ADMIN_PASSWORD}"
+            MINIFLUX_ADMIN_PASSWORD=$(
+                gum input --prompt="Admin password (empty to auto-generate): " \
+                --width=100 --password
+            )
+            if [ -z "${MINIFLUX_ADMIN_PASSWORD}" ]; then
+                MINIFLUX_ADMIN_PASSWORD=$(just utils::random-password)
+                echo "Generated random password for admin."
+            fi
         fi
+        export MINIFLUX_ADMIN_PASSWORD
+        just vault::put miniflux/admin username=${MINIFLUX_ADMIN_USERNAME} \
+                password=${MINIFLUX_ADMIN_PASSWORD}
     fi
-    just vault::put miniflux/admin username=${MINIFLUX_ADMIN_USERNAME} \
-            password=${MINIFLUX_ADMIN_PASSWORD}
 
     # https://github.com/gabe565/charts/tree/main/charts/miniflux
     MINIFLUX_NAMESPACE=${MINIFLUX_NAMESPACE} \
@@ -80,3 +102,26 @@ admin-username:
 # Print admin password
 admin-password:
     @just vault::get miniflux/admin password
+
+# Reset admin password (deletes admin user from DB so it gets recreated on pod restart)
+reset-admin-password:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will reset the admin password to the value stored in Vault."
+    if ! gum confirm "Continue?"; then
+        echo "Cancelled."
+        exit 0
+    fi
+
+    echo "Deleting admin user from database..."
+    kubectl exec -n postgres postgres-cluster-1 -c postgres -- \
+        psql -U postgres -d ${MINIFLUX_DB_NAME} -c "DELETE FROM users WHERE username = '${MINIFLUX_ADMIN_USERNAME}';"
+
+    echo "Restarting Miniflux pod..."
+    kubectl rollout restart deployment/miniflux -n ${MINIFLUX_NAMESPACE}
+    kubectl rollout status deployment/miniflux -n ${MINIFLUX_NAMESPACE} --timeout=60s
+
+    echo ""
+    echo "Admin password has been reset."
+    echo "Username: $(just vault::get miniflux/admin username)"
+    echo "Password: $(just vault::get miniflux/admin password)"
