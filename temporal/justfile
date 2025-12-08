@@ -1,7 +1,7 @@
 set fallback := true
 
 export TEMPORAL_NAMESPACE := env("TEMPORAL_NAMESPACE", "temporal")
-export TEMPORAL_CHART_VERSION := env("TEMPORAL_CHART_VERSION", "0.52.0")
+export TEMPORAL_CHART_VERSION := env("TEMPORAL_CHART_VERSION", "0.72.0")
 export TEMPORAL_HOST := env("TEMPORAL_HOST", "")
 export TEMPORAL_OIDC_CLIENT_ID := env("TEMPORAL_OIDC_CLIENT_ID", "temporal")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
