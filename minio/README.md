@@ -221,6 +221,83 @@ just minio::bucket-exists mybucket
 
 This returns exit code 0 if the bucket exists, 1 otherwise.
 
+## Public Access
+
+MinIO allows you to configure anonymous (public) access to buckets or specific prefixes for serving static content like images.
+
+### Set Public Download Access
+
+Enable public read access for a bucket or prefix:
+
+```bash
+# Set public access for entire bucket
+just minio::set-public-download mybucket
+
+# Set public access for specific prefix only
+just minio::set-public-download mybucket/public
+```
+
+After setting public access, files can be accessed without authentication:
+
+```text
+https://your-minio-host/mybucket/public/image.png
+```
+
+### Check Public Access Status
+
+View current anonymous access policy:
+
+```bash
+just minio::show-public-access mybucket
+```
+
+Possible values:
+
+- `private`: No anonymous access (default)
+- `download`: Public read access
+- `upload`: Public write access
+- `public`: Public read and write access
+- `custom`: Custom policy applied
+
+### Remove Public Access
+
+Revoke anonymous access:
+
+```bash
+just minio::remove-public-access mybucket/public
+```
+
+### Using mc Commands
+
+```bash
+# Set public download (read-only)
+mc anonymous set download myminio/mybucket/public
+
+# Set public upload (write-only)
+mc anonymous set upload myminio/mybucket/uploads
+
+# Set full public access (read and write)
+mc anonymous set public myminio/mybucket
+
+# Remove public access
+mc anonymous set none myminio/mybucket
+
+# Check current policy
+mc anonymous get myminio/mybucket
+```
+
+### Presigned URLs (Temporary Access)
+
+For temporary access to private objects, use presigned URLs:
+
+```bash
+# Generate URL valid for 7 days
+mc share download myminio/mybucket/private-file.pdf --expire=168h
+
+# Generate upload URL
+mc share upload myminio/mybucket/uploads/ --expire=1h
+```
+
 ## User Management
 
 ### Create MinIO User

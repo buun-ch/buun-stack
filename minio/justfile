@@ -47,6 +47,7 @@ create-root-credentials:
         gomplate -f minio-root-external-secret.gomplate.yaml | kubectl apply -f -
 
         echo "Waiting for ExternalSecret to sync..."
+        sleep 2
         kubectl wait --for=condition=Ready externalsecret/minio \
             -n ${MINIO_NAMESPACE} --timeout=60s
     else
@@ -96,7 +97,12 @@ install:
             --placeholder="e.g., minio-console.example.com"
         )
     fi
+
+    # Generate OIDC client secret for confidential client
+    OIDC_CLIENT_SECRET=$(just utils::random-password)
+
     just keycloak::create-client realm=${KEYCLOAK_REALM} client_id=${MINIO_OIDC_CLIENT_ID} \
+        client_secret="${OIDC_CLIENT_SECRET}" \
         redirect_url="https://${MINIO_HOST}/oauth_callback,https://${MINIO_CONSOLE_HOST}/oauth_callback"
     just add-keycloak-minio-policy
     just create-namespace
@@ -105,6 +111,28 @@ install:
         pod-security.kubernetes.io/enforce=restricted --overwrite
 
     just create-root-credentials
+
+    # Store OIDC client secret
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "Storing OIDC client secret in Vault..."
+        just vault::put minio/oidc client_id="${MINIO_OIDC_CLIENT_ID}" client_secret="${OIDC_CLIENT_SECRET}"
+        kubectl delete externalsecret minio-oidc -n ${MINIO_NAMESPACE} --ignore-not-found
+        gomplate -f minio-oidc-external-secret.gomplate.yaml | kubectl apply -f -
+        echo "Waiting for ExternalSecret to sync..."
+        sleep 2
+        kubectl wait --for=condition=Ready externalsecret/minio-oidc \
+            -n ${MINIO_NAMESPACE} --timeout=60s
+    else
+        echo "Creating OIDC client secret directly..."
+        kubectl delete secret minio-oidc -n ${MINIO_NAMESPACE} --ignore-not-found
+        kubectl create secret generic minio-oidc -n ${MINIO_NAMESPACE} \
+            --from-literal=clientId="${MINIO_OIDC_CLIENT_ID}" \
+            --from-literal=clientSecret="${OIDC_CLIENT_SECRET}"
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put minio/oidc client_id="${MINIO_OIDC_CLIENT_ID}" client_secret="${OIDC_CLIENT_SECRET}"
+        fi
+    fi
+
     just add-helm-repo
     gomplate -f minio-values.gomplate.yaml -o minio-values.yaml
     helm upgrade --install minio minio/minio \
@@ -260,3 +288,70 @@ grant-policy user='' policy='':
         mc admin policy attach local ${POLICY} --user=${USER}"
 
     echo "✅ Policy ${POLICY} granted to user ${USER}"
+
+# Set public download access for a bucket or prefix
+set-public-download path='':
+    #!/bin/bash
+    set -euo pipefail
+    PATH_ARG="{{ path }}"
+    while [ -z "${PATH_ARG}" ]; do
+        PATH_ARG=$(
+            gum input --prompt="Bucket/prefix path: " --width=100 \
+            --placeholder="e.g., my-bucket/public"
+        )
+    done
+
+    ROOT_USER=$(just root-username)
+    ROOT_PASSWORD=$(just root-password)
+
+    kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
+        mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD}
+
+    kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
+        mc anonymous set download local/${PATH_ARG}
+
+    echo "✅ Public download access enabled for ${PATH_ARG}"
+
+# Remove public access from a bucket or prefix
+remove-public-access path='':
+    #!/bin/bash
+    set -euo pipefail
+    PATH_ARG="{{ path }}"
+    while [ -z "${PATH_ARG}" ]; do
+        PATH_ARG=$(
+            gum input --prompt="Bucket/prefix path: " --width=100 \
+            --placeholder="e.g., my-bucket/public"
+        )
+    done
+
+    ROOT_USER=$(just root-username)
+    ROOT_PASSWORD=$(just root-password)
+
+    kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
+        mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD}
+
+    kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
+        mc anonymous set none local/${PATH_ARG}
+
+    echo "✅ Public access removed from ${PATH_ARG}"
+
+# Show anonymous access policy for a bucket or prefix
+show-public-access path='':
+    #!/bin/bash
+    set -euo pipefail
+    PATH_ARG="{{ path }}"
+    while [ -z "${PATH_ARG}" ]; do
+        PATH_ARG=$(
+            gum input --prompt="Bucket/prefix path: " --width=100 \
+            --placeholder="e.g., my-bucket"
+        )
+    done
+
+    ROOT_USER=$(just root-username)
+    ROOT_PASSWORD=$(just root-password)
+
+    kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
+        mc alias set local http://localhost:9000 ${ROOT_USER} ${ROOT_PASSWORD}
+
+    kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
+        mc anonymous get local/${PATH_ARG}
