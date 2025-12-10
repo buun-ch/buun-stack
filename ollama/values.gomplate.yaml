@@ -36,11 +36,11 @@ securityContext:
 
 resources:
   requests:
-    cpu: 25m
-    memory: 2Gi
+    cpu: {{ .Env.OLLAMA_CPU_REQUEST }}
+    memory: {{ .Env.OLLAMA_MEMORY_REQUEST }}
   limits:
-    cpu: 100m
-    memory: 8Gi
+    cpu: {{ .Env.OLLAMA_CPU_LIMIT }}
+    memory: {{ .Env.OLLAMA_MEMORY_LIMIT }}
 
 persistentVolume:
   enabled: true
