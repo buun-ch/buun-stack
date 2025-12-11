@@ -1032,7 +1032,7 @@ set-team-langfuse-project team_id='' public_key='' secret_key='':
                     \"callback_name\": \"langfuse\",
                     \"callback_vars\": {
                         \"langfuse_public_key\": \"${public_key}\",
-                        \"langfuse_secret\": \"${secret_key}\",
+                        \"langfuse_secret_key\": \"${secret_key}\",
                         \"langfuse_host\": \"https://${LANGFUSE_HOST}\"
                     }
                 }]
