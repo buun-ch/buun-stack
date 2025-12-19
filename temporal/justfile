@@ -411,7 +411,8 @@ create-temporal-namespace name='' retention='3d':
     while [ -z "${name}" ]; do
         name=$(gum input --prompt="Namespace name: " --width=80 --placeholder="e.g., default")
     done
-    POD_NAME=$(kubectl get pods -n ${TEMPORAL_NAMESPACE} -l app.kubernetes.io/name=temporal-admintools \
+    POD_NAME=$(kubectl get pods -n ${TEMPORAL_NAMESPACE} \
+        -l app.kubernetes.io/name=temporal,app.kubernetes.io/component=admintools \
         -o jsonpath='{.items[0].metadata.name}')
     kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- \
         tctl --namespace "${name}" namespace register --retention "${retention}"
@@ -421,7 +422,8 @@ create-temporal-namespace name='' retention='3d':
 list-temporal-namespaces:
     #!/bin/bash
     set -euo pipefail
-    POD_NAME=$(kubectl get pods -n ${TEMPORAL_NAMESPACE} -l app.kubernetes.io/name=temporal-admintools \
+    POD_NAME=$(kubectl get pods -n ${TEMPORAL_NAMESPACE} \
+        -l app.kubernetes.io/name=temporal,app.kubernetes.io/component=admintools \
         -o jsonpath='{.items[0].metadata.name}')
     kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- tctl namespace list
 
@@ -429,6 +431,7 @@ list-temporal-namespaces:
 cluster-info:
     #!/bin/bash
     set -euo pipefail
-    POD_NAME=$(kubectl get pods -n ${TEMPORAL_NAMESPACE} -l app.kubernetes.io/name=temporal-admintools \
+    POD_NAME=$(kubectl get pods -n ${TEMPORAL_NAMESPACE} \
+        -l app.kubernetes.io/name=temporal,app.kubernetes.io/component=admintools \
         -o jsonpath='{.items[0].metadata.name}')
     kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- tctl cluster health
