@@ -1,3 +1,6 @@
+version:
+  postgresql: {{ .Env.POSTGRES_VERSION | quote }}
+
 cluster:
   instances: 1
 
