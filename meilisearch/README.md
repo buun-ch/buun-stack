@@ -66,10 +66,7 @@ just meilisearch::list-keys
 
 ### Health Check
 
-Requires [telepresence](https://www.telepresence.io/) connection:
-
 ```bash
-telepresence connect
 just meilisearch::health-check
 ```
 

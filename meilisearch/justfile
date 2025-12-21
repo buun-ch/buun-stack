@@ -115,72 +115,51 @@ get-master-key:
         -o jsonpath="{.data.MEILI_MASTER_KEY}" | base64 -d
     @echo
 
-# Check if telepresence is connected
+# Execute API request via kubectl exec (internal helper)
 [private]
-check-telepresence:
+api method='GET' path='/' data='':
     #!/bin/bash
     set -euo pipefail
-    if ! command -v telepresence &>/dev/null; then
-        echo "Error: telepresence is not installed" >&2
-        exit 1
-    fi
-    if ! telepresence status &>/dev/null; then
-        echo "Error: telepresence is not connected" >&2
-        echo "Please run: telepresence connect" >&2
-        exit 1
-    fi
+    MASTER_KEY=$(just get-master-key | tr -d '\n')
+    METHOD="{{ method }}"
+    API_PATH="{{ path }}"
+    DATA='{{ data }}'
 
-# Get Meilisearch service URL
-[private]
-get-service-url:
-    @echo "http://meilisearch.${MEILISEARCH_NAMESPACE}.svc.cluster.local:7700"
+    if [ "$METHOD" = "GET" ] || [ "$METHOD" = "DELETE" ]; then
+        kubectl exec -n ${MEILISEARCH_NAMESPACE} meilisearch-0 -- \
+            curl -s -X "$METHOD" "http://127.0.0.1:7700${API_PATH}" \
+            -H "Authorization: Bearer ${MASTER_KEY}"
+    else
+        kubectl exec -n ${MEILISEARCH_NAMESPACE} meilisearch-0 -- \
+            curl -s -X "$METHOD" "http://127.0.0.1:7700${API_PATH}" \
+            -H "Authorization: Bearer ${MASTER_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$DATA"
+    fi
 
 # Check Meilisearch health
 health-check:
     #!/bin/bash
     set -euo pipefail
-    just check-telepresence
-    MASTER_KEY=$(just get-master-key)
-    MEILISEARCH_URL=$(just get-service-url)
-    echo "Checking Meilisearch health at ${MEILISEARCH_URL}..."
-    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/health"
-    echo
+    echo "Checking Meilisearch health..."
+    just api GET /health | jq .
 
 # Get Meilisearch version
 version:
-    #!/bin/bash
-    set -euo pipefail
-    just check-telepresence
-    MASTER_KEY=$(just get-master-key)
-    MEILISEARCH_URL=$(just get-service-url)
-    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/version" | jq .
+    @just api GET /version | jq .
 
 # Get Meilisearch stats
 stats:
-    #!/bin/bash
-    set -euo pipefail
-    just check-telepresence
-    MASTER_KEY=$(just get-master-key)
-    MEILISEARCH_URL=$(just get-service-url)
-    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/stats" | jq .
+    @just api GET /stats | jq .
 
 # List all indexes
 list-indexes:
-    #!/bin/bash
-    set -euo pipefail
-    just check-telepresence
-    MASTER_KEY=$(just get-master-key)
-    MEILISEARCH_URL=$(just get-service-url)
-    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/indexes" | jq .
+    @just api GET /indexes | jq .
 
 # Create an index
 create-index name='' primary_key='id':
     #!/bin/bash
     set -euo pipefail
-    just check-telepresence
-    MASTER_KEY=$(just get-master-key)
-    MEILISEARCH_URL=$(just get-service-url)
-
     NAME="{{ name }}"
     PRIMARY_KEY="{{ primary_key }}"
 
@@ -194,24 +173,16 @@ create-index name='' primary_key='id':
     fi
 
     echo "Creating index '$NAME' with primary key '$PRIMARY_KEY'..."
-    curl -s -X POST "${MEILISEARCH_URL}/indexes" \
-        -H "Authorization: Bearer ${MASTER_KEY}" \
-        -H "Content-Type: application/json" \
-        -d "{\"uid\": \"${NAME}\", \"primaryKey\": \"${PRIMARY_KEY}\"}" | jq .
+    just api POST /indexes "{\"uid\": \"${NAME}\", \"primaryKey\": \"${PRIMARY_KEY}\"}" | jq .
 
 # Delete an index
 delete-index name='':
     #!/bin/bash
     set -euo pipefail
-    just check-telepresence
-    MASTER_KEY=$(just get-master-key)
-    MEILISEARCH_URL=$(just get-service-url)
-
     NAME="{{ name }}"
 
     if [ -z "$NAME" ]; then
-        INDEXES=$(curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/indexes" | \
-            jq -r '.results[].uid')
+        INDEXES=$(just api GET /indexes | jq -r '.results[].uid')
         if [ -z "$INDEXES" ]; then
             echo "No indexes found"
             exit 0
@@ -220,8 +191,7 @@ delete-index name='':
     fi
 
     if gum confirm "Delete index '$NAME'?"; then
-        curl -s -X DELETE "${MEILISEARCH_URL}/indexes/${NAME}" \
-            -H "Authorization: Bearer ${MASTER_KEY}" | jq .
+        just api DELETE "/indexes/${NAME}" | jq .
         echo "Index '$NAME' deleted"
     else
         echo "Cancelled"
@@ -231,86 +201,50 @@ delete-index name='':
 test:
     #!/bin/bash
     set -euo pipefail
-    just check-telepresence
-    MASTER_KEY=$(just get-master-key)
-    MEILISEARCH_URL=$(just get-service-url)
     INDEX_NAME="test_index_$(date +%s)"
 
-    echo "Testing Meilisearch at ${MEILISEARCH_URL}"
+    echo "Testing Meilisearch"
     echo "Using index: ${INDEX_NAME}"
     echo
 
     echo "1. Creating index..."
-    curl -s -X POST "${MEILISEARCH_URL}/indexes" \
-        -H "Authorization: Bearer ${MASTER_KEY}" \
-        -H "Content-Type: application/json" \
-        -d "{\"uid\": \"${INDEX_NAME}\", \"primaryKey\": \"id\"}" | jq .
+    just api POST /indexes "{\"uid\": \"${INDEX_NAME}\", \"primaryKey\": \"id\"}" | jq .
     echo
     sleep 2
 
     echo "2. Adding documents..."
-    curl -s -X POST "${MEILISEARCH_URL}/indexes/${INDEX_NAME}/documents" \
-        -H "Authorization: Bearer ${MASTER_KEY}" \
-        -H "Content-Type: application/json" \
-        -d '[
-          {"id": 1, "title": "The Great Gatsby", "author": "F. Scott Fitzgerald"},
-          {"id": 2, "title": "1984", "author": "George Orwell"},
-          {"id": 3, "title": "To Kill a Mockingbird", "author": "Harper Lee"}
-        ]' | jq .
+    just api POST "/indexes/${INDEX_NAME}/documents" \
+        '[{"id": 1, "title": "The Great Gatsby", "author": "F. Scott Fitzgerald"},{"id": 2, "title": "1984", "author": "George Orwell"},{"id": 3, "title": "To Kill a Mockingbird", "author": "Harper Lee"}]' | jq .
     echo
     sleep 2
 
     echo "3. Searching documents..."
-    curl -s -X POST "${MEILISEARCH_URL}/indexes/${INDEX_NAME}/search" \
-        -H "Authorization: Bearer ${MASTER_KEY}" \
-        -H "Content-Type: application/json" \
-        -d '{"q": "Gatsby"}' | jq .
+    just api POST "/indexes/${INDEX_NAME}/search" '{"q": "Gatsby"}' | jq .
     echo
 
     echo "4. Deleting test index..."
-    curl -s -X DELETE "${MEILISEARCH_URL}/indexes/${INDEX_NAME}" \
-        -H "Authorization: Bearer ${MASTER_KEY}" | jq .
+    just api DELETE "/indexes/${INDEX_NAME}" | jq .
     echo
 
     echo "Test completed successfully!"
 
 # List all API keys
 list-keys:
-    #!/bin/bash
-    set -euo pipefail
-    just check-telepresence
-    MASTER_KEY=$(just get-master-key)
-    MEILISEARCH_URL=$(just get-service-url)
-    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/keys" | jq .
+    @just api GET /keys | jq .
 
 # Get default Admin API key
 get-admin-key:
-    #!/bin/bash
-    set -euo pipefail
-    just check-telepresence
-    MASTER_KEY=$(just get-master-key)
-    MEILISEARCH_URL=$(just get-service-url)
-    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/keys" | \
-        jq -r '.results[] | select(.name == "Default Admin API Key") | .key'
+    @just api GET /keys | jq -r '.results[] | select(.name == "Default Admin API Key") | .key'
 
 # Get default Search API key
 get-search-key:
-    #!/bin/bash
-    set -euo pipefail
-    just check-telepresence
-    MASTER_KEY=$(just get-master-key)
-    MEILISEARCH_URL=$(just get-service-url)
-    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/keys" | \
-        jq -r '.results[] | select(.name == "Default Search API Key") | .key'
+    @just api GET /keys | jq -r '.results[] | select(.name == "Default Search API Key") | .key'
 
 # Create a custom API key
 create-key name='' description='' actions='' indexes='':
     #!/bin/bash
     set -euo pipefail
     set -f  # Disable glob expansion for * handling
-    just check-telepresence
-    MASTER_KEY=$(just get-master-key)
-    MEILISEARCH_URL=$(just get-service-url)
 
     NAME="{{ name }}"
     DESCRIPTION="{{ description }}"
@@ -354,7 +288,7 @@ create-key name='' description='' actions='' indexes='':
     fi
 
     if [ -n "$EXPIRES_AT" ]; then
-        PAYLOAD=$(jq -n \
+        PAYLOAD=$(jq -n -c \
             --arg name "$NAME" \
             --arg desc "$DESCRIPTION" \
             --argjson actions "$ACTIONS_JSON" \
@@ -362,7 +296,7 @@ create-key name='' description='' actions='' indexes='':
             --arg expires "$EXPIRES_AT" \
             '{name: $name, description: $desc, actions: $actions, indexes: $indexes, expiresAt: $expires}')
     else
-        PAYLOAD=$(jq -n \
+        PAYLOAD=$(jq -n -c \
             --arg name "$NAME" \
             --arg desc "$DESCRIPTION" \
             --argjson actions "$ACTIONS_JSON" \
@@ -371,10 +305,7 @@ create-key name='' description='' actions='' indexes='':
     fi
 
     echo "Creating API key..."
-    RESULT=$(curl -s -X POST "${MEILISEARCH_URL}/keys" \
-        -H "Authorization: Bearer ${MASTER_KEY}" \
-        -H "Content-Type: application/json" \
-        -d "$PAYLOAD")
+    RESULT=$(just api POST /keys "$PAYLOAD")
 
     echo "$RESULT" | jq .
 
@@ -388,15 +319,10 @@ create-key name='' description='' actions='' indexes='':
 delete-key key='':
     #!/bin/bash
     set -euo pipefail
-    just check-telepresence
-    MASTER_KEY=$(just get-master-key)
-    MEILISEARCH_URL=$(just get-service-url)
-
     KEY="{{ key }}"
 
     if [ -z "$KEY" ]; then
-        KEYS=$(curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/keys" | \
-            jq -r '.results[] | "\(.uid) (\(.name))"')
+        KEYS=$(just api GET /keys | jq -r '.results[] | "\(.uid) (\(.name))"')
         if [ -z "$KEYS" ]; then
             echo "No API keys found"
             exit 0
@@ -406,8 +332,7 @@ delete-key key='':
     fi
 
     if gum confirm "Delete API key: $KEY?"; then
-        curl -s -X DELETE "${MEILISEARCH_URL}/keys/${KEY}" \
-            -H "Authorization: Bearer ${MASTER_KEY}"
+        just api DELETE "/keys/${KEY}"
         echo "API key deleted"
     else
         echo "Cancelled"
