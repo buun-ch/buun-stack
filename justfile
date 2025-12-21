@@ -25,6 +25,7 @@ mod lakekeeper
 mod librechat
 mod litellm
 mod longhorn
+mod meilisearch
 mod metabase
 mod mlflow
 mod minio

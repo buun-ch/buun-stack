@@ -50,6 +50,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - **[ClickHouse](https://clickhouse.com/)**: High-performance columnar analytics database
 - **[Qdrant](https://qdrant.tech/)**: Vector database for AI/ML applications
 - **[FalkorDB](https://www.falkordb.com/)**: Graph database with vector similarity search for knowledge graphs
+- **[Meilisearch](https://www.meilisearch.com/)**: Lightning-fast, typo-tolerant search engine
 - **[Lakekeeper](https://lakekeeper.io/)**: Apache Iceberg REST Catalog for data lake management
 - **[Apache Superset](https://superset.apache.org/)**: BI platform with rich chart types and high customizability
 - **[Metabase](https://www.metabase.com/)**: Lightweight BI with simple configuration and clean, modern interface
@@ -254,6 +255,16 @@ High-performance graph database with vector capabilities:
 - **Redis Compatible**: Uses Redis protocol for easy integration
 
 [📖 See FalkorDB Documentation](./falkordb/README.md)
+
+### Meilisearch
+
+Lightning-fast, typo-tolerant search engine:
+
+- **Instant Search**: Sub-50ms response times with typo tolerance
+- **Faceted Search**: Filtering and aggregations for rich search experiences
+- **RESTful API**: Simple HTTP API with SDKs for multiple languages
+
+[📖 See Meilisearch Documentation](./meilisearch/README.md)
 
 ### Lakekeeper
 

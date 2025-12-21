@@ -1,0 +1,427 @@
+set fallback := true
+
+export MEILISEARCH_NAMESPACE := env("MEILISEARCH_NAMESPACE", "meilisearch")
+export MEILISEARCH_VERSION := env("MEILISEARCH_VERSION", "0.19.0")
+export MEILISEARCH_ENV := env("MEILISEARCH_ENV", "production")
+export MEILISEARCH_STORAGE_SIZE := env("MEILISEARCH_STORAGE_SIZE", "10Gi")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add meilisearch https://meilisearch.github.io/meilisearch-kubernetes
+    helm repo update
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove meilisearch
+
+# Create Meilisearch namespace
+create-namespace:
+    @kubectl get namespace ${MEILISEARCH_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${MEILISEARCH_NAMESPACE}
+    @kubectl label namespace ${MEILISEARCH_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=restricted \
+        pod-security.kubernetes.io/enforce-version=latest \
+        pod-security.kubernetes.io/warn=restricted \
+        pod-security.kubernetes.io/warn-version=latest \
+        --overwrite
+
+# Delete Meilisearch namespace
+delete-namespace:
+    @kubectl delete namespace ${MEILISEARCH_NAMESPACE} --ignore-not-found
+
+# Create Meilisearch master key secret
+create-master-key:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up Meilisearch master key..."
+
+    MASTER_KEY=$(just utils::random-password)
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing master key in Vault and creating ExternalSecret..."
+        just vault::put meilisearch/master-key master_key="$MASTER_KEY"
+        gomplate -f meilisearch-master-key-external-secret.gomplate.yaml \
+            -o meilisearch-master-key-external-secret.yaml
+        kubectl apply -f meilisearch-master-key-external-secret.yaml
+        echo "Waiting for master key secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/meilisearch-master-key-external-secret \
+            -n ${MEILISEARCH_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret meilisearch-master-key -n ${MEILISEARCH_NAMESPACE} --ignore-not-found
+        kubectl create secret generic meilisearch-master-key -n ${MEILISEARCH_NAMESPACE} \
+            --from-literal=MEILI_MASTER_KEY="$MASTER_KEY"
+        echo "Master key secret created directly in Kubernetes"
+    fi
+    echo "Meilisearch master key setup completed"
+
+# Delete Meilisearch master key secret
+delete-master-key-secret:
+    @kubectl delete secret meilisearch-master-key -n ${MEILISEARCH_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret meilisearch-master-key-external-secret \
+        -n ${MEILISEARCH_NAMESPACE} --ignore-not-found
+
+# Install Meilisearch
+install:
+    #!/bin/bash
+    set -euo pipefail
+    just add-helm-repo
+    just create-namespace
+    just create-master-key
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            else
+                MONITORING_ENABLED="false"
+            fi
+        fi
+    fi
+
+    gomplate -f meilisearch-values.gomplate.yaml -o meilisearch-values.yaml
+    helm upgrade --install meilisearch meilisearch/meilisearch \
+        --version ${MEILISEARCH_VERSION} -n ${MEILISEARCH_NAMESPACE} --create-namespace --wait \
+        -f meilisearch-values.yaml
+
+    if [ "${MONITORING_ENABLED}" = "true" ]; then
+        kubectl label namespace ${MEILISEARCH_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+    fi
+
+# Uninstall Meilisearch (set delete_all=true to also delete PVC and data)
+uninstall delete_all='false':
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall meilisearch -n ${MEILISEARCH_NAMESPACE} --wait --ignore-not-found
+    just delete-master-key-secret
+    if [ "{{ delete_all }}" = "true" ]; then
+        echo "Deleting PVC and data..."
+        kubectl delete pvc -n ${MEILISEARCH_NAMESPACE} -l app.kubernetes.io/name=meilisearch --ignore-not-found
+        just delete-namespace
+    else
+        echo "PVC and data preserved. Run 'just meilisearch::uninstall true' to delete all."
+    fi
+
+# Get master key
+get-master-key:
+    @kubectl get secret meilisearch-master-key -n ${MEILISEARCH_NAMESPACE} \
+        -o jsonpath="{.data.MEILI_MASTER_KEY}" | base64 -d
+    @echo
+
+# Check if telepresence is connected
+[private]
+check-telepresence:
+    #!/bin/bash
+    set -euo pipefail
+    if ! command -v telepresence &>/dev/null; then
+        echo "Error: telepresence is not installed" >&2
+        exit 1
+    fi
+    if ! telepresence status &>/dev/null; then
+        echo "Error: telepresence is not connected" >&2
+        echo "Please run: telepresence connect" >&2
+        exit 1
+    fi
+
+# Get Meilisearch service URL
+[private]
+get-service-url:
+    @echo "http://meilisearch.${MEILISEARCH_NAMESPACE}.svc.cluster.local:7700"
+
+# Check Meilisearch health
+health-check:
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    MASTER_KEY=$(just get-master-key)
+    MEILISEARCH_URL=$(just get-service-url)
+    echo "Checking Meilisearch health at ${MEILISEARCH_URL}..."
+    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/health"
+    echo
+
+# Get Meilisearch version
+version:
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    MASTER_KEY=$(just get-master-key)
+    MEILISEARCH_URL=$(just get-service-url)
+    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/version" | jq .
+
+# Get Meilisearch stats
+stats:
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    MASTER_KEY=$(just get-master-key)
+    MEILISEARCH_URL=$(just get-service-url)
+    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/stats" | jq .
+
+# List all indexes
+list-indexes:
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    MASTER_KEY=$(just get-master-key)
+    MEILISEARCH_URL=$(just get-service-url)
+    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/indexes" | jq .
+
+# Create an index
+create-index name='' primary_key='id':
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    MASTER_KEY=$(just get-master-key)
+    MEILISEARCH_URL=$(just get-service-url)
+
+    NAME="{{ name }}"
+    PRIMARY_KEY="{{ primary_key }}"
+
+    if [ -z "$NAME" ]; then
+        NAME=$(gum input --prompt="Index name: " --placeholder="e.g., products")
+    fi
+
+    if [ -z "$NAME" ]; then
+        echo "Error: Index name is required"
+        exit 1
+    fi
+
+    echo "Creating index '$NAME' with primary key '$PRIMARY_KEY'..."
+    curl -s -X POST "${MEILISEARCH_URL}/indexes" \
+        -H "Authorization: Bearer ${MASTER_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"uid\": \"${NAME}\", \"primaryKey\": \"${PRIMARY_KEY}\"}" | jq .
+
+# Delete an index
+delete-index name='':
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    MASTER_KEY=$(just get-master-key)
+    MEILISEARCH_URL=$(just get-service-url)
+
+    NAME="{{ name }}"
+
+    if [ -z "$NAME" ]; then
+        INDEXES=$(curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/indexes" | \
+            jq -r '.results[].uid')
+        if [ -z "$INDEXES" ]; then
+            echo "No indexes found"
+            exit 0
+        fi
+        NAME=$(echo "$INDEXES" | gum choose --header="Select index to delete:")
+    fi
+
+    if gum confirm "Delete index '$NAME'?"; then
+        curl -s -X DELETE "${MEILISEARCH_URL}/indexes/${NAME}" \
+            -H "Authorization: Bearer ${MASTER_KEY}" | jq .
+        echo "Index '$NAME' deleted"
+    else
+        echo "Cancelled"
+    fi
+
+# Test Meilisearch with basic operations
+test:
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    MASTER_KEY=$(just get-master-key)
+    MEILISEARCH_URL=$(just get-service-url)
+    INDEX_NAME="test_index_$(date +%s)"
+
+    echo "Testing Meilisearch at ${MEILISEARCH_URL}"
+    echo "Using index: ${INDEX_NAME}"
+    echo
+
+    echo "1. Creating index..."
+    curl -s -X POST "${MEILISEARCH_URL}/indexes" \
+        -H "Authorization: Bearer ${MASTER_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"uid\": \"${INDEX_NAME}\", \"primaryKey\": \"id\"}" | jq .
+    echo
+    sleep 2
+
+    echo "2. Adding documents..."
+    curl -s -X POST "${MEILISEARCH_URL}/indexes/${INDEX_NAME}/documents" \
+        -H "Authorization: Bearer ${MASTER_KEY}" \
+        -H "Content-Type: application/json" \
+        -d '[
+          {"id": 1, "title": "The Great Gatsby", "author": "F. Scott Fitzgerald"},
+          {"id": 2, "title": "1984", "author": "George Orwell"},
+          {"id": 3, "title": "To Kill a Mockingbird", "author": "Harper Lee"}
+        ]' | jq .
+    echo
+    sleep 2
+
+    echo "3. Searching documents..."
+    curl -s -X POST "${MEILISEARCH_URL}/indexes/${INDEX_NAME}/search" \
+        -H "Authorization: Bearer ${MASTER_KEY}" \
+        -H "Content-Type: application/json" \
+        -d '{"q": "Gatsby"}' | jq .
+    echo
+
+    echo "4. Deleting test index..."
+    curl -s -X DELETE "${MEILISEARCH_URL}/indexes/${INDEX_NAME}" \
+        -H "Authorization: Bearer ${MASTER_KEY}" | jq .
+    echo
+
+    echo "Test completed successfully!"
+
+# List all API keys
+list-keys:
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    MASTER_KEY=$(just get-master-key)
+    MEILISEARCH_URL=$(just get-service-url)
+    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/keys" | jq .
+
+# Get default Admin API key
+get-admin-key:
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    MASTER_KEY=$(just get-master-key)
+    MEILISEARCH_URL=$(just get-service-url)
+    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/keys" | \
+        jq -r '.results[] | select(.name == "Default Admin API Key") | .key'
+
+# Get default Search API key
+get-search-key:
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    MASTER_KEY=$(just get-master-key)
+    MEILISEARCH_URL=$(just get-service-url)
+    curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/keys" | \
+        jq -r '.results[] | select(.name == "Default Search API Key") | .key'
+
+# Create a custom API key
+create-key name='' description='' actions='' indexes='':
+    #!/bin/bash
+    set -euo pipefail
+    set -f  # Disable glob expansion for * handling
+    just check-telepresence
+    MASTER_KEY=$(just get-master-key)
+    MEILISEARCH_URL=$(just get-service-url)
+
+    NAME="{{ name }}"
+    DESCRIPTION="{{ description }}"
+    ACTIONS="{{ actions }}"
+    INDEXES="{{ indexes }}"
+
+    if [ -z "$NAME" ]; then
+        NAME=$(gum input --prompt="Key name: " --placeholder="e.g., my-app-search-key")
+    fi
+
+    if [ -z "$DESCRIPTION" ]; then
+        DESCRIPTION=$(gum input --prompt="Description: " --placeholder="e.g., Search key for my-app")
+    fi
+
+    while [ -z "$ACTIONS" ]; do
+        ACTIONS=$(gum choose --no-limit --header="Select actions (at least one required):" \
+            "*" "search" \
+            "documents.*" "documents.add" "documents.get" "documents.delete" \
+            "indexes.*" "indexes.create" "indexes.get" "indexes.update" "indexes.delete" "indexes.swap" \
+            "tasks.*" "tasks.get" "tasks.cancel" "tasks.delete" \
+            "settings.*" "settings.get" "settings.update" \
+            "stats.get" "dumps.create" "snapshots.create" "version" \
+            "keys.*" "keys.get" "keys.create" "keys.update" "keys.delete" \
+            | tr '\n' ',' | sed 's/,$//')
+        if [ -z "$ACTIONS" ]; then
+            echo "Error: At least one action must be selected"
+        fi
+    done
+
+    if [ -z "$INDEXES" ]; then
+        INDEXES=$(gum input --prompt="Indexes (comma-separated, * for all): " --value="*")
+    fi
+
+    ACTIONS_JSON=$(printf '%s\n' "$ACTIONS" | tr ',' '\n' | jq -R 'select(length > 0)' | jq -s .)
+    INDEXES_JSON=$(printf '%s\n' "$INDEXES" | tr ',' '\n' | jq -R 'select(length > 0)' | jq -s .)
+
+    EXPIRES_AT=""
+    if gum confirm "Set expiration date?"; then
+        EXPIRES_AT=$(gum input --prompt="Expiration (YYYY-MM-DD): " --placeholder="2025-12-31")
+        EXPIRES_AT="${EXPIRES_AT}T23:59:59Z"
+    fi
+
+    if [ -n "$EXPIRES_AT" ]; then
+        PAYLOAD=$(jq -n \
+            --arg name "$NAME" \
+            --arg desc "$DESCRIPTION" \
+            --argjson actions "$ACTIONS_JSON" \
+            --argjson indexes "$INDEXES_JSON" \
+            --arg expires "$EXPIRES_AT" \
+            '{name: $name, description: $desc, actions: $actions, indexes: $indexes, expiresAt: $expires}')
+    else
+        PAYLOAD=$(jq -n \
+            --arg name "$NAME" \
+            --arg desc "$DESCRIPTION" \
+            --argjson actions "$ACTIONS_JSON" \
+            --argjson indexes "$INDEXES_JSON" \
+            '{name: $name, description: $desc, actions: $actions, indexes: $indexes, expiresAt: null}')
+    fi
+
+    echo "Creating API key..."
+    RESULT=$(curl -s -X POST "${MEILISEARCH_URL}/keys" \
+        -H "Authorization: Bearer ${MASTER_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "$PAYLOAD")
+
+    echo "$RESULT" | jq .
+
+    NEW_KEY=$(echo "$RESULT" | jq -r '.key // empty')
+    if [ -n "$NEW_KEY" ]; then
+        echo ""
+        echo "API Key: $NEW_KEY"
+    fi
+
+# Delete an API key
+delete-key key='':
+    #!/bin/bash
+    set -euo pipefail
+    just check-telepresence
+    MASTER_KEY=$(just get-master-key)
+    MEILISEARCH_URL=$(just get-service-url)
+
+    KEY="{{ key }}"
+
+    if [ -z "$KEY" ]; then
+        KEYS=$(curl -s -H "Authorization: Bearer ${MASTER_KEY}" "${MEILISEARCH_URL}/keys" | \
+            jq -r '.results[] | "\(.uid) (\(.name))"')
+        if [ -z "$KEYS" ]; then
+            echo "No API keys found"
+            exit 0
+        fi
+        SELECTED=$(echo "$KEYS" | gum choose --header="Select key to delete:")
+        KEY=$(echo "$SELECTED" | cut -d' ' -f1)
+    fi
+
+    if gum confirm "Delete API key: $KEY?"; then
+        curl -s -X DELETE "${MEILISEARCH_URL}/keys/${KEY}" \
+            -H "Authorization: Bearer ${MASTER_KEY}"
+        echo "API key deleted"
+    else
+        echo "Cancelled"
+    fi
+
+# Clean up Meilisearch resources
+cleanup:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete all Meilisearch resources and secrets."
+    if gum confirm "Are you sure you want to proceed?"; then
+        echo "Cleaning up Meilisearch resources..."
+        just vault::delete meilisearch/master-key || true
+        echo "Cleanup completed"
+    else
+        echo "Cleanup cancelled"
+    fi
