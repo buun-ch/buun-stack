@@ -4,27 +4,28 @@ version:
 cluster:
   instances: 1
 
-  # Security configuration for restricted Pod Security Standards
+{{- $seccomp := .Env.POSTGRES_SECCOMP_PROFILE | strings.Split ":" }}
   seccompProfile:
-    type: RuntimeDefault
+    type: {{ index $seccomp 0 }}
+{{- if gt (len $seccomp) 1 }}
+    localhostProfile: {{ index $seccomp 1 }}
+{{- end }}
 
-  # Resource configuration (Guaranteed QoS)
   resources:
     requests:
-      cpu: 200m
-      memory: 1Gi
+      cpu: {{ .Env.POSTGRES_CPU_REQUEST }}
+      memory: {{ .Env.POSTGRES_MEMORY_REQUEST }}
     limits:
-      cpu: 200m
-      memory: 1Gi
+      cpu: {{ .Env.POSTGRES_CPU_LIMIT }}
+      memory: {{ .Env.POSTGRES_MEMORY_LIMIT }}
 
-  # Storage configuration
   storage:
     size: {{ .Env.POSTGRES_STORAGE_SIZE }}
 
-  # PostgreSQL configuration
   postgresql:
     parameters:
       max_connections: {{ .Env.POSTGRES_MAX_CONNECTIONS | quote }}
+{{ file.Read "parameters.yaml" | strings.Indent 6 " " }}
 
   initdb:
     postInitTemplateSQL:

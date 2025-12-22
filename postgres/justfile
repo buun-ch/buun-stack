@@ -6,6 +6,11 @@ export CNPG_CLUSTER_CHART_VERSION := env("CNPG_CLUSTER_CHART_VERSION", "0.3.1")
 export POSTGRES_VERSION := env("POSTGRES_VERSION", "18")
 export POSTGRES_STORAGE_SIZE := env("POSTGRES_STORAGE_SIZE", "20Gi")
 export POSTGRES_MAX_CONNECTIONS := env("POSTGRES_MAX_CONNECTIONS", "200")
+export POSTGRES_MEMORY_REQUEST := env("POSTGRES_MEMORY_REQUEST", "2Gi")
+export POSTGRES_MEMORY_LIMIT := env("POSTGRES_MEMORY_LIMIT", "4Gi")
+export POSTGRES_CPU_REQUEST := env("POSTGRES_CPU_REQUEST", "200m")
+export POSTGRES_CPU_LIMIT := env("POSTGRES_CPU_LIMIT", "2")
+export POSTGRES_SECCOMP_PROFILE := env("POSTGRES_SECCOMP_PROFILE", "Unconfined")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 
@@ -41,7 +46,11 @@ install-cnpg:
         -f cnpg-values.yaml
 
     @kubectl label namespace ${CNPG_NAMESPACE} \
-        pod-security.kubernetes.io/enforce=restricted --overwrite
+        pod-security.kubernetes.io/enforce=privileged \
+        pod-security.kubernetes.io/enforce-version=latest \
+        pod-security.kubernetes.io/warn=baseline \
+        pod-security.kubernetes.io/warn-version=latest \
+        --overwrite
 
 # Uninstall CloudNativePG
 uninstall-cnpg:
@@ -84,6 +93,19 @@ create-cluster:
     echo "Waiting for PostgreSQL cluster to be ready..."
     kubectl wait --for=condition=Ready clusters.postgresql.cnpg.io/postgres-cluster \
         -n ${CNPG_NAMESPACE} --timeout=300s
+
+# Upgrade Postgres cluster configuration
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+    gomplate -f postgres-cluster-values.gomplate.yaml -o postgres-cluster-values.yaml
+    helm upgrade postgres-cluster cnpg/cluster \
+        --version ${CNPG_CLUSTER_CHART_VERSION} \
+        -n ${CNPG_NAMESPACE} -f postgres-cluster-values.yaml
+    echo "Waiting for cluster to be ready..."
+    kubectl wait --for=condition=Ready clusters.postgresql.cnpg.io/postgres-cluster \
+        -n ${CNPG_NAMESPACE} --timeout=300s
+    echo "Upgrade completed."
 
 # Delete Postgres cluster
 delete-cluster:

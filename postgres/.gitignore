@@ -1,3 +1,4 @@
 postgres-cluster-values.yaml
 create-database.yaml
 delete-database.yaml
+parameters.yaml
