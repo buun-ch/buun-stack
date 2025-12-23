@@ -112,69 +112,163 @@ get-password:
         -o jsonpath="{.data.redis-password}" | base64 -d
     @echo
 
+# Execute redis-cli command in FalkorDB pod
+[private]
+redis-cli *args:
+    #!/bin/bash
+    set -euo pipefail
+    PASSWORD=$(just get-password)
+    kubectl exec -n ${FALKORDB_NAMESPACE} falkordb-0 -c falkordb -- \
+        redis-cli -a "${PASSWORD}" --no-auth-warning {{ args }}
+
+# Create a FalkorDB user with ACL
+create-user username='' password='' allow='' deny='' graphs='':
+    #!/bin/bash
+    set -euo pipefail
+    set -f  # Disable glob expansion for * handling
+
+    USERNAME="{{ username }}"
+    USER_PASSWORD="{{ password }}"
+    ALLOW="{{ allow }}"
+    DENY="{{ deny }}"
+    GRAPHS="{{ graphs }}"
+
+    while [ -z "$USERNAME" ]; do
+        USERNAME=$(gum input --prompt="Username: " --placeholder="e.g., app-user")
+    done
+
+    if [ -z "$USER_PASSWORD" ]; then
+        USER_PASSWORD=$(gum input --prompt="Password (empty for random): " --password --width=80)
+        if [ -z "$USER_PASSWORD" ]; then
+            USER_PASSWORD=$(just utils::random-password)
+            echo "Generated password: $USER_PASSWORD"
+        fi
+    fi
+
+    if [ -z "$ALLOW" ]; then
+        ALLOW=$(gum choose --no-limit --header="Select allowed commands:" \
+            "GRAPH.QUERY" "GRAPH.RO_QUERY" "GRAPH.DELETE" "GRAPH.LIST" \
+            "GRAPH.EXPLAIN" "GRAPH.PROFILE" "GRAPH.COPY" "GRAPH.INFO" \
+            "GRAPH.CONFIG" "GRAPH.CONSTRAINT" "GRAPH.MEMORY" "GRAPH.SLOWLOG" \
+            | tr '\n' ' ' | sed 's/ $//')
+    fi
+
+    if [ -z "$DENY" ]; then
+        DENY=$(gum choose --no-limit --header="Select denied commands (optional):" \
+            "(none)" \
+            "GRAPH.DELETE" "GRAPH.CONFIG" "GRAPH.CONSTRAINT" \
+            | grep -v "(none)" | tr '\n' ' ' | sed 's/ $//' || true)
+    fi
+
+    if [ -z "$GRAPHS" ]; then
+        GRAPHS=$(gum input --prompt="Graph pattern (* for all): " --value="*")
+    fi
+
+    # Build ACL command arguments as array
+    ACL_ARGS=("ACL" "SETUSER" "$USERNAME" "on" ">$USER_PASSWORD")
+    if [ -n "$ALLOW" ]; then
+        for cmd in $ALLOW; do
+            ACL_ARGS+=("+$cmd")
+        done
+    fi
+    if [ -n "$DENY" ]; then
+        for cmd in $DENY; do
+            ACL_ARGS+=("-$cmd")
+        done
+    fi
+    ACL_ARGS+=("~$GRAPHS")
+
+    ADMIN_PASSWORD=$(just get-password)
+
+    echo "Creating user '$USERNAME' with ACL rules..."
+    RESULT=$(kubectl exec -n ${FALKORDB_NAMESPACE} falkordb-0 -c falkordb -- \
+        redis-cli -a "${ADMIN_PASSWORD}" --no-auth-warning "${ACL_ARGS[@]}" 2>&1)
+
+    if [[ "$RESULT" == *"ERR"* ]]; then
+        echo "Error: $RESULT" >&2
+        exit 1
+    fi
+
+    echo "User '$USERNAME' created successfully"
+    echo ""
+    echo "Connection info:"
+    echo "  Host: falkordb.${FALKORDB_NAMESPACE}.svc.cluster.local"
+    echo "  Port: 6379"
+    echo "  Username: $USERNAME"
+    echo "  Graph pattern: $GRAPHS"
+
+# List FalkorDB users
+list-users:
+    @just redis-cli ACL LIST
+
+# Get FalkorDB user details
+get-user username='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="{{ username }}"
+    if [ -z "$USERNAME" ]; then
+        USERNAME=$(gum input --prompt="Username: " --placeholder="e.g., app-user")
+    fi
+    just redis-cli ACL GETUSER "$USERNAME"
+
+# Delete a FalkorDB user
+delete-user username='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME="{{ username }}"
+    if [ -z "$USERNAME" ]; then
+        USERNAME=$(gum input --prompt="Username to delete: " --placeholder="e.g., app-user")
+    fi
+
+    if [ "$USERNAME" = "default" ]; then
+        echo "Error: Cannot delete the default user"
+        exit 1
+    fi
+
+    if gum confirm "Delete user '$USERNAME'?"; then
+        just redis-cli ACL DELUSER "$USERNAME"
+        echo "User '$USERNAME' deleted"
+    else
+        echo "Cancelled"
+    fi
+
 # Get FalkorDB service URL
 [private]
 get-service-url:
     @echo "redis://falkordb.${FALKORDB_NAMESPACE}.svc.cluster.local:6379"
 
-# Check if telepresence is connected
-[private]
-check-telepresence:
-    #!/bin/bash
-    set -euo pipefail
-    if ! command -v telepresence &>/dev/null; then
-        echo "Error: telepresence is not installed" >&2
-        exit 1
-    fi
-    if ! telepresence status &>/dev/null; then
-        echo "Error: telepresence is not connected" >&2
-        echo "Please run: telepresence connect" >&2
-        exit 1
-    fi
-
 # Check FalkorDB health
 health-check:
     #!/bin/bash
     set -euo pipefail
-    just check-telepresence
-    PASSWORD=$(just get-password)
-    HOST="falkordb.${FALKORDB_NAMESPACE}.svc.cluster.local"
-    echo "Checking FalkorDB health at ${HOST}:6379..."
-    redis-cli -h ${HOST} -p 6379 -a "${PASSWORD}" --no-auth-warning PING
+    echo "Checking FalkorDB health..."
+    just redis-cli PING
 
 # Test FalkorDB with basic graph operations
 test:
     #!/bin/bash
     set -euo pipefail
-    just check-telepresence
-    PASSWORD=$(just get-password)
-    HOST="falkordb.${FALKORDB_NAMESPACE}.svc.cluster.local"
     GRAPH_NAME="test_graph_$(date +%s)"
 
-    echo "Testing FalkorDB at ${HOST}:6379"
+    echo "Testing FalkorDB"
     echo "Using graph: ${GRAPH_NAME}"
     echo
 
     echo "1. Creating nodes..."
-    redis-cli -h ${HOST} -p 6379 -a "${PASSWORD}" --no-auth-warning \
-        GRAPH.QUERY ${GRAPH_NAME} "CREATE (:Person {name: 'Alice', age: 30})"
-    redis-cli -h ${HOST} -p 6379 -a "${PASSWORD}" --no-auth-warning \
-        GRAPH.QUERY ${GRAPH_NAME} "CREATE (:Person {name: 'Bob', age: 25})"
+    just redis-cli GRAPH.QUERY ${GRAPH_NAME} "CREATE (:Person {name: 'Alice', age: 30})"
+    just redis-cli GRAPH.QUERY ${GRAPH_NAME} "CREATE (:Person {name: 'Bob', age: 25})"
     echo
 
     echo "2. Creating relationship..."
-    redis-cli -h ${HOST} -p 6379 -a "${PASSWORD}" --no-auth-warning \
-        GRAPH.QUERY ${GRAPH_NAME} "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS {since: 2020}]->(b)"
+    just redis-cli GRAPH.QUERY ${GRAPH_NAME} "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS {since: 2020}]->(b)"
     echo
 
     echo "3. Querying graph..."
-    redis-cli -h ${HOST} -p 6379 -a "${PASSWORD}" --no-auth-warning \
-        GRAPH.QUERY ${GRAPH_NAME} "MATCH (p:Person)-[:KNOWS]->(friend) RETURN p.name, friend.name"
+    just redis-cli GRAPH.QUERY ${GRAPH_NAME} "MATCH (p:Person)-[:KNOWS]->(friend) RETURN p.name, friend.name"
     echo
 
     echo "4. Deleting test graph..."
-    redis-cli -h ${HOST} -p 6379 -a "${PASSWORD}" --no-auth-warning \
-        GRAPH.DELETE ${GRAPH_NAME}
+    just redis-cli GRAPH.DELETE ${GRAPH_NAME}
     echo
 
     echo "Test completed successfully!"

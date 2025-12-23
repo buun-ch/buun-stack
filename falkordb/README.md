@@ -52,10 +52,7 @@ just falkordb::get-password
 
 ### Health Check
 
-Requires [telepresence](https://www.telepresence.io/) connection:
-
 ```bash
-telepresence connect
 just falkordb::health-check
 ```
 
@@ -65,6 +62,50 @@ Run a basic test that creates nodes, relationships, and queries:
 
 ```bash
 just falkordb::test
+```
+
+### User Management
+
+FalkorDB supports Redis ACL for user authentication and authorization.
+
+#### Create User
+
+Interactive user creation with command permissions:
+
+```bash
+just falkordb::create-user
+```
+
+This prompts for:
+
+- Username
+- Password (empty generates random)
+- Allowed commands (multi-select)
+- Denied commands (multi-select, optional)
+- Graph pattern (`*` for all graphs)
+
+Or with arguments:
+
+```bash
+just falkordb::create-user myuser "" "GRAPH.QUERY GRAPH.RO_QUERY GRAPH.LIST" "" "app_*"
+```
+
+#### List Users
+
+```bash
+just falkordb::list-users
+```
+
+#### Get User Details
+
+```bash
+just falkordb::get-user myuser
+```
+
+#### Delete User
+
+```bash
+just falkordb::delete-user myuser
 ```
 
 ### Redis CLI
@@ -194,8 +235,12 @@ just falkordb                    # List all commands
 just falkordb::install           # Install FalkorDB
 just falkordb::uninstall         # Uninstall FalkorDB
 just falkordb::get-password      # Get password
-just falkordb::health-check      # Check health (requires telepresence)
+just falkordb::health-check      # Check health
 just falkordb::test              # Run graph operation tests
+just falkordb::create-user       # Create user with ACL
+just falkordb::list-users        # List all users
+just falkordb::get-user          # Get user details
+just falkordb::delete-user       # Delete a user
 just falkordb::cleanup           # Clean up Vault secrets
 ```
 
