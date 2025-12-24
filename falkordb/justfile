@@ -146,18 +146,17 @@ create-user username='' password='' allow='' deny='' graphs='':
     fi
 
     if [ -z "$ALLOW" ]; then
-        ALLOW=$(gum choose --no-limit --header="Select allowed commands:" \
-            "GRAPH.QUERY" "GRAPH.RO_QUERY" "GRAPH.DELETE" "GRAPH.LIST" \
-            "GRAPH.EXPLAIN" "GRAPH.PROFILE" "GRAPH.COPY" "GRAPH.INFO" \
-            "GRAPH.CONFIG" "GRAPH.CONSTRAINT" "GRAPH.MEMORY" "GRAPH.SLOWLOG" \
-            | tr '\n' ' ' | sed 's/ $//')
+        echo "Allowed commands/categories (space-separated):"
+        echo "  Categories: @all @read @write @fast @slow @connection @dangerous @admin"
+        echo "  Graph: GRAPH.QUERY GRAPH.RO_QUERY GRAPH.DELETE GRAPH.LIST GRAPH.INFO ..."
+        echo "  Redis: PING INFO DBSIZE KEYS SCAN EXISTS GET SET DEL ..."
+        ALLOW=$(gum input --prompt="Allow: " --placeholder="e.g., @all or GRAPH.QUERY GRAPH.RO_QUERY INFO PING")
     fi
 
     if [ -z "$DENY" ]; then
-        DENY=$(gum choose --no-limit --header="Select denied commands (optional):" \
-            "(none)" \
-            "GRAPH.DELETE" "GRAPH.CONFIG" "GRAPH.CONSTRAINT" \
-            | grep -v "(none)" | tr '\n' ' ' | sed 's/ $//' || true)
+        echo "Denied commands/categories (space-separated, optional):"
+        echo "  e.g., @dangerous @admin FLUSHDB FLUSHALL DEBUG SHUTDOWN"
+        DENY=$(gum input --prompt="Deny: " --placeholder="Leave empty for none")
     fi
 
     if [ -z "$GRAPHS" ]; then
