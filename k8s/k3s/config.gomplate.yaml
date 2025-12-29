@@ -4,3 +4,10 @@ kube-apiserver-arg:
   - "oidc-username-claim=preferred_username"
   - "oidc-groups-claim=groups"
   - "oidc-groups-prefix=oidc:"
+{{- if eq .Env.K8S_FEATURE_GATES "true" }}
+  - "feature-gates=ImageVolume=true"
+{{- end }}
+{{- if eq .Env.K8S_FEATURE_GATES "true" }}
+kubelet-arg:
+  - "feature-gates=ImageVolume=true"
+{{- end }}
