@@ -1,0 +1,287 @@
+set fallback := true
+
+export REDIS_OPERATOR_NAMESPACE := env("REDIS_OPERATOR_NAMESPACE", "redis")
+export REDIS_OPERATOR_VERSION := env("REDIS_OPERATOR_VERSION", "0.22.2")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    @helm repo add ot-helm https://ot-container-kit.github.io/helm-charts/ 2>/dev/null || true
+    @helm repo update ot-helm
+
+# Remove Helm repository
+remove-helm-repo:
+    @helm repo remove ot-helm 2>/dev/null || true
+
+# Create namespace
+create-namespace:
+    @kubectl get namespace ${REDIS_OPERATOR_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${REDIS_OPERATOR_NAMESPACE}
+    @kubectl label namespace ${REDIS_OPERATOR_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=baseline \
+        pod-security.kubernetes.io/warn=restricted \
+        --overwrite
+
+# Delete namespace
+delete-namespace:
+    @kubectl delete namespace ${REDIS_OPERATOR_NAMESPACE} --ignore-not-found
+
+# Install Redis Operator
+install:
+    #!/bin/bash
+    set -euo pipefail
+    just add-helm-repo
+    just create-namespace
+
+    SERVICEMONITOR_ENABLED="false"
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        SERVICEMONITOR_ENABLED="true"
+        kubectl label namespace ${REDIS_OPERATOR_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+    fi
+
+    helm upgrade --cleanup-on-fail --install redis-operator ot-helm/redis-operator \
+        --version ${REDIS_OPERATOR_VERSION} \
+        -n ${REDIS_OPERATOR_NAMESPACE} --wait \
+        -f redis-operator-values.yaml
+
+    if [ "${SERVICEMONITOR_ENABLED}" = "true" ]; then
+        gomplate -f servicemonitor.gomplate.yaml | kubectl apply -f -
+    fi
+
+    echo ""
+    echo "Redis Operator installed successfully!"
+    echo ""
+    echo "Available CRDs:"
+    kubectl get crds | grep redis || true
+
+# Upgrade Redis Operator
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+    just add-helm-repo
+    helm upgrade redis-operator ot-helm/redis-operator \
+        --version ${REDIS_OPERATOR_VERSION} \
+        -n ${REDIS_OPERATOR_NAMESPACE} --wait \
+        -f redis-operator-values.yaml
+    echo "Redis Operator upgraded successfully!"
+
+# Uninstall Redis Operator
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    if gum confirm "Are you sure you want to uninstall Redis Operator?"; then
+        helm uninstall redis-operator -n ${REDIS_OPERATOR_NAMESPACE} --wait --ignore-not-found
+        kubectl delete servicemonitor redis-operator -n ${REDIS_OPERATOR_NAMESPACE} --ignore-not-found
+        just delete-namespace
+        echo "Redis Operator uninstalled"
+    else
+        echo "Uninstall cancelled"
+    fi
+
+# Show Redis Operator status
+status:
+    @echo "=== Redis Operator ===" && \
+        kubectl get pods -n ${REDIS_OPERATOR_NAMESPACE} -l name=redis-operator && \
+        echo "" && \
+        echo "=== Redis CRDs ===" && \
+        kubectl get crds | grep redis || true
+
+# List all Redis instances across all namespaces
+list:
+    #!/bin/bash
+    set -euo pipefail
+    echo "=== Redis Standalone ==="
+    kubectl get redis --all-namespaces 2>/dev/null || echo "No Redis standalone instances found"
+    echo ""
+    echo "=== Redis Cluster ==="
+    kubectl get rediscluster --all-namespaces 2>/dev/null || echo "No Redis clusters found"
+    echo ""
+    echo "=== Redis Replication ==="
+    kubectl get redisreplication --all-namespaces 2>/dev/null || echo "No Redis replications found"
+    echo ""
+    echo "=== Redis Sentinel ==="
+    kubectl get redissentinel --all-namespaces 2>/dev/null || echo "No Redis sentinels found"
+
+# Create a sample Redis standalone instance
+create-sample-standalone namespace='default' name='redis-standalone':
+    #!/bin/bash
+    set -euo pipefail
+    NAMESPACE="{{ namespace }}"
+    NAME="{{ name }}"
+
+    if [ -z "$NAMESPACE" ]; then
+        NAMESPACE=$(gum input --prompt="Namespace: " --value="default")
+    fi
+    if [ -z "$NAME" ]; then
+        NAME=$(gum input --prompt="Name: " --value="redis-standalone")
+    fi
+
+    cat <<EOF | kubectl apply -f -
+    apiVersion: redis.redis.opstreelabs.in/v1beta2
+    kind: Redis
+    metadata:
+      name: ${NAME}
+      namespace: ${NAMESPACE}
+    spec:
+      podSecurityContext:
+        runAsUser: 1000
+        fsGroup: 1000
+      kubernetesConfig:
+        image: quay.io/opstree/redis:v7.0.12
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      storage:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 1Gi
+      redisExporter:
+        enabled: true
+        image: quay.io/opstree/redis-exporter:v1.44.0
+    EOF
+
+    echo "Redis standalone '${NAME}' created in namespace '${NAMESPACE}'"
+    echo "Waiting for Redis to be ready..."
+    kubectl wait --for=condition=Ready redis/${NAME} -n ${NAMESPACE} --timeout=120s || true
+
+# Create a sample Redis cluster
+create-sample-cluster namespace='default' name='redis-cluster':
+    #!/bin/bash
+    set -euo pipefail
+    NAMESPACE="{{ namespace }}"
+    NAME="{{ name }}"
+
+    if [ -z "$NAMESPACE" ]; then
+        NAMESPACE=$(gum input --prompt="Namespace: " --value="default")
+    fi
+    if [ -z "$NAME" ]; then
+        NAME=$(gum input --prompt="Name: " --value="redis-cluster")
+    fi
+
+    cat <<EOF | kubectl apply -f -
+    apiVersion: redis.redis.opstreelabs.in/v1beta2
+    kind: RedisCluster
+    metadata:
+      name: ${NAME}
+      namespace: ${NAMESPACE}
+    spec:
+      clusterSize: 3
+      clusterVersion: v7
+      podSecurityContext:
+        runAsUser: 1000
+        fsGroup: 1000
+      kubernetesConfig:
+        image: quay.io/opstree/redis:v7.0.12
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      persistenceEnabled: true
+      storage:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 1Gi
+      redisExporter:
+        enabled: true
+        image: quay.io/opstree/redis-exporter:v1.44.0
+      redisLeader:
+        replicas: 3
+      redisFollower:
+        replicas: 3
+    EOF
+
+    echo "Redis cluster '${NAME}' created in namespace '${NAMESPACE}'"
+    echo "Note: Cluster initialization may take several minutes"
+
+# Create a sample Redis replication (master-replica with Sentinel)
+create-sample-replication namespace='default' name='redis-replication':
+    #!/bin/bash
+    set -euo pipefail
+    NAMESPACE="{{ namespace }}"
+    NAME="{{ name }}"
+
+    if [ -z "$NAMESPACE" ]; then
+        NAMESPACE=$(gum input --prompt="Namespace: " --value="default")
+    fi
+    if [ -z "$NAME" ]; then
+        NAME=$(gum input --prompt="Name: " --value="redis-replication")
+    fi
+
+    cat <<EOF | kubectl apply -f -
+    apiVersion: redis.redis.opstreelabs.in/v1beta2
+    kind: RedisReplication
+    metadata:
+      name: ${NAME}
+      namespace: ${NAMESPACE}
+    spec:
+      clusterSize: 3
+      podSecurityContext:
+        runAsUser: 1000
+        fsGroup: 1000
+      kubernetesConfig:
+        image: quay.io/opstree/redis:v7.0.12
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      storage:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 1Gi
+      redisExporter:
+        enabled: true
+        image: quay.io/opstree/redis-exporter:v1.44.0
+    EOF
+
+    echo "Redis replication '${NAME}' created in namespace '${NAMESPACE}'"
+
+# Delete a Redis instance
+delete-instance kind='' namespace='' name='':
+    #!/bin/bash
+    set -euo pipefail
+    KIND="{{ kind }}"
+    NAMESPACE="{{ namespace }}"
+    NAME="{{ name }}"
+
+    if [ -z "$KIND" ]; then
+        KIND=$(gum choose "redis" "rediscluster" "redisreplication" "redissentinel")
+    fi
+    if [ -z "$NAMESPACE" ]; then
+        NAMESPACE=$(gum input --prompt="Namespace: " --value="default")
+    fi
+    if [ -z "$NAME" ]; then
+        NAME=$(gum input --prompt="Instance name: ")
+    fi
+
+    if gum confirm "Delete ${KIND}/${NAME} in namespace ${NAMESPACE}?"; then
+        kubectl delete ${KIND} ${NAME} -n ${NAMESPACE}
+        echo "${KIND}/${NAME} deleted"
+    else
+        echo "Cancelled"
+    fi

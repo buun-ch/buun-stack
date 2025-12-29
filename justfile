@@ -38,6 +38,7 @@ mod postgres
 mod prometheus
 mod qdrant
 mod querybook
+mod redis-operator
 mod security
 mod superset
 mod temporal
