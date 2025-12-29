@@ -51,6 +51,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - **[Qdrant](https://qdrant.tech/)**: Vector database for AI/ML applications
 - **[FalkorDB](https://www.falkordb.com/)**: Graph database with vector similarity search for knowledge graphs
 - **[Meilisearch](https://www.meilisearch.com/)**: Lightning-fast, typo-tolerant search engine
+- **[Redis Operator](https://github.com/OT-CONTAINER-KIT/redis-operator)**: Kubernetes operator for Redis standalone, cluster, and replication
 - **[Lakekeeper](https://lakekeeper.io/)**: Apache Iceberg REST Catalog for data lake management
 - **[Apache Superset](https://superset.apache.org/)**: BI platform with rich chart types and high customizability
 - **[Metabase](https://www.metabase.com/)**: Lightweight BI with simple configuration and clean, modern interface
@@ -265,6 +266,17 @@ Lightning-fast, typo-tolerant search engine:
 - **RESTful API**: Simple HTTP API with SDKs for multiple languages
 
 [📖 See Meilisearch Documentation](./meilisearch/README.md)
+
+### Redis Operator
+
+Kubernetes operator for managing Redis instances:
+
+- **Multiple Modes**: Standalone, Cluster, Replication, and Sentinel configurations
+- **Persistent Storage**: Automatic PVC provisioning with Longhorn
+- **Monitoring**: Redis Exporter sidecar for Prometheus metrics
+- **Security**: Non-root containers with proper security contexts
+
+[📖 See Redis Operator Documentation](./redis-operator/README.md)
 
 ### Lakekeeper
 

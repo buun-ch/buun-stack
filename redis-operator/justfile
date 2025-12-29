@@ -153,8 +153,8 @@ create-sample-standalone namespace='default' name='redis-standalone':
     EOF
 
     echo "Redis standalone '${NAME}' created in namespace '${NAMESPACE}'"
-    echo "Waiting for Redis to be ready..."
-    kubectl wait --for=condition=Ready redis/${NAME} -n ${NAMESPACE} --timeout=120s || true
+    echo "Waiting for Redis pod to be ready..."
+    kubectl wait --for=condition=Ready pod/${NAME}-0 -n ${NAMESPACE} --timeout=120s || true
 
 # Create a sample Redis cluster
 create-sample-cluster namespace='default' name='redis-cluster':
