@@ -39,11 +39,24 @@ spec:
             - /bin/sh
             - -c
             - |
+              ACL_FILE="/var/lib/falkordb/data/users.acl"
+              {{- if .Values.auth.enabled }}
+              # Ensure default user has password set in ACL file
+              if [ ! -f "$ACL_FILE" ] || ! grep -q "^user default " "$ACL_FILE"; then
+                echo "user default on >$REDIS_PASSWORD sanitize-payload ~* &* +@all" > "$ACL_FILE.tmp"
+                if [ -f "$ACL_FILE" ]; then
+                  grep -v "^user default " "$ACL_FILE" >> "$ACL_FILE.tmp" || true
+                fi
+                mv "$ACL_FILE.tmp" "$ACL_FILE"
+              fi
+              {{- else }}
+              if [ ! -f "$ACL_FILE" ]; then
+                touch "$ACL_FILE"
+              fi
+              {{- end }}
               redis-server \
                 --loadmodule /var/lib/falkordb/bin/falkordb.so \
-                {{- if .Values.auth.enabled }}
-                --requirepass "$REDIS_PASSWORD"
-                {{- end }}
+                --aclfile "$ACL_FILE"
           env:
             {{- if .Values.auth.enabled }}
             - name: REDIS_PASSWORD

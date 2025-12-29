@@ -160,7 +160,9 @@ create-user username='' password='' allow='' deny='' graphs='':
     fi
 
     if [ -z "$GRAPHS" ]; then
-        GRAPHS=$(gum input --prompt="Graph pattern (* for all): " --value="*")
+        echo "Graph patterns (space-separated, * for all):"
+        echo "  e.g., * or mygraph* or graph1* graph2*"
+        GRAPHS=$(gum input --prompt="Patterns: " --value="*")
     fi
 
     # Build ACL command arguments as array
@@ -175,7 +177,9 @@ create-user username='' password='' allow='' deny='' graphs='':
             ACL_ARGS+=("-$cmd")
         done
     fi
-    ACL_ARGS+=("~$GRAPHS")
+    for pattern in $GRAPHS; do
+        ACL_ARGS+=("~$pattern")
+    done
 
     ADMIN_PASSWORD=$(just get-password)
 
@@ -188,13 +192,20 @@ create-user username='' password='' allow='' deny='' graphs='':
         exit 1
     fi
 
+    echo "Saving ACL to persistent storage..."
+    SAVE_RESULT=$(kubectl exec -n ${FALKORDB_NAMESPACE} falkordb-0 -c falkordb -- \
+        redis-cli -a "${ADMIN_PASSWORD}" --no-auth-warning ACL SAVE 2>&1)
+    if [[ "$SAVE_RESULT" == *"ERR"* ]]; then
+        echo "Warning: Failed to save ACL: $SAVE_RESULT" >&2
+    fi
+
     echo "User '$USERNAME' created successfully"
     echo ""
     echo "Connection info:"
     echo "  Host: falkordb.${FALKORDB_NAMESPACE}.svc.cluster.local"
     echo "  Port: 6379"
     echo "  Username: $USERNAME"
-    echo "  Graph pattern: $GRAPHS"
+    echo "  Graph patterns: $GRAPHS"
 
 # List FalkorDB users
 list-users:
@@ -226,10 +237,18 @@ delete-user username='':
 
     if gum confirm "Delete user '$USERNAME'?"; then
         just redis-cli ACL DELUSER "$USERNAME"
+        PASSWORD=$(just get-password)
+        kubectl exec -n ${FALKORDB_NAMESPACE} falkordb-0 -c falkordb -- \
+            redis-cli -a "${PASSWORD}" --no-auth-warning ACL SAVE
         echo "User '$USERNAME' deleted"
     else
         echo "Cancelled"
     fi
+
+# Save ACL configuration to persistent storage
+save-acl:
+    @just redis-cli ACL SAVE
+    @echo "ACL configuration saved"
 
 # Get FalkorDB service URL
 [private]
