@@ -1,0 +1,368 @@
+set fallback := true
+
+export MEMGRAPH_NAMESPACE := env("MEMGRAPH_NAMESPACE", "memgraph")
+export MEMGRAPH_CHART_VERSION := env("MEMGRAPH_CHART_VERSION", "0.2.14")
+export MEMGRAPH_LAB_CHART_VERSION := env("MEMGRAPH_LAB_CHART_VERSION", "0.1.11")
+export MEMGRAPH_LAB_HOST := env("MEMGRAPH_LAB_HOST", "")
+export MEMGRAPH_STORAGE_SIZE := env("MEMGRAPH_STORAGE_SIZE", "10Gi")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add memgraph https://memgraph.github.io/helm-charts
+    helm repo update memgraph
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove memgraph
+
+# Create Memgraph namespace
+create-namespace:
+    @kubectl get namespace ${MEMGRAPH_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${MEMGRAPH_NAMESPACE}
+    @kubectl label namespace ${MEMGRAPH_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=baseline \
+        pod-security.kubernetes.io/warn=restricted \
+        --overwrite
+
+# Delete Memgraph namespace
+delete-namespace:
+    @kubectl delete namespace ${MEMGRAPH_NAMESPACE} --ignore-not-found
+
+# Create Memgraph password secret
+create-password-secret:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up Memgraph credentials..."
+
+    USERNAME="memgraph"
+    PASSWORD=$(just utils::random-password)
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Storing credentials in Vault and creating ExternalSecret..."
+        just vault::put memgraph/auth username="$USERNAME" password="$PASSWORD"
+        gomplate -f memgraph-password-external-secret.gomplate.yaml -o memgraph-password-external-secret.yaml
+        kubectl apply -f memgraph-password-external-secret.yaml
+        echo "Waiting for password secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/memgraph-password-external-secret \
+            -n ${MEMGRAPH_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret memgraph-secrets -n ${MEMGRAPH_NAMESPACE} --ignore-not-found
+        kubectl create secret generic memgraph-secrets -n ${MEMGRAPH_NAMESPACE} \
+            --from-literal=USER="$USERNAME" \
+            --from-literal=PASSWORD="$PASSWORD"
+        if helm status vault -n vault &>/dev/null; then
+            just vault::put memgraph/auth username="$USERNAME" password="$PASSWORD"
+        fi
+    fi
+    echo "Memgraph credentials setup completed"
+
+# Delete Memgraph password secret
+delete-password-secret:
+    @kubectl delete secret memgraph-secrets -n ${MEMGRAPH_NAMESPACE} --ignore-not-found
+    @kubectl delete externalsecret memgraph-password-external-secret -n ${MEMGRAPH_NAMESPACE} --ignore-not-found
+
+# Install Memgraph
+install:
+    #!/bin/bash
+    set -euo pipefail
+    just add-helm-repo
+    just create-namespace
+    just create-password-secret
+
+    METRICS_ENABLED="false"
+    SERVICEMONITOR_ENABLED="false"
+
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        if [ -z "${MONITORING_ENABLED}" ]; then
+            if gum confirm "Enable Prometheus monitoring?"; then
+                MONITORING_ENABLED="true"
+            else
+                MONITORING_ENABLED="false"
+            fi
+        fi
+        if [ "${MONITORING_ENABLED}" = "true" ]; then
+            METRICS_ENABLED="true"
+            SERVICEMONITOR_ENABLED="true"
+            kubectl label namespace ${MEMGRAPH_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+        fi
+    fi
+
+    export METRICS_ENABLED SERVICEMONITOR_ENABLED
+    gomplate -f memgraph-values.gomplate.yaml -o memgraph-values.yaml
+
+    helm upgrade --install memgraph memgraph/memgraph \
+        --version ${MEMGRAPH_CHART_VERSION} -n ${MEMGRAPH_NAMESPACE} --create-namespace --wait \
+        -f memgraph-values.yaml
+
+    echo ""
+    echo "Memgraph installed successfully!"
+    echo "Bolt connection: bolt://memgraph.${MEMGRAPH_NAMESPACE}.svc.cluster.local:7687"
+
+    if gum confirm "Install Memgraph Lab (Web UI)?"; then
+        just install-lab
+    fi
+
+# Install Memgraph Lab (Web UI)
+install-lab:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${MEMGRAPH_LAB_HOST}" ]; do
+        MEMGRAPH_LAB_HOST=$(
+            gum input --prompt="Memgraph Lab host (FQDN): " --width=100 \
+            --placeholder="e.g., memgraph-lab.example.com"
+        )
+    done
+
+    ENABLE_OAUTH2_PROXY="false"
+    if gum confirm "Enable OAuth2 Proxy authentication (Keycloak)?"; then
+        ENABLE_OAUTH2_PROXY="true"
+        export MEMGRAPH_LAB_INGRESS_ENABLED="false"
+    else
+        export MEMGRAPH_LAB_INGRESS_ENABLED="true"
+    fi
+
+    gomplate -f memgraph-lab-values.gomplate.yaml -o memgraph-lab-values.yaml
+
+    helm upgrade --install memgraph-lab memgraph/memgraph-lab \
+        --version ${MEMGRAPH_LAB_CHART_VERSION} -n ${MEMGRAPH_NAMESPACE} --wait \
+        -f memgraph-lab-values.yaml
+
+    if [ "${ENABLE_OAUTH2_PROXY}" = "true" ]; then
+        echo "Setting up OAuth2 Proxy for Memgraph Lab..."
+        just oauth2-proxy::setup-for-app \
+            memgraph-lab \
+            "${MEMGRAPH_LAB_HOST}" \
+            "${MEMGRAPH_NAMESPACE}" \
+            "memgraph-lab:3000"
+    fi
+
+    echo ""
+    echo "Memgraph Lab installed successfully!"
+    echo "URL: https://${MEMGRAPH_LAB_HOST}"
+
+# Uninstall Memgraph Lab
+uninstall-lab:
+    #!/bin/bash
+    set -euo pipefail
+    if gum confirm "Are you sure you want to uninstall Memgraph Lab?"; then
+        # Remove OAuth2 Proxy if it exists
+        if kubectl get deployment oauth2-proxy-memgraph-lab -n ${MEMGRAPH_NAMESPACE} &>/dev/null; then
+            just oauth2-proxy::remove-for-app memgraph-lab ${MEMGRAPH_NAMESPACE}
+        fi
+        helm uninstall memgraph-lab -n ${MEMGRAPH_NAMESPACE} --wait --ignore-not-found
+        echo "Memgraph Lab uninstalled"
+    else
+        echo "Uninstall cancelled"
+    fi
+
+# Uninstall Memgraph (use 'just memgraph::uninstall false' to keep data)
+uninstall delete-volumes='true':
+    #!/bin/bash
+    set -euo pipefail
+    if gum confirm "Are you sure you want to uninstall Memgraph?"; then
+        if helm status memgraph-lab -n ${MEMGRAPH_NAMESPACE} &>/dev/null; then
+            helm uninstall memgraph-lab -n ${MEMGRAPH_NAMESPACE} --wait --ignore-not-found
+        fi
+        helm uninstall memgraph -n ${MEMGRAPH_NAMESPACE} --wait --ignore-not-found
+        just delete-password-secret
+        if [ "{{ delete-volumes }}" = "true" ]; then
+            echo "Deleting PVCs..."
+            kubectl delete pvc -n ${MEMGRAPH_NAMESPACE} --all --ignore-not-found
+            just delete-namespace
+        else
+            echo "PVCs preserved. Data will be available on reinstall."
+        fi
+        echo "Memgraph uninstalled"
+    else
+        echo "Uninstall cancelled"
+    fi
+
+# Get Memgraph username
+get-username:
+    @kubectl get secret memgraph-secrets -n ${MEMGRAPH_NAMESPACE} \
+        -o jsonpath="{.data.USER}" | base64 -d
+    @echo
+
+# Get Memgraph password
+get-password:
+    @kubectl get secret memgraph-secrets -n ${MEMGRAPH_NAMESPACE} \
+        -o jsonpath="{.data.PASSWORD}" | base64 -d
+    @echo
+
+# Check Memgraph health
+health-check:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Checking Memgraph health..."
+    USERNAME=$(just get-username)
+    PASSWORD=$(just get-password)
+    echo "RETURN 'OK' AS status;" | kubectl exec -i -n ${MEMGRAPH_NAMESPACE} memgraph-0 -- \
+        mgconsole --host 127.0.0.1 --port 7687 \
+        --username "${USERNAME}" --password "${PASSWORD}"
+
+# Test Memgraph with basic graph operations
+test:
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME=$(just get-username)
+    PASSWORD=$(just get-password)
+
+    run_query() {
+        echo "$1" | kubectl exec -i -n ${MEMGRAPH_NAMESPACE} memgraph-0 -- \
+            mgconsole --host 127.0.0.1 --port 7687 \
+            --username "${USERNAME}" --password "${PASSWORD}"
+    }
+
+    echo "Testing Memgraph"
+    echo
+
+    echo "1. Creating nodes..."
+    run_query "CREATE (:Person {name: 'Alice', age: 30});"
+    run_query "CREATE (:Person {name: 'Bob', age: 25});"
+    echo
+
+    echo "2. Creating relationship..."
+    run_query "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS {since: 2020}]->(b);"
+    echo
+
+    echo "3. Querying graph..."
+    run_query "MATCH (p:Person)-[:KNOWS]->(friend) RETURN p.name, friend.name;"
+    echo
+
+    echo "4. Deleting test data..."
+    run_query "MATCH (n) DETACH DELETE n;"
+    echo
+
+    echo "Test completed successfully!"
+
+# Open Memgraph console (mgconsole)
+console:
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME=$(just get-username)
+    PASSWORD=$(just get-password)
+    kubectl exec -it -n ${MEMGRAPH_NAMESPACE} memgraph-0 -- \
+        mgconsole --host 127.0.0.1 --port 7687 \
+        --username "${USERNAME}" --password "${PASSWORD}"
+
+# Create a Memgraph user
+create-user username='':
+    #!/bin/bash
+    set -euo pipefail
+
+    NEW_USERNAME="{{ username }}"
+    if [ -z "${NEW_USERNAME}" ]; then
+        NEW_USERNAME=$(gum input --prompt="Username: " --placeholder="e.g., analyst")
+    fi
+    if [ -z "${NEW_USERNAME}" ]; then
+        echo "Error: Username is required"
+        exit 1
+    fi
+
+    NEW_PASSWORD=$(gum input --prompt="Password (leave empty for random): " --password)
+    if [ -z "${NEW_PASSWORD}" ]; then
+        NEW_PASSWORD=$(just utils::random-password)
+        echo "Generated random password"
+    fi
+
+    USERNAME=$(just get-username)
+    PASSWORD=$(just get-password)
+
+    run_query() {
+        echo "$1" | kubectl exec -i -n ${MEMGRAPH_NAMESPACE} memgraph-0 -- \
+            mgconsole --host 127.0.0.1 --port 7687 \
+            --username "${USERNAME}" --password "${PASSWORD}"
+    }
+
+    echo "Creating user '${NEW_USERNAME}'..."
+    run_query "CREATE USER ${NEW_USERNAME} IDENTIFIED BY '${NEW_PASSWORD}';"
+
+    if helm status vault -n vault &>/dev/null; then
+        echo "Storing credentials in Vault..."
+        just vault::put "memgraph/users/${NEW_USERNAME}" password="${NEW_PASSWORD}"
+    fi
+
+    echo ""
+    echo "User created successfully!"
+    echo "Username: ${NEW_USERNAME}"
+    echo "Password: ${NEW_PASSWORD}"
+
+# Delete a Memgraph user
+delete-user username='':
+    #!/bin/bash
+    set -euo pipefail
+
+    DEL_USERNAME="{{ username }}"
+    if [ -z "${DEL_USERNAME}" ]; then
+        USERNAME=$(just get-username)
+        PASSWORD=$(just get-password)
+
+        USERS=$(echo "SHOW USERS;" | kubectl exec -i -n ${MEMGRAPH_NAMESPACE} memgraph-0 -- \
+            mgconsole --host 127.0.0.1 --port 7687 \
+            --username "${USERNAME}" --password "${PASSWORD}" 2>/dev/null | \
+            grep -E '^\|' | tail -n +2 | sed 's/[|"]//g' | awk '{print $1}' | grep -v "^$")
+
+        if [ -z "${USERS}" ]; then
+            echo "No users found"
+            exit 0
+        fi
+
+        DEL_USERNAME=$(echo "${USERS}" | gum choose --header="Select user to delete:")
+    fi
+
+    if [ -z "${DEL_USERNAME}" ]; then
+        echo "No user selected"
+        exit 0
+    fi
+
+    # Remove any remaining quotes from username
+    DEL_USERNAME=$(echo "${DEL_USERNAME}" | tr -d '"')
+
+    if ! gum confirm "Are you sure you want to delete user '${DEL_USERNAME}'?"; then
+        echo "Deletion cancelled"
+        exit 0
+    fi
+
+    USERNAME=$(just get-username)
+    PASSWORD=$(just get-password)
+
+    echo "DROP USER ${DEL_USERNAME};" | kubectl exec -i -n ${MEMGRAPH_NAMESPACE} memgraph-0 -- \
+        mgconsole --host 127.0.0.1 --port 7687 \
+        --username "${USERNAME}" --password "${PASSWORD}"
+
+    if helm status vault -n vault &>/dev/null; then
+        just vault::delete "memgraph/users/${DEL_USERNAME}" || true
+    fi
+
+    echo "User '${DEL_USERNAME}' deleted"
+
+# List Memgraph users
+list-users:
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME=$(just get-username)
+    PASSWORD=$(just get-password)
+    echo "SHOW USERS;" | kubectl exec -i -n ${MEMGRAPH_NAMESPACE} memgraph-0 -- \
+        mgconsole --host 127.0.0.1 --port 7687 \
+        --username "${USERNAME}" --password "${PASSWORD}"
+
+# Clean up Memgraph resources
+cleanup:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete all Memgraph resources and secrets."
+    if gum confirm "Are you sure you want to proceed?"; then
+        echo "Cleaning up Memgraph resources..."
+        just vault::delete memgraph/auth || true
+        echo "Cleanup completed"
+    else
+        echo "Cleanup cancelled"
+    fi

@@ -1,0 +1,47 @@
+env:
+  - name: QUICK_CONNECT_MG_HOST
+    value: memgraph
+  - name: QUICK_CONNECT_MG_PORT
+    value: "7687"
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 128Mi
+  limits:
+    cpu: 100m
+    memory: 1Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+
+ingress:
+{{- if eq (.Env.MEMGRAPH_LAB_INGRESS_ENABLED | default "true") "true" }}
+  enabled: true
+  className: traefik
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: {{ .Env.MEMGRAPH_LAB_HOST }}
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - {{ .Env.MEMGRAPH_LAB_HOST }}
+{{- else }}
+  enabled: false
+{{- end }}

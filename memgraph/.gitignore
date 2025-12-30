@@ -1,0 +1,3 @@
+memgraph-values.yaml
+memgraph-lab-values.yaml
+memgraph-password-external-secret.yaml

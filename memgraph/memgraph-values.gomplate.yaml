@@ -1,0 +1,59 @@
+image:
+  repository: memgraph/memgraph
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 2Gi
+
+sysctlInitContainer:
+  enabled: false
+
+secrets:
+  enabled: true
+  name: memgraph-secrets
+  userKey: USER
+  passwordKey: PASSWORD
+
+memgraphConfig:
+  - "--data-directory=/var/lib/memgraph/mg_data"
+  - "--also-log-to-stderr=true"
+  - "--log-level=INFO"
+
+service:
+  type: ClusterIP
+  bolt:
+    enabled: true
+    port: 7687
+
+persistentVolumeClaim:
+  data:
+    enabled: true
+    size: {{ .Env.MEMGRAPH_STORAGE_SIZE }}
+  logs:
+    enabled: true
+    size: 1Gi
+
+probes:
+  startup:
+    failureThreshold: 1440
+  readiness:
+    failureThreshold: 20
+  liveness:
+    failureThreshold: 20
+
+{{- if eq .Env.METRICS_ENABLED "true" }}
+prometheusExporter:
+  enabled: true
+  port: 9115
+  serviceMonitor:
+    enabled: {{ .Env.SERVICEMONITOR_ENABLED }}
+    interval: 30s
+    labels:
+      release: kube-prometheus-stack
+{{- end }}
+
