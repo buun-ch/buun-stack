@@ -50,6 +50,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - **[ClickHouse](https://clickhouse.com/)**: High-performance columnar analytics database
 - **[Qdrant](https://qdrant.tech/)**: Vector database for AI/ML applications
 - **[FalkorDB](https://www.falkordb.com/)**: Graph database with vector similarity search for knowledge graphs
+- **[Memgraph](https://memgraph.com/)**: In-memory graph database for real-time streaming and analytics
 - **[Meilisearch](https://www.meilisearch.com/)**: Lightning-fast, typo-tolerant search engine
 - **[Redis Operator](https://github.com/OT-CONTAINER-KIT/redis-operator)**: Kubernetes operator for Redis standalone, cluster, and replication
 - **[Lakekeeper](https://lakekeeper.io/)**: Apache Iceberg REST Catalog for data lake management
@@ -256,6 +257,16 @@ High-performance graph database with vector capabilities:
 - **Redis Compatible**: Uses Redis protocol for easy integration
 
 [📖 See FalkorDB Documentation](./falkordb/README.md)
+
+### Memgraph
+
+In-memory graph database for real-time analytics:
+
+- **High Performance**: In-memory storage for low-latency graph queries
+- **OpenCypher**: Standard graph query language compatible with Neo4j drivers
+- **Memgraph Lab**: Visual interface for graph exploration and querying
+
+[📖 See Memgraph Documentation](./memgraph/README.md)
 
 ### Meilisearch
 
