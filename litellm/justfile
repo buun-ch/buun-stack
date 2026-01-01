@@ -1,7 +1,7 @@
 set fallback := true
 
 export LITELLM_NAMESPACE := env("LITELLM_NAMESPACE", "litellm")
-export LITELLM_CHART_VERSION := env("LITELLM_CHART_VERSION", "0.1.825")
+export LITELLM_CHART_VERSION := env("LITELLM_CHART_VERSION", "0.1.832")
 export LITELLM_HOST := env("LITELLM_HOST", "")
 export LITELLM_OIDC_CLIENT_ID := env("LITELLM_OIDC_CLIENT_ID", "litellm")
 export LITELLM_OIDC_ENABLED := env("LITELLM_OIDC_ENABLED", "")
