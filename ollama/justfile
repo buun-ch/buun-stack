@@ -1,7 +1,7 @@
 set fallback := true
 
 export OLLAMA_NAMESPACE := env("OLLAMA_NAMESPACE", "ollama")
-export OLLAMA_CHART_VERSION := env("OLLAMA_CHART_VERSION", "1.35.0")
+export OLLAMA_CHART_VERSION := env("OLLAMA_CHART_VERSION", "1.36.0")
 export OLLAMA_HOST := env("OLLAMA_HOST", "")
 export OLLAMA_GPU_ENABLED := env("OLLAMA_GPU_ENABLED", "")
 export OLLAMA_GPU_TYPE := env("OLLAMA_GPU_TYPE", "nvidia")
