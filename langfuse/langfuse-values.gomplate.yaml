@@ -18,6 +18,10 @@ langfuse:
 
   salt:
     value: {{ .Env.LANGFUSE_SALT }}
+  encryptionKey:
+    secretKeyRef:
+      name: encryption-key
+      key: key
   features:
     telemetryEnabled: false
     # Allow SSO users to automatically create accounts on first login
@@ -34,9 +38,6 @@ langfuse:
         secretKeyRef:
           name: postgres-auth
           key: url
-    # ClickHouse database name
-    - name: CLICKHOUSE_DB
-      value: "langfuse"
     # https://langfuse.com/self-hosting/authentication-and-sso#keycloak
     - name: AUTH_DISABLE_USERNAME_PASSWORD
       value: "true"
@@ -129,6 +130,7 @@ redis:
 clickhouse:
   deploy: false
   host: clickhouse-clickhouse.clickhouse
+  database: langfuse
   clusterEnabled: false
   auth:
     username: langfuse

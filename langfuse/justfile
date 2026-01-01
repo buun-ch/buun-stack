@@ -1,7 +1,7 @@
 set fallback := true
 
 export LANGFUSE_NAMESPACE := env("LANGFUSE_NAMESPACE", "langfuse")
-export LANGFUSE_CHART_VERSION := env("LANGFUSE_CHART_VERSION", "1.5.12")
+export LANGFUSE_CHART_VERSION := env("LANGFUSE_CHART_VERSION", "1.5.15")
 export LANGFUSE_HOST := env("LANGFUSE_HOST", "")
 export LANGFUSE_OIDC_CLIENT_ID := env("LANGFUSE_OIDC_CLIENT_ID", "langfuse")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
@@ -86,6 +86,7 @@ install:
     just create-salt
     just create-nextauth-secret
     just create-redis-password
+    just create-encryption-key
     just create-keycloak-client
     just create-secrets
 
@@ -117,6 +118,7 @@ uninstall delete-data='false':
         just delete-salt || true
         just delete-nextauth-secret || true
         just delete-redis-password || true
+        just delete-encryption-key || true
         echo "Langfuse uninstalled with all data deleted."
     else
         echo "Langfuse uninstalled successfully"
@@ -483,6 +485,66 @@ redis-password:
     fi
     just vault::get langfuse/redis secret
     echo
+
+# Create encryption key (256-bit hex for encrypting sensitive data like LLM API keys)
+create-encryption-key:
+    #!/bin/bash
+    set -euo pipefail
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        # Generate key in Vault if not exists
+        if ! just vault::exist langfuse/encryption-key &>/dev/null; then
+            KEY=$(openssl rand -hex 32)
+            just vault::put langfuse/encryption-key value="${KEY}"
+            echo "Encryption key stored in Vault"
+        else
+            echo "Encryption key already exists in Vault"
+        fi
+
+        # Ensure ExternalSecret exists and is synced
+        if ! kubectl get externalsecret encryption-key-external-secret -n ${LANGFUSE_NAMESPACE} &>/dev/null; then
+            kubectl delete secret encryption-key -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+            kubectl apply -n ${LANGFUSE_NAMESPACE} -f encryption-key-external-secret.yaml
+            echo "ExternalSecret created"
+        fi
+        kubectl wait --for=condition=Ready externalsecret/encryption-key-external-secret \
+            -n ${LANGFUSE_NAMESPACE} --timeout=60s
+        echo "Encryption key synced via ExternalSecret"
+    else
+        if kubectl get secret encryption-key -n ${LANGFUSE_NAMESPACE} &>/dev/null; then
+            echo "Encryption key secret already exists, skipping creation"
+            exit
+        fi
+        KEY=$(openssl rand -hex 32)
+        kubectl create secret generic encryption-key -n ${LANGFUSE_NAMESPACE} \
+            --from-literal=key="${KEY}"
+        echo "Encryption key created as Kubernetes Secret"
+    fi
+
+# Delete encryption key
+delete-encryption-key:
+    #!/bin/bash
+    set -euo pipefail
+    kubectl delete externalsecret encryption-key-external-secret -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+    kubectl delete secret encryption-key -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+    if just vault::exist langfuse/encryption-key &>/dev/null; then
+        just vault::delete langfuse/encryption-key
+    fi
+
+# Print encryption key
+encryption-key:
+    #!/bin/bash
+    set -euo pipefail
+    if kubectl get secret encryption-key -n ${LANGFUSE_NAMESPACE} &>/dev/null; then
+        kubectl get secret encryption-key -n ${LANGFUSE_NAMESPACE} \
+            -o jsonpath='{.data.key}' | base64 -d
+        echo
+    elif just vault::exist langfuse/encryption-key &>/dev/null; then
+        just vault::get langfuse/encryption-key value
+    else
+        echo "Encryption key does not exist" >&2
+        exit 1
+    fi
 
 # Create Keycloak client for Langfuse
 create-keycloak-client:
