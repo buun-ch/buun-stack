@@ -28,6 +28,16 @@ spec:
           <asynchronous_metric_log>
             <schema_type>transposed</schema_type>
           </asynchronous_metric_log>
+{{- if ne .Env.CLICKHOUSE_TRACE_LOG_ENABLED "true" }}
+          <trace_log remove="1"/>
+{{- end }}
+        </clickhouse>
+      # Set log level (default: information, disables debug/trace logs)
+      logger.xml: |
+        <clickhouse>
+          <logger>
+            <level>{{ .Env.CLICKHOUSE_LOG_LEVEL }}</level>
+          </logger>
         </clickhouse>
       # Enable Prometheus metrics endpoint
       prometheus.xml: |
