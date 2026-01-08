@@ -7,7 +7,8 @@ kube-apiserver-arg:
 {{- if eq .Env.K8S_FEATURE_GATES "true" }}
   - "feature-gates=ImageVolume=true"
 {{- end }}
-{{- if eq .Env.K8S_FEATURE_GATES "true" }}
 kubelet-arg:
+  - "max-pods={{ .Env.K8S_MAX_PODS }}"
+{{- if eq .Env.K8S_FEATURE_GATES "true" }}
   - "feature-gates=ImageVolume=true"
 {{- end }}

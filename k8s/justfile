@@ -6,6 +6,7 @@ export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export K8S_OIDC_CLIENT_ID := env('K8S_OIDC_CLIENT_ID', "k8s")
 export K3S_ENABLE_REGISTRY := env("K3S_ENABLE_REGISTRY", "true")
+export K8S_MAX_PODS := env("K8S_MAX_PODS", "250")
 export K8S_FEATURE_GATES := env("K8S_FEATURE_GATES", "false")
 
 [private]
