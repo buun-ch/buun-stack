@@ -78,7 +78,7 @@ langfuse:
         cpu: 25m
         memory: 768Mi
       limits:
-        cpu: 100m
+        cpu: 500m
         memory: 1.5Gi
     # Probe configuration adjusted for slow startup and response time
     livenessProbe:

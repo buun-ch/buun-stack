@@ -1,7 +1,7 @@
 set fallback := true
 
 export LANGFUSE_NAMESPACE := env("LANGFUSE_NAMESPACE", "langfuse")
-export LANGFUSE_CHART_VERSION := env("LANGFUSE_CHART_VERSION", "1.5.15")
+export LANGFUSE_CHART_VERSION := env("LANGFUSE_CHART_VERSION", "1.5.16")
 export LANGFUSE_HOST := env("LANGFUSE_HOST", "")
 export LANGFUSE_OIDC_CLIENT_ID := env("LANGFUSE_OIDC_CLIENT_ID", "langfuse")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
