@@ -8,3 +8,5 @@ defaultSettings:
   orphanAutoDeletion: true
   # Force pod deletion when node goes down to trigger volume detachment
   nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
+  # Lower threshold to allow scheduling when disk is 85% full (default: 25)
+  storageMinimalAvailablePercentage: "15"
