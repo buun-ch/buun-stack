@@ -17,7 +17,7 @@ resources:
     cpu: 25m
     memory: 512Mi
   limits:
-    cpu: 100m
+    cpu: 200m
     memory: 1Gi
 
 migrationJob:
