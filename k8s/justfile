@@ -453,7 +453,7 @@ deploy-registry:
     kubectl label namespace registry pod-security.kubernetes.io/enforce=restricted --overwrite
 
     echo "Waiting for registry to be ready..."
-    kubectl wait --for=condition=available --timeout=60s deployment/registry -n registry
+    kubectl wait --for=condition=available --timeout=180s deployment/registry -n registry
     echo "✓ Registry deployed and ready"
 
 # Remove Docker registry
