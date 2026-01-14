@@ -43,7 +43,7 @@ server:
       cpu: 50m
       memory: 512Mi
     limits:
-      cpu: 50m
+      cpu: 500m
       memory: 512Mi
 
   ingress:
