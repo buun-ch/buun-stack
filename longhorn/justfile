@@ -212,7 +212,7 @@ patch-resources:
         "op": "replace",
         "path": "/spec/template/spec/containers/0/resources",
         "value": {
-          "requests": {"cpu": "50m", "memory": "512Mi"},
+          "requests": {"cpu": "100m", "memory": "512Mi"},
           "limits": {"cpu": "100m", "memory": "512Mi"}
         }
       },
@@ -220,8 +220,8 @@ patch-resources:
         "op": "replace",
         "path": "/spec/template/spec/containers/1/resources",
         "value": {
-          "requests": {"cpu": "50m", "memory": "64Mi"},
-          "limits": {"cpu": "50m", "memory": "64Mi"}
+          "requests": {"cpu": "100m", "memory": "64Mi"},
+          "limits": {"cpu": "100m", "memory": "64Mi"}
         }
       }
     ]'
