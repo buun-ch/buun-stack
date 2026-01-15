@@ -93,8 +93,23 @@ grafana:
         cpu: 25m
         memory: 192Mi
 
-{{- if eq .Env.TEMPO_ENABLED "true" }}
+{{- if or (eq .Env.TEMPO_ENABLED "true") (eq .Env.LOKI_ENABLED "true") }}
   additionalDataSources:
+{{- if eq .Env.LOKI_ENABLED "true" }}
+    - name: Loki
+      type: loki
+      uid: loki
+      url: http://loki.{{ .Env.LOKI_NAMESPACE }}:3100
+      access: proxy
+      isDefault: false
+      jsonData:
+        derivedFields:
+          - datasourceUid: tempo
+            matcherRegex: '"traceId":"(\w+)"'
+            name: TraceID
+            url: $${__value.raw}
+{{- end }}
+{{- if eq .Env.TEMPO_ENABLED "true" }}
     - name: Tempo
       type: tempo
       uid: tempo
@@ -114,6 +129,7 @@ grafana:
           hide: false
         lokiSearch:
           datasourceUid: loki
+{{- end }}
 {{- end }}
 
 # Prometheus Configuration

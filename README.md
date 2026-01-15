@@ -32,6 +32,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - **[Prometheus](https://prometheus.io/)**: Metrics collection and alerting
 - **[Grafana](https://grafana.com/)**: Metrics visualization and dashboards
 - **[Grafana Tempo](https://grafana.com/oss/tempo/)**: Distributed tracing backend
+- **[Grafana Loki](https://grafana.com/oss/loki/)**: Log aggregation system
 - **[Goldilocks](https://goldilocks.docs.fairwinds.com/)**: Resource recommendation dashboard powered by VPA
 
 ### Storage (Optional)

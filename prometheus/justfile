@@ -13,8 +13,8 @@ export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
-export TEMPO_ENABLED := env("TEMPO_ENABLED", "")
 export TEMPO_NAMESPACE := env("TEMPO_NAMESPACE", "monitoring")
+export LOKI_NAMESPACE := env("LOKI_NAMESPACE", "monitoring")
 
 [private]
 default:
@@ -228,6 +228,19 @@ setup-oidc:
     # Update Helm values with OIDC configuration
     export GRAFANA_OIDC_CLIENT_SECRET="${oidc_client_secret}"
     export GRAFANA_OIDC_ENABLED="true"
+
+    # Initialize datasource variables
+    export TEMPO_ENABLED=""
+    export LOKI_ENABLED=""
+
+    # Preserve existing datasource configurations
+    if helm status tempo -n ${TEMPO_NAMESPACE} &>/dev/null; then
+        export TEMPO_ENABLED="true"
+    fi
+    if helm status loki -n ${LOKI_NAMESPACE} &>/dev/null; then
+        export LOKI_ENABLED="true"
+    fi
+
     gomplate -f values.gomplate.yaml -o values.yaml
 
     # Upgrade Helm release with new values
@@ -264,6 +277,19 @@ disable-oidc:
     # Update Helm values to disable OIDC
     export GRAFANA_OIDC_ENABLED=""
     export GRAFANA_OIDC_CLIENT_SECRET=""
+
+    # Initialize datasource variables
+    export TEMPO_ENABLED=""
+    export LOKI_ENABLED=""
+
+    # Preserve existing datasource configurations
+    if helm status tempo -n ${TEMPO_NAMESPACE} &>/dev/null; then
+        export TEMPO_ENABLED="true"
+    fi
+    if helm status loki -n ${LOKI_NAMESPACE} &>/dev/null; then
+        export LOKI_ENABLED="true"
+    fi
+
     gomplate -f values.gomplate.yaml -o values.yaml
 
     # Upgrade Helm release with new values
@@ -306,12 +332,17 @@ add-tempo-datasource:
 
     echo "Adding Tempo datasource to Grafana..."
 
-    # Preserve existing OIDC configuration
+    # Initialize variables
+    export TEMPO_ENABLED="true"
+    export LOKI_ENABLED=""
+
+    # Preserve existing configurations
     if kubectl get secret grafana-oidc-credentials -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
         export GRAFANA_OIDC_ENABLED="true"
     fi
-
-    export TEMPO_ENABLED="true"
+    if helm status loki -n ${LOKI_NAMESPACE} &>/dev/null; then
+        export LOKI_ENABLED="true"
+    fi
     gomplate -f values.gomplate.yaml -o values.yaml
 
     helm upgrade kube-prometheus-stack \
@@ -333,12 +364,17 @@ remove-tempo-datasource:
     set -euo pipefail
     echo "Removing Tempo datasource from Grafana..."
 
-    # Preserve existing OIDC configuration
+    # Initialize variables
+    export TEMPO_ENABLED=""
+    export LOKI_ENABLED=""
+
+    # Preserve existing configurations
     if kubectl get secret grafana-oidc-credentials -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
         export GRAFANA_OIDC_ENABLED="true"
     fi
-
-    export TEMPO_ENABLED=""
+    if helm status loki -n ${LOKI_NAMESPACE} &>/dev/null; then
+        export LOKI_ENABLED="true"
+    fi
     gomplate -f values.gomplate.yaml -o values.yaml
 
     helm upgrade kube-prometheus-stack \
@@ -349,3 +385,69 @@ remove-tempo-datasource:
         -f values.yaml
 
     echo "✓ Tempo datasource removed from Grafana"
+
+# Add Loki datasource to Grafana
+add-loki-datasource:
+    #!/bin/bash
+    set -euo pipefail
+    if ! helm status loki -n ${LOKI_NAMESPACE} &>/dev/null; then
+        echo "Error: Loki is not installed. Please install Loki first:"
+        echo "  just loki::install"
+        exit 1
+    fi
+
+    echo "Adding Loki datasource to Grafana..."
+
+    # Initialize variables
+    export TEMPO_ENABLED=""
+    export LOKI_ENABLED="true"
+
+    # Preserve existing configurations
+    if kubectl get secret grafana-oidc-credentials -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        export GRAFANA_OIDC_ENABLED="true"
+    fi
+    if helm status tempo -n ${TEMPO_NAMESPACE} &>/dev/null; then
+        export TEMPO_ENABLED="true"
+    fi
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    helm upgrade kube-prometheus-stack \
+        prometheus-community/kube-prometheus-stack \
+        --version ${PROMETHEUS_CHART_VERSION} \
+        -n ${PROMETHEUS_NAMESPACE} \
+        --wait \
+        -f values.yaml
+
+    echo ""
+    echo "=== Loki datasource added ==="
+    echo "Grafana now has Loki configured as a datasource."
+    echo "Access Grafana at: https://${GRAFANA_HOST}"
+    echo ""
+
+# Remove Loki datasource from Grafana
+remove-loki-datasource:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Removing Loki datasource from Grafana..."
+
+    # Initialize variables
+    export TEMPO_ENABLED=""
+    export LOKI_ENABLED=""
+
+    # Preserve existing configurations
+    if kubectl get secret grafana-oidc-credentials -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        export GRAFANA_OIDC_ENABLED="true"
+    fi
+    if helm status tempo -n ${TEMPO_NAMESPACE} &>/dev/null; then
+        export TEMPO_ENABLED="true"
+    fi
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    helm upgrade kube-prometheus-stack \
+        prometheus-community/kube-prometheus-stack \
+        --version ${PROMETHEUS_CHART_VERSION} \
+        -n ${PROMETHEUS_NAMESPACE} \
+        --wait \
+        -f values.yaml
+
+    echo "✓ Loki datasource removed from Grafana"

@@ -24,6 +24,7 @@ mod langfuse
 mod lakekeeper
 mod librechat
 mod litellm
+mod loki
 mod longhorn
 mod meilisearch
 mod memgraph

@@ -1,0 +1,119 @@
+set fallback := true
+
+export LOKI_NAMESPACE := env("LOKI_NAMESPACE", "monitoring")
+export LOKI_CHART_VERSION := env("LOKI_CHART_VERSION", "6.49.0")
+export PROMTAIL_CHART_VERSION := env("PROMTAIL_CHART_VERSION", "6.17.1")
+export LOKI_RETENTION := env("LOKI_RETENTION", "168h")
+export LOKI_STORAGE_SIZE := env("LOKI_STORAGE_SIZE", "10Gi")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add grafana https://grafana.github.io/helm-charts
+    helm repo update grafana
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove grafana
+
+# Create namespace
+create-namespace:
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace ${LOKI_NAMESPACE} &>/dev/null; then
+        kubectl create namespace ${LOKI_NAMESPACE}
+    fi
+
+# Install Loki and Promtail
+install:
+    #!/bin/bash
+    set -euo pipefail
+
+    # Check if kube-prometheus-stack is installed (required for ServiceMonitor)
+    if ! helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        echo "Error: kube-prometheus-stack is not installed."
+        echo "Loki requires Prometheus Operator for ServiceMonitor support."
+        echo ""
+        echo "Please install kube-prometheus-stack first:"
+        echo "  just prometheus::install"
+        exit 1
+    fi
+
+    just create-namespace
+    just add-helm-repo
+
+    # Install Loki
+    echo "Installing Loki..."
+    gomplate -f values.gomplate.yaml -o values.yaml
+    helm upgrade --cleanup-on-fail --install loki grafana/loki \
+        --version ${LOKI_CHART_VERSION} \
+        -n ${LOKI_NAMESPACE} \
+        --wait \
+        -f values.yaml
+
+    # Install Promtail
+    echo "Installing Promtail..."
+    gomplate -f promtail-values.gomplate.yaml -o promtail-values.yaml
+    helm upgrade --cleanup-on-fail --install promtail grafana/promtail \
+        --version ${PROMTAIL_CHART_VERSION} \
+        -n ${LOKI_NAMESPACE} \
+        --wait \
+        -f promtail-values.yaml
+
+    # Label namespace for monitoring
+    kubectl label namespace ${LOKI_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+
+    echo ""
+    echo "=== Loki and Promtail installed ==="
+    echo "Namespace: ${LOKI_NAMESPACE}"
+    echo "Loki endpoint: http://loki.${LOKI_NAMESPACE}:3100"
+    echo ""
+    echo "To add Loki datasource to Grafana, run:"
+    echo "  just prometheus::add-loki-datasource"
+    echo ""
+
+# Install Promtail only (for reinstalling or upgrading Promtail separately)
+install-promtail:
+    #!/bin/bash
+    set -euo pipefail
+
+    # Check if Loki is installed
+    if ! helm status loki -n ${LOKI_NAMESPACE} &>/dev/null; then
+        echo "Error: Loki is not installed. Please install Loki first:"
+        echo "  just loki::install"
+        exit 1
+    fi
+
+    just add-helm-repo
+
+    gomplate -f promtail-values.gomplate.yaml -o promtail-values.yaml
+    helm upgrade --cleanup-on-fail --install promtail grafana/promtail \
+        --version ${PROMTAIL_CHART_VERSION} \
+        -n ${LOKI_NAMESPACE} \
+        --wait \
+        -f promtail-values.yaml
+
+    echo ""
+    echo "=== Promtail installed ==="
+    echo "Promtail is now collecting logs from all nodes and sending to Loki."
+    echo ""
+
+# Uninstall Loki
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall promtail -n ${LOKI_NAMESPACE} --wait --ignore-not-found || true
+    helm uninstall loki -n ${LOKI_NAMESPACE} --wait --ignore-not-found
+    kubectl delete pvc -n ${LOKI_NAMESPACE} -l app.kubernetes.io/name=loki --ignore-not-found
+    echo "Loki and Promtail uninstalled"
+
+# Uninstall Promtail only
+uninstall-promtail:
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall promtail -n ${LOKI_NAMESPACE} --wait --ignore-not-found
+    echo "Promtail uninstalled"

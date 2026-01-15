@@ -1,0 +1,86 @@
+---
+# Grafana Loki Helm chart values (SingleBinary Mode)
+# https://github.com/grafana/loki/tree/main/production/helm/loki
+
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+
+  commonConfig:
+    replication_factor: 1
+
+  storage:
+    type: filesystem
+
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+  limits_config:
+    retention_period: 168h
+    ingestion_rate_mb: 10
+    ingestion_burst_size_mb: 20
+    max_streams_per_user: 10000
+    max_line_size: 256kb
+
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+
+singleBinary:
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+  persistence:
+    enabled: true
+    size: 10Gi
+
+# Disable other deployment modes
+read:
+  replicas: 0
+
+write:
+  replicas: 0
+
+backend:
+  replicas: 0
+
+# Disable gateway (not needed for SingleBinary)
+gateway:
+  enabled: false
+
+# Disable chunk cache (not needed for small deployments)
+chunksCache:
+  enabled: false
+
+# Disable results cache
+resultsCache:
+  enabled: false
+
+# Enable ServiceMonitor for Prometheus
+serviceMonitor:
+  enabled: true
+  labels:
+    release: kube-prometheus-stack
+
+# Disable test pod
+test:
+  enabled: false
+
+# Disable lokiCanary
+lokiCanary:
+  enabled: false
