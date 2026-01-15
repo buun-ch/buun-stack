@@ -271,3 +271,44 @@ setup-oauth2-proxy:
 # Remove OAuth2-Proxy for Longhorn
 remove-oauth2-proxy:
     just oauth2-proxy-uninstall
+
+# Show volume status
+volumes:
+    @kubectl get volumes.longhorn.io -n ${LONGHORN_NAMESPACE} \
+        -o custom-columns=NAME:.metadata.name,STATE:.status.state,ROBUSTNESS:.status.robustness,SIZE:.spec.size,NODE:.status.currentNodeID
+
+# Show faulted volumes only
+volumes-faulted:
+    #!/bin/bash
+    set -euo pipefail
+    FAULTED=$(kubectl get volumes.longhorn.io -n ${LONGHORN_NAMESPACE} \
+        -o custom-columns=NAME:.metadata.name,STATE:.status.state,ROBUSTNESS:.status.robustness,SIZE:.spec.size \
+        | grep -E "(NAME|faulted)" || true)
+    if [ -z "$FAULTED" ] || [ "$(echo "$FAULTED" | wc -l)" -eq 1 ]; then
+        echo "No faulted volumes found."
+    else
+        echo "$FAULTED"
+    fi
+
+# Repair faulted volumes by resetting replica failedAt fields
+volumes-repair:
+    #!/bin/bash
+    set -euo pipefail
+    FAILED_REPLICAS=$(kubectl get replicas.longhorn.io -n ${LONGHORN_NAMESPACE} \
+        -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.failedAt}{"\n"}{end}' \
+        | grep -v "^[^ ]* $" | awk '{print $1}' || true)
+    if [ -z "$FAILED_REPLICAS" ]; then
+        echo "No faulted replicas found."
+        exit 0
+    fi
+    COUNT=$(echo "$FAILED_REPLICAS" | wc -l | tr -d ' ')
+    echo "Found $COUNT faulted replica(s). Repairing..."
+    for replica in $FAILED_REPLICAS; do
+        echo "  Resetting: $replica"
+        kubectl patch replicas.longhorn.io "$replica" -n ${LONGHORN_NAMESPACE} \
+            --type merge -p '{"spec":{"failedAt":"","lastFailedAt":""}}'
+    done
+    echo ""
+    echo "Waiting for volumes to recover..."
+    sleep 5
+    just volumes
