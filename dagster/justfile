@@ -14,6 +14,7 @@ export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export DAGSTER_STORAGE_TYPE := env("DAGSTER_STORAGE_TYPE", "")
 export DAGSTER_EXTRA_PACKAGES := env("DAGSTER_EXTRA_PACKAGES", "")
 export DOCKER_CMD := env("DOCKER_CMD", "docker")
+export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
 
 # export DAGSTER_EXTRA_PACKAGES := env("DAGSTER_EXTRA_PACKAGES", "dlt[duckdb] pyarrow pyiceberg s3fs simple-salesforce")
 
@@ -248,7 +249,7 @@ setup-pvc-storage:
     # Detect storage class
     export STORAGE_CLASS=""
     if kubectl get storageclass longhorn &>/dev/null && \
-        kubectl get pods -n longhorn-system &>/dev/null | grep -q longhorn-manager; then
+        kubectl get pods -n ${LONGHORN_NAMESPACE} &>/dev/null | grep -q longhorn-manager; then
         echo "Longhorn detected - using longhorn storage class"
         export STORAGE_CLASS="longhorn"
     else
@@ -289,7 +290,7 @@ setup-user-code-pvc:
     export LONGHORN_AVAILABLE="false"
 
     if kubectl get storageclass longhorn &>/dev/null && \
-        kubectl get pods -n longhorn-system &>/dev/null | grep -q longhorn-manager; then
+        kubectl get pods -n ${LONGHORN_NAMESPACE} &>/dev/null | grep -q longhorn-manager; then
         echo "Longhorn detected - using ReadWriteMany with longhorn storage class"
         export LONGHORN_AVAILABLE="true"
     else
