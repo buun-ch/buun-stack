@@ -8,6 +8,7 @@ export K8S_OIDC_CLIENT_ID := env('K8S_OIDC_CLIENT_ID', "k8s")
 export K3S_ENABLE_REGISTRY := env("K3S_ENABLE_REGISTRY", "true")
 export K8S_MAX_PODS := env("K8S_MAX_PODS", "250")
 export K8S_FEATURE_GATES := env("K8S_FEATURE_GATES", "false")
+export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
 
 [private]
 default:
@@ -86,7 +87,7 @@ uninstall:
     set -euo pipefail
     if gum confirm "Uninstall k3s from ${LOCAL_K8S_HOST}?"; then
         # Check if Longhorn is installed and uninstall it first
-        if helm status longhorn -n longhorn-system &>/dev/null; then
+        if helm status longhorn -n ${LONGHORN_NAMESPACE} &>/dev/null; then
             echo "Detected Longhorn installation. Uninstalling Longhorn first to prevent CSI mount issues..."
             just longhorn::uninstall || echo "Warning: Longhorn uninstallation had errors, continuing..."
 
@@ -162,12 +163,12 @@ stop:
     echo "[$(elapsed)] Drain completed"
 
     # Wait for Longhorn volumes to be fully detached
-    if helm status longhorn -n longhorn-system &>/dev/null; then
+    if helm status longhorn -n ${LONGHORN_NAMESPACE} &>/dev/null; then
         echo "[$(elapsed)] Waiting for Longhorn volumes to be detached..."
         TIMEOUT=30
         ELAPSED=0
         while [ $ELAPSED -lt $TIMEOUT ]; do
-            ATTACHED=$(kubectl get volumes.longhorn.io -n longhorn-system -o json 2>/dev/null | \
+            ATTACHED=$(kubectl get volumes.longhorn.io -n ${LONGHORN_NAMESPACE} -o json 2>/dev/null | \
                 jq -r '.items[] | select(.status.state == "attached") | .metadata.name' 2>/dev/null || true)
 
             if [ -z "$ATTACHED" ]; then
