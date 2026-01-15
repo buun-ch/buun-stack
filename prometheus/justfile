@@ -13,6 +13,8 @@ export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export TEMPO_ENABLED := env("TEMPO_ENABLED", "")
+export TEMPO_NAMESPACE := env("TEMPO_NAMESPACE", "monitoring")
 
 [private]
 default:
@@ -291,3 +293,59 @@ check-env:
         done
         just env::set GRAFANA_HOST="${GRAFANA_HOST}"
     fi
+
+# Add Tempo datasource to Grafana
+add-tempo-datasource:
+    #!/bin/bash
+    set -euo pipefail
+    if ! helm status tempo -n ${TEMPO_NAMESPACE} &>/dev/null; then
+        echo "Error: Tempo is not installed. Please install Tempo first:"
+        echo "  just tempo::install"
+        exit 1
+    fi
+
+    echo "Adding Tempo datasource to Grafana..."
+
+    # Preserve existing OIDC configuration
+    if kubectl get secret grafana-oidc-credentials -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        export GRAFANA_OIDC_ENABLED="true"
+    fi
+
+    export TEMPO_ENABLED="true"
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    helm upgrade kube-prometheus-stack \
+        prometheus-community/kube-prometheus-stack \
+        --version ${PROMETHEUS_CHART_VERSION} \
+        -n ${PROMETHEUS_NAMESPACE} \
+        --wait \
+        -f values.yaml
+
+    echo ""
+    echo "=== Tempo datasource added ==="
+    echo "Grafana now has Tempo configured as a datasource."
+    echo "Access Grafana at: https://${GRAFANA_HOST}"
+    echo ""
+
+# Remove Tempo datasource from Grafana
+remove-tempo-datasource:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Removing Tempo datasource from Grafana..."
+
+    # Preserve existing OIDC configuration
+    if kubectl get secret grafana-oidc-credentials -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        export GRAFANA_OIDC_ENABLED="true"
+    fi
+
+    export TEMPO_ENABLED=""
+    gomplate -f values.gomplate.yaml -o values.yaml
+
+    helm upgrade kube-prometheus-stack \
+        prometheus-community/kube-prometheus-stack \
+        --version ${PROMETHEUS_CHART_VERSION} \
+        -n ${PROMETHEUS_NAMESPACE} \
+        --wait \
+        -f values.yaml
+
+    echo "✓ Tempo datasource removed from Grafana"

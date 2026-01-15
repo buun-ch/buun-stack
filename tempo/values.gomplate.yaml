@@ -1,0 +1,67 @@
+---
+# Grafana Tempo Helm chart values (Single Binary Mode)
+# https://github.com/grafana/helm-charts/tree/main/charts/tempo
+
+tempo:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 640Mi
+    limits:
+      cpu: 250m
+      memory: 2Gi
+
+  retention: {{ .Env.TEMPO_RETENTION }}
+
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"
+        http:
+          endpoint: "0.0.0.0:4318"
+    jaeger:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:14250"
+        thrift_http:
+          endpoint: "0.0.0.0:14268"
+        thrift_compact:
+          endpoint: "0.0.0.0:6831"
+        thrift_binary:
+          endpoint: "0.0.0.0:6832"
+
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: false
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+persistence:
+  enabled: true
+  size: {{ .Env.TEMPO_STORAGE_SIZE }}
+
+serviceMonitor:
+  enabled: true
+  additionalLabels:
+    release: kube-prometheus-stack

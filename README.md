@@ -31,6 +31,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 
 - **[Prometheus](https://prometheus.io/)**: Metrics collection and alerting
 - **[Grafana](https://grafana.com/)**: Metrics visualization and dashboards
+- **[Grafana Tempo](https://grafana.com/oss/tempo/)**: Distributed tracing backend
 - **[Goldilocks](https://goldilocks.docs.fairwinds.com/)**: Resource recommendation dashboard powered by VPA
 
 ### Storage (Optional)
@@ -166,6 +167,17 @@ Comprehensive monitoring and observability stack:
 - **OIDC Integration**: Optional Keycloak authentication for Grafana
 
 [📖 See Prometheus Documentation](./prometheus/README.md)
+
+### Grafana Tempo
+
+Distributed tracing backend for observability:
+
+- **Multi-Protocol**: OTLP, Jaeger, Zipkin, and OpenCensus receivers
+- **Grafana Integration**: Native datasource for trace visualization
+- **TraceQL**: Powerful query language for trace analysis
+- **Efficient Storage**: Cost-effective trace storage with local or S3 backends
+
+[📖 See Tempo Documentation](./tempo/README.md)
 
 ### Goldilocks
 

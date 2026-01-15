@@ -42,6 +42,7 @@ mod querybook
 mod redis-operator
 mod security
 mod superset
+mod tempo
 mod temporal
 mod trino
 mod utils

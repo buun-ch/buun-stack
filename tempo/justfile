@@ -1,0 +1,74 @@
+set fallback := true
+
+export TEMPO_NAMESPACE := env("TEMPO_NAMESPACE", "monitoring")
+export TEMPO_CHART_VERSION := env("TEMPO_CHART_VERSION", "1.24.3")
+export TEMPO_RETENTION := env("TEMPO_RETENTION", "168h")
+export TEMPO_STORAGE_SIZE := env("TEMPO_STORAGE_SIZE", "10Gi")
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add grafana https://grafana.github.io/helm-charts
+    helm repo update grafana
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove grafana
+
+# Create namespace
+create-namespace:
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace ${TEMPO_NAMESPACE} &>/dev/null; then
+        kubectl create namespace ${TEMPO_NAMESPACE}
+    fi
+
+# Install Tempo
+install:
+    #!/bin/bash
+    set -euo pipefail
+
+    # Check if kube-prometheus-stack is installed (required for ServiceMonitor)
+    if ! helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        echo "Error: kube-prometheus-stack is not installed."
+        echo "Tempo requires Prometheus Operator for ServiceMonitor support."
+        echo ""
+        echo "Please install kube-prometheus-stack first:"
+        echo "  just prometheus::install"
+        exit 1
+    fi
+
+    just create-namespace
+    just add-helm-repo
+
+    gomplate -f values.gomplate.yaml -o values.yaml
+    helm upgrade --cleanup-on-fail --install tempo grafana/tempo \
+        --version ${TEMPO_CHART_VERSION} \
+        -n ${TEMPO_NAMESPACE} \
+        --wait \
+        -f values.yaml
+
+    # Label namespace for monitoring
+    kubectl label namespace ${TEMPO_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
+
+    echo ""
+    echo "=== Tempo installed ==="
+    echo "Namespace: ${TEMPO_NAMESPACE}"
+    echo "OTLP gRPC endpoint: tempo.${TEMPO_NAMESPACE}:4317"
+    echo "OTLP HTTP endpoint: tempo.${TEMPO_NAMESPACE}:4318"
+    echo ""
+    echo "To add Tempo as a datasource in Grafana, run:"
+    echo "  just prometheus::add-tempo-datasource"
+    echo ""
+
+# Uninstall Tempo
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall tempo -n ${TEMPO_NAMESPACE} --wait --ignore-not-found
+    kubectl delete pvc -n ${TEMPO_NAMESPACE} -l app.kubernetes.io/name=tempo --ignore-not-found
+    echo "Tempo uninstalled"

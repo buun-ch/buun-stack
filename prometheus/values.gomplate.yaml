@@ -93,6 +93,29 @@ grafana:
         cpu: 25m
         memory: 192Mi
 
+{{- if eq .Env.TEMPO_ENABLED "true" }}
+  additionalDataSources:
+    - name: Tempo
+      type: tempo
+      uid: tempo
+      url: http://tempo.{{ .Env.TEMPO_NAMESPACE }}:3200
+      access: proxy
+      isDefault: false
+      jsonData:
+        tracesToLogsV2:
+          datasourceUid: loki
+        tracesToMetrics:
+          datasourceUid: prometheus
+        serviceMap:
+          datasourceUid: prometheus
+        nodeGraph:
+          enabled: true
+        search:
+          hide: false
+        lokiSearch:
+          datasourceUid: loki
+{{- end }}
+
 # Prometheus Configuration
 prometheus:
   prometheusSpec:
