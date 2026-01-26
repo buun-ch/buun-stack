@@ -48,6 +48,7 @@ mod temporal
 mod trino
 mod utils
 mod vault
+mod vllm
 mod vpa
 
 import? "custom.just"

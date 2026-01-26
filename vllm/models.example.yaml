@@ -1,0 +1,134 @@
+# vLLM Model Configuration
+# Copy this file to models.yaml and customize for your environment.
+#
+# Usage:
+#   cp vllm/models.example.yaml vllm/models.yaml
+#   # Edit models.yaml to add/remove models
+#   just vllm::install
+#
+# Each model runs as a separate Deployment with its own GPU allocation.
+# The router automatically load balances requests across models.
+#
+# For gated models (Llama, Mistral, etc.), set HuggingFace token:
+#   export VLLM_HF_TOKEN=hf_xxxxx
+#
+# Model configuration reference:
+#   - name: Model identifier used in API requests
+#   - modelURL: HuggingFace model identifier
+#   - replicaCount: Number of replicas for this model
+#   - requestCPU: CPU cores per replica
+#   - requestMemory: Memory per replica
+#   - requestGPU: GPUs per replica
+#   - pvcStorage: Storage for model cache
+#   - vllmConfig: vLLM engine options (optional)
+#     - maxModelLen: Maximum context length
+#     - dtype: Data type (auto, bfloat16, float16)
+#     - tensorParallelSize: GPUs for tensor parallelism
+#     - gpuMemoryUtilization: GPU memory fraction (0.0-1.0)
+
+# Uncomment to add models:
+
+# Meta Llama 3.2 3B (requires HuggingFace token)
+# - name: llama3
+#   modelURL: meta-llama/Llama-3.2-3B-Instruct
+#   replicaCount: 1
+#   requestCPU: 6
+#   requestMemory: 16Gi
+#   requestGPU: 1
+#   pvcStorage: 50Gi
+
+# Google Gemma 3 4B Instruct (requires HuggingFace token)
+# - name: gemma3
+#   modelURL: google/gemma-3-4b-it
+#   replicaCount: 1
+#   requestCPU: 4
+#   requestMemory: 16Gi
+#   requestGPU: 1
+#   pvcStorage: 30Gi
+#   vllmConfig:
+#     dtype: bfloat16
+#     maxModelLen: 4096
+#     gpuMemoryUtilization: 0.90
+
+# Alibaba Qwen3 4B Instruct
+# - name: qwen3
+#   modelURL: Qwen/Qwen3-4B-Instruct
+#   replicaCount: 1
+#   requestCPU: 4
+#   requestMemory: 16Gi
+#   requestGPU: 1
+#   pvcStorage: 30Gi
+#   vllmConfig:
+#     dtype: bfloat16
+#     maxModelLen: 4096
+#     gpuMemoryUtilization: 0.90
+
+# Mistral 7B (requires HuggingFace token)
+# - name: mistral
+#   modelURL: mistralai/Mistral-7B-Instruct-v0.3
+#   replicaCount: 1
+#   requestCPU: 8
+#   requestMemory: 32Gi
+#   requestGPU: 1
+#   pvcStorage: 50Gi
+#   vllmConfig:
+#     maxModelLen: 8192
+#     dtype: bfloat16
+
+# Phi-3 Mini (small, fast model - no token required)
+# - name: phi3
+#   modelURL: microsoft/Phi-3-mini-4k-instruct
+#   replicaCount: 1
+#   requestCPU: 4
+#   requestMemory: 8Gi
+#   requestGPU: 1
+#   pvcStorage: 20Gi
+
+# ============================================================================
+# Long Context + Multilingual Models (Recommended for 12GB GPU)
+# ============================================================================
+# These models support long context windows (32K+) and multiple languages.
+# Optimized for consumer GPUs like RTX 4070 Ti (12GB).
+
+# Microsoft Phi-4 Mini (128K context, multilingual, no token required)
+# Best balance of quality, context length, and efficiency
+# - name: phi4
+#   modelURL: microsoft/Phi-4-mini-instruct
+#   replicaCount: 1
+#   requestCPU: 4
+#   requestMemory: 16Gi
+#   requestGPU: 1
+#   pvcStorage: 30Gi
+#   vllmConfig:
+#     maxModelLen: 32768
+#     gpuMemoryUtilization: 0.95
+
+# Meta Llama 3.2 3B with Long Context (requires HuggingFace token)
+# Lightweight model with excellent multilingual capabilities
+# - name: llama32
+#   modelURL: meta-llama/Llama-3.2-3B-Instruct
+#   replicaCount: 1
+#   requestCPU: 4
+#   requestMemory: 16Gi
+#   requestGPU: 1
+#   pvcStorage: 30Gi
+#   vllmConfig:
+#     maxModelLen: 32768
+#     gpuMemoryUtilization: 0.95
+
+# ============================================================================
+# Large Models (Multi-GPU)
+# ============================================================================
+
+# Large model with tensor parallelism (2 GPUs)
+# - name: llama3-70b
+#   modelURL: meta-llama/Llama-3.1-70B-Instruct
+#   replicaCount: 1
+#   requestCPU: 16
+#   requestMemory: 128Gi
+#   requestGPU: 2
+#   pvcStorage: 200Gi
+#   vllmConfig:
+#     tensorParallelSize: 2
+#     dtype: bfloat16
+#     gpuMemoryUtilization: 0.95

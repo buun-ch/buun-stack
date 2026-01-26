@@ -15,6 +15,7 @@ export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export LANGFUSE_HOST := env("LANGFUSE_HOST", "")
 export LANGFUSE_NAMESPACE := env("LANGFUSE_NAMESPACE", "langfuse")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export VLLM_NAMESPACE := env("VLLM_NAMESPACE", "vllm")
 
 [private]
 default:
@@ -123,7 +124,8 @@ add-model:
     echo ""
 
     provider=$(gum choose --header="Select provider:" \
-        "anthropic" "openai" "ollama" "mistral" "groq" "cohere" "azure" "bedrock" "vertexai")
+        "anthropic" "openai" "ollama" "vllm" "mistral" "groq" "cohere" "azure" "bedrock" "vertexai")
+    original_provider="${provider}"
 
     model_name=$(gum input --prompt="Model alias (e.g., claude-sonnet): " --width=60)
     if [ -z "${model_name}" ]; then
@@ -150,6 +152,11 @@ add-model:
         ollama)
             model=$(gum input --prompt="Ollama model name: " --width=60 --placeholder="qwen3:8b")
             api_key_line="    api_base: http://ollama.${OLLAMA_NAMESPACE}:11434"
+            ;;
+        vllm)
+            model=$(gum input --prompt="vLLM model name (as configured in vLLM): " --width=60 --placeholder="qwen3")
+            api_key_line="    api_base: http://vllm-router.${VLLM_NAMESPACE}.svc.cluster.local"$'\n'"    api_key: os.environ/VLLM_API_KEY"
+            provider="openai"
             ;;
         mistral)
             model=$(gum choose --header="Select Mistral model:" \
@@ -186,10 +193,10 @@ add-model:
 
     echo ""
     echo "Model '${model_name}' added to models.yaml"
-    if [ "$provider" != "ollama" ]; then
+    if [ "$original_provider" != "ollama" ]; then
         echo ""
         echo "Don't forget to set the API key if not already done:"
-        echo "  just litellm::set-api-key provider=${provider}"
+        echo "  just litellm::set-api-key provider=${original_provider}"
     fi
     echo ""
     echo "Run 'just litellm::install' or 'just litellm::upgrade' to apply changes."
@@ -492,6 +499,7 @@ uninstall delete-data='false':
         just vault::delete litellm/db || true
         just vault::delete keycloak/client/litellm || true
         just vault::delete litellm/langfuse || true
+        just vault::delete litellm/vllm || true
         # Clean up API keys from Vault
         providers=$(just get-required-providers 2>/dev/null || true)
         for provider in $providers; do

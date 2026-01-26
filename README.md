@@ -68,6 +68,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 ### LLM & AI Applications (Optional)
 
 - **[Ollama](https://ollama.com/)**: Local LLM inference server with GPU acceleration
+- **[vLLM](https://vllm.ai/)**: High-throughput LLM serving engine with PagedAttention for production workloads
 - **[LiteLLM](https://litellm.ai/)**: Unified LLM gateway for accessing multiple providers through OpenAI-compatible API
 - **[LibreChat](https://www.librechat.ai/)**: Web-based chat interface with multi-model support and MCP integration
 - **[Langfuse](https://langfuse.com/)**: LLM observability and analytics platform for tracking and debugging AI applications
@@ -373,6 +374,17 @@ Local LLM inference server:
 - **OpenAI-Compatible API**: Drop-in replacement for OpenAI API endpoints
 
 [📖 See Ollama Documentation](./ollama/README.md)
+
+### vLLM
+
+High-throughput LLM serving engine:
+
+- **High Performance**: PagedAttention for efficient memory management and production-grade throughput
+- **Multi-Model Deployment**: Deploy multiple models with automatic load balancing via router
+- **OpenAI-Compatible API**: Drop-in replacement for OpenAI API endpoints
+- **GPU Optimization**: Tensor parallelism for large models across multiple GPUs
+
+[📖 See vLLM Documentation](./vllm/README.md)
 
 ### LibreChat
 

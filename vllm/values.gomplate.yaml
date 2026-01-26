@@ -1,0 +1,80 @@
+{{- $models := datasource "models" -}}
+servingEngineSpec:
+  runtimeClassName: "nvidia"
+{{- if eq .Env.VLLM_API_KEY_FROM_SECRET "true" }}
+  vllmApiKey:
+    secretName: "vllm-api-key"
+    secretKey: "api-key"
+{{- else if .Env.VLLM_API_KEY }}
+  vllmApiKey: "{{ .Env.VLLM_API_KEY }}"
+{{- end }}
+
+  modelSpec:
+{{- range $models }}
+    - name: "{{ .name }}"
+      repository: "{{ $.Env.VLLM_MODEL_IMAGE }}"
+      tag: "{{ $.Env.VLLM_MODEL_TAG }}"
+      modelURL: "{{ .modelURL }}"
+      replicaCount: {{ .replicaCount | default 1 }}
+
+      requestCPU: {{ .requestCPU | default 6 }}
+      requestMemory: "{{ .requestMemory | default "16Gi" }}"
+      requestGPU: {{ .requestGPU | default 1 }}
+{{- if has . "limitMemory" }}
+      limitMemory: "{{ .limitMemory }}"
+{{- end }}
+
+      pvcStorage: "{{ .pvcStorage | default "50Gi" }}"
+      pvcAccessMode:
+        - ReadWriteOnce
+{{- if $.Env.VLLM_STORAGE_CLASS }}
+      storageClass: "{{ $.Env.VLLM_STORAGE_CLASS }}"
+{{- end }}
+
+{{- if has . "vllmConfig" }}
+      vllmConfig:
+{{- if has .vllmConfig "maxModelLen" }}
+        maxModelLen: {{ .vllmConfig.maxModelLen }}
+{{- end }}
+{{- if has .vllmConfig "dtype" }}
+        dtype: "{{ .vllmConfig.dtype }}"
+{{- end }}
+{{- if has .vllmConfig "tensorParallelSize" }}
+        tensorParallelSize: {{ .vllmConfig.tensorParallelSize }}
+{{- end }}
+{{- if has .vllmConfig "gpuMemoryUtilization" }}
+        gpuMemoryUtilization: {{ .vllmConfig.gpuMemoryUtilization }}
+{{- end }}
+        extraArgs:
+          - "--disable-log-requests"
+{{- else }}
+      vllmConfig:
+        extraArgs:
+          - "--disable-log-requests"
+{{- end }}
+
+{{- if eq $.Env.VLLM_HF_TOKEN_FROM_SECRET "true" }}
+      hf_token:
+        secretName: "hf-token"
+        secretKey: "token"
+{{- else if $.Env.VLLM_HF_TOKEN }}
+      hf_token: "{{ $.Env.VLLM_HF_TOKEN }}"
+{{- end }}
+{{- end }}
+
+routerSpec:
+  enableRouter: {{ .Env.VLLM_ROUTER_ENABLED }}
+  replicaCount: {{ .Env.VLLM_ROUTER_REPLICAS }}
+  serviceType: ClusterIP
+  routingLogic: "roundrobin"
+  resources:
+    requests:
+      cpu: "{{ .Env.VLLM_ROUTER_REQUEST_CPU }}"
+      memory: "{{ .Env.VLLM_ROUTER_REQUEST_MEMORY }}"
+    limits:
+      memory: "{{ .Env.VLLM_ROUTER_LIMIT_MEMORY }}"
+{{- if eq .Env.VLLM_API_KEY_FROM_SECRET "true" }}
+  vllmApiKey:
+    secretName: "vllm-api-key"
+    secretKey: "api-key"
+{{- end }}

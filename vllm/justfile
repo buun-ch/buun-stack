@@ -1,0 +1,564 @@
+set fallback := true
+
+export VLLM_NAMESPACE := env("VLLM_NAMESPACE", "vllm")
+export VLLM_CHART_VERSION := env("VLLM_CHART_VERSION", "0.1.8")
+export VLLM_HELM_TIMEOUT := env("VLLM_HELM_TIMEOUT", "30m")
+export VLLM_MODEL_IMAGE := env("VLLM_MODEL_IMAGE", "vllm/vllm-openai")
+export VLLM_MODEL_TAG := env("VLLM_MODEL_TAG", "latest")
+export VLLM_STORAGE_CLASS := env("VLLM_STORAGE_CLASS", "")
+export VLLM_HF_TOKEN := env("VLLM_HF_TOKEN", "")
+export VLLM_HF_TOKEN_FROM_SECRET := env("VLLM_HF_TOKEN_FROM_SECRET", "")
+export VLLM_API_KEY := env("VLLM_API_KEY", "")
+export VLLM_API_KEY_FROM_SECRET := env("VLLM_API_KEY_FROM_SECRET", "")
+export VLLM_ROUTER_ENABLED := env("VLLM_ROUTER_ENABLED", "true")
+export VLLM_ROUTER_REPLICAS := env("VLLM_ROUTER_REPLICAS", "1")
+export VLLM_ROUTER_REQUEST_CPU := env("VLLM_ROUTER_REQUEST_CPU", "100m")
+export VLLM_ROUTER_REQUEST_MEMORY := env("VLLM_ROUTER_REQUEST_MEMORY", "256Mi")
+export VLLM_ROUTER_LIMIT_MEMORY := env("VLLM_ROUTER_LIMIT_MEMORY", "768Mi")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add vllm https://vllm-project.github.io/production-stack
+    helm repo update vllm
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove vllm
+
+# Create vLLM namespace
+create-namespace:
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace ${VLLM_NAMESPACE} &>/dev/null; then
+        kubectl create namespace ${VLLM_NAMESPACE}
+    fi
+    # Note: vLLM requires privileged containers for GPU access
+    # Using baseline instead of restricted
+    kubectl label namespace ${VLLM_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=baseline \
+        pod-security.kubernetes.io/enforce-version=latest \
+        pod-security.kubernetes.io/warn=baseline \
+        pod-security.kubernetes.io/warn-version=latest \
+        --overwrite
+
+# Delete vLLM namespace
+delete-namespace:
+    kubectl delete namespace ${VLLM_NAMESPACE} --ignore-not-found
+
+# Check prerequisites
+check-prerequisites:
+    #!/bin/bash
+    set -euo pipefail
+    if [ ! -f models.yaml ]; then
+        echo "Error: models.yaml not found."
+        echo "Please create models.yaml from the example:"
+        echo "  cp models.example.yaml models.yaml"
+        echo "Then edit models.yaml to configure your models."
+        exit 1
+    fi
+    echo "Prerequisites check passed."
+
+# Set HuggingFace token
+set-hf-token token='':
+    #!/bin/bash
+    set -euo pipefail
+    token="{{ token }}"
+    if [ -z "${token}" ]; then
+        token=$(gum input --prompt="HuggingFace Token: " --width=100 \
+            --placeholder="hf_xxxxx" --password)
+    fi
+    if [ -z "${token}" ]; then
+        echo "Error: Token cannot be empty"
+        exit 1
+    fi
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        just vault::put vllm/huggingface token="${token}"
+        echo "HuggingFace token stored in Vault at 'vllm/huggingface'"
+    else
+        echo "HuggingFace token will be stored directly in Kubernetes Secret during install"
+        # Store temporarily for install to pick up
+        export VLLM_HF_TOKEN="${token}"
+        echo "Token set. Run 'just vllm::install' or 'just vllm::create-hf-token-secret' to apply."
+    fi
+
+# Get HuggingFace token
+get-hf-token:
+    #!/bin/bash
+    set -euo pipefail
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        just vault::get vllm/huggingface token
+    else
+        kubectl get secret hf-token -n ${VLLM_NAMESPACE} -o jsonpath='{.data.token}' | base64 -d
+    fi
+
+# Delete HuggingFace token
+delete-hf-token:
+    #!/bin/bash
+    set -euo pipefail
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        if just vault::exist vllm/huggingface &>/dev/null; then
+            just vault::delete vllm/huggingface
+            echo "HuggingFace token deleted from Vault"
+        else
+            echo "HuggingFace token not found in Vault"
+        fi
+    fi
+    kubectl delete secret hf-token -n ${VLLM_NAMESPACE} --ignore-not-found
+    kubectl delete externalsecret hf-token-external-secret -n ${VLLM_NAMESPACE} --ignore-not-found
+
+# Create HuggingFace token Secret (ExternalSecret or direct Secret)
+create-hf-token-secret token='':
+    #!/bin/bash
+    set -euo pipefail
+    token="{{ token }}"
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        # Use ExternalSecret with Vault
+        if ! just vault::exist vllm/huggingface &>/dev/null; then
+            if [ -n "${token}" ]; then
+                just vault::put vllm/huggingface token="${token}"
+            else
+                echo "Error: HuggingFace token not found in Vault."
+                echo "Please set the token first:"
+                echo "  just vllm::set-hf-token"
+                exit 1
+            fi
+        fi
+        kubectl delete externalsecret hf-token-external-secret -n ${VLLM_NAMESPACE} --ignore-not-found
+        kubectl delete secret hf-token -n ${VLLM_NAMESPACE} --ignore-not-found
+        gomplate -f hf-token-external-secret.gomplate.yaml | kubectl apply -f -
+        echo "Waiting for HuggingFace token secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/hf-token-external-secret \
+            -n ${VLLM_NAMESPACE} --timeout=60s
+        echo "HuggingFace token ExternalSecret created"
+    else
+        # Create Kubernetes Secret directly
+        if [ -z "${token}" ]; then
+            token=$(gum input --prompt="HuggingFace Token: " --width=100 \
+                --placeholder="hf_xxxxx" --password)
+        fi
+        if [ -z "${token}" ]; then
+            echo "Error: Token cannot be empty"
+            exit 1
+        fi
+        kubectl delete secret hf-token -n ${VLLM_NAMESPACE} --ignore-not-found
+        kubectl create secret generic hf-token -n ${VLLM_NAMESPACE} \
+            --from-literal=token="${token}"
+        echo "HuggingFace token Secret created directly in Kubernetes"
+
+        # Also store in Vault if available (backup)
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put vllm/huggingface token="${token}"
+            echo "Token also stored in Vault as backup"
+        fi
+    fi
+
+# Delete HuggingFace token Secret
+delete-hf-token-secret:
+    kubectl delete externalsecret hf-token-external-secret -n ${VLLM_NAMESPACE} --ignore-not-found
+    kubectl delete secret hf-token -n ${VLLM_NAMESPACE} --ignore-not-found
+
+# Set API key
+set-api-key key='':
+    #!/bin/bash
+    set -euo pipefail
+    key="{{ key }}"
+    if [ -z "${key}" ]; then
+        key=$(just utils::random-password)
+        echo "Generated API key: ${key}"
+    fi
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        just vault::put vllm/api-key api-key="${key}"
+        echo "API key stored in Vault at 'vllm/api-key'"
+    else
+        echo "API key will be stored directly in Kubernetes Secret during install"
+        export VLLM_API_KEY="${key}"
+        echo "Key set. Run 'just vllm::install' or 'just vllm::create-api-key-secret' to apply."
+    fi
+
+# Get API key
+get-api-key:
+    #!/bin/bash
+    set -euo pipefail
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        just vault::get vllm/api-key api-key
+    else
+        kubectl get secret vllm-api-key -n ${VLLM_NAMESPACE} -o jsonpath='{.data.api-key}' | base64 -d
+    fi
+
+# Delete API key
+delete-api-key:
+    #!/bin/bash
+    set -euo pipefail
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        if just vault::exist vllm/api-key &>/dev/null; then
+            just vault::delete vllm/api-key
+            echo "API key deleted from Vault"
+        else
+            echo "API key not found in Vault"
+        fi
+    fi
+    kubectl delete secret vllm-api-key -n ${VLLM_NAMESPACE} --ignore-not-found
+    kubectl delete externalsecret vllm-api-key-external-secret -n ${VLLM_NAMESPACE} --ignore-not-found
+
+# Create API key Secret (ExternalSecret or direct Secret)
+create-api-key-secret key='':
+    #!/bin/bash
+    set -euo pipefail
+    key="{{ key }}"
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        # Use ExternalSecret with Vault
+        if ! just vault::exist vllm/api-key &>/dev/null; then
+            if [ -n "${key}" ]; then
+                just vault::put vllm/api-key api-key="${key}"
+            else
+                echo "Error: API key not found in Vault."
+                echo "Please set the key first:"
+                echo "  just vllm::set-api-key"
+                exit 1
+            fi
+        fi
+        kubectl delete externalsecret vllm-api-key-external-secret -n ${VLLM_NAMESPACE} --ignore-not-found
+        kubectl delete secret vllm-api-key -n ${VLLM_NAMESPACE} --ignore-not-found
+        gomplate -f api-key-external-secret.gomplate.yaml | kubectl apply -f -
+        echo "Waiting for API key secret to be ready..."
+        kubectl wait --for=condition=Ready externalsecret/vllm-api-key-external-secret \
+            -n ${VLLM_NAMESPACE} --timeout=60s
+        echo "API key ExternalSecret created"
+    else
+        # Create Kubernetes Secret directly
+        if [ -z "${key}" ]; then
+            key=$(just utils::random-password)
+            echo "Generated API key: ${key}"
+        fi
+        kubectl delete secret vllm-api-key -n ${VLLM_NAMESPACE} --ignore-not-found
+        kubectl create secret generic vllm-api-key -n ${VLLM_NAMESPACE} \
+            --from-literal=api-key="${key}"
+        echo "API key Secret created directly in Kubernetes"
+
+        # Also store in Vault if available (backup)
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put vllm/api-key api-key="${key}"
+            echo "Key also stored in Vault as backup"
+        fi
+    fi
+
+# Delete API key Secret
+delete-api-key-secret:
+    kubectl delete externalsecret vllm-api-key-external-secret -n ${VLLM_NAMESPACE} --ignore-not-found
+    kubectl delete secret vllm-api-key -n ${VLLM_NAMESPACE} --ignore-not-found
+
+# List configured models
+list-models:
+    #!/bin/bash
+    set -euo pipefail
+    if [ ! -f models.yaml ]; then
+        echo "No models.yaml found. Create one with:"
+        echo "  cp models.example.yaml models.yaml"
+        exit 0
+    fi
+    echo "Configured models:"
+    yq -r '.[] | "  - \(.name): \(.modelURL) (GPUs: \(.requestGPU // 1), Replicas: \(.replicaCount // 1))"' models.yaml
+
+# Add a model interactively
+add-model:
+    #!/bin/bash
+    set -euo pipefail
+    if [ ! -f models.yaml ]; then
+        echo "Creating models.yaml from example..."
+        cp models.example.yaml models.yaml
+    fi
+
+    echo "Add a new model to vLLM"
+    echo ""
+
+    name=$(gum input --prompt="Model name (API identifier): " --width=60 \
+        --placeholder="e.g., llama3, mistral, qwen")
+    if [ -z "${name}" ]; then
+        echo "Error: Model name is required"
+        exit 1
+    fi
+
+    model_url=$(gum input --prompt="HuggingFace model URL: " --width=80 \
+        --placeholder="e.g., meta-llama/Llama-3.2-3B-Instruct")
+    if [ -z "${model_url}" ]; then
+        echo "Error: Model URL is required"
+        exit 1
+    fi
+
+    gpus=$(gum input --prompt="Number of GPUs: " --width=20 --value="1")
+    replicas=$(gum input --prompt="Number of replicas: " --width=20 --value="1")
+    memory=$(gum input --prompt="Memory request: " --width=20 --value="16Gi")
+    storage=$(gum input --prompt="Storage size: " --width=20 --value="50Gi")
+
+    echo "" >> models.yaml
+    echo "- name: ${name}" >> models.yaml
+    echo "  modelURL: ${model_url}" >> models.yaml
+    echo "  replicaCount: ${replicas}" >> models.yaml
+    echo "  requestCPU: 6" >> models.yaml
+    echo "  requestMemory: ${memory}" >> models.yaml
+    echo "  requestGPU: ${gpus}" >> models.yaml
+    echo "  pvcStorage: ${storage}" >> models.yaml
+
+    echo ""
+    echo "Model '${name}' added to models.yaml"
+    echo ""
+    echo "Run 'just vllm::install' or 'just vllm::upgrade' to apply changes."
+
+# Remove a model interactively
+remove-model:
+    #!/bin/bash
+    set -euo pipefail
+    if [ ! -f models.yaml ]; then
+        echo "Error: models.yaml not found"
+        exit 1
+    fi
+    models=$(yq -r '.[].name' models.yaml)
+    if [ -z "$models" ]; then
+        echo "No models configured."
+        exit 0
+    fi
+    model=$(echo "$models" | gum choose --header="Select model to remove:")
+    if gum confirm "Remove model '${model}'?"; then
+        yq -i "del(.[] | select(.name == \"${model}\"))" models.yaml
+        echo "Model '${model}' removed from models.yaml"
+        echo "Run 'just vllm::upgrade' to apply changes."
+    else
+        echo "Cancelled."
+    fi
+
+# Install vLLM
+install:
+    #!/bin/bash
+    set -euo pipefail
+
+    just check-prerequisites
+    just create-namespace
+    just add-helm-repo
+
+    # Check if any model requires HuggingFace token
+    models_needing_token=$(yq -r '.[] | select(.modelURL | test("meta-llama|mistralai|google/gemma")) | .name' models.yaml 2>/dev/null || true)
+
+    if [ -n "${models_needing_token}" ]; then
+        echo "The following models require a HuggingFace token:"
+        echo "${models_needing_token}" | sed 's/^/  - /'
+        echo ""
+
+        # Check if External Secrets Operator is available
+        if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            if just vault::exist vllm/huggingface &>/dev/null; then
+                echo "Using HuggingFace token from Vault"
+                just create-hf-token-secret
+            else
+                echo "HuggingFace token not found in Vault."
+                just set-hf-token
+                just create-hf-token-secret
+            fi
+        else
+            # No ESO - create direct Kubernetes Secret
+            token=""
+            if [ -n "${VLLM_HF_TOKEN}" ]; then
+                token="${VLLM_HF_TOKEN}"
+            fi
+            just create-hf-token-secret "${token}"
+        fi
+        VLLM_HF_TOKEN_FROM_SECRET="true"
+    fi
+
+    # Handle API key
+    if gum confirm "Set API key for vLLM?"; then
+        if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            if just vault::exist vllm/api-key &>/dev/null; then
+                echo "Using API key from Vault"
+                just create-api-key-secret
+            else
+                echo "API key not found in Vault. Generating new key..."
+                just set-api-key
+                just create-api-key-secret
+            fi
+        else
+            # No ESO - create direct Kubernetes Secret
+            key=""
+            if [ -n "${VLLM_API_KEY}" ]; then
+                key="${VLLM_API_KEY}"
+            fi
+            just create-api-key-secret "${key}"
+        fi
+        VLLM_API_KEY_FROM_SECRET="true"
+    fi
+
+    gomplate -d models=models.yaml -f values.gomplate.yaml -o values.yaml
+
+    helm upgrade --install vllm vllm/vllm-stack \
+        --version ${VLLM_CHART_VERSION} -n ${VLLM_NAMESPACE} \
+        --wait --timeout ${VLLM_HELM_TIMEOUT} \
+        -f values.yaml
+
+    echo ""
+    echo "vLLM installed successfully"
+    echo "Namespace: ${VLLM_NAMESPACE}"
+    echo ""
+    echo "Configured models:"
+    yq -r '.[] | "  - \(.name): \(.modelURL)"' models.yaml
+    if [ "${VLLM_API_KEY_FROM_SECRET}" = "true" ]; then
+        echo ""
+        echo "API Key stored in Secret 'vllm-api-key'"
+        echo "Retrieve with: just vllm::get-api-key"
+    fi
+
+# Upgrade vLLM
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+
+    just check-prerequisites
+
+    # Check if any model requires HuggingFace token
+    models_needing_token=$(yq -r '.[] | select(.modelURL | test("meta-llama|mistralai|google/gemma")) | .name' models.yaml 2>/dev/null || true)
+
+    if [ -n "${models_needing_token}" ]; then
+        # Check if ExternalSecret or direct Secret already exists
+        if kubectl get externalsecret hf-token-external-secret -n ${VLLM_NAMESPACE} &>/dev/null; then
+            echo "Using existing HuggingFace token from ExternalSecret"
+            VLLM_HF_TOKEN_FROM_SECRET="true"
+        elif kubectl get secret hf-token -n ${VLLM_NAMESPACE} &>/dev/null; then
+            echo "Using existing HuggingFace token from Secret"
+            VLLM_HF_TOKEN_FROM_SECRET="true"
+        elif helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+            if just vault::exist vllm/huggingface &>/dev/null; then
+                echo "Using HuggingFace token from Vault"
+                just create-hf-token-secret
+            else
+                echo "The following models require a HuggingFace token:"
+                echo "${models_needing_token}" | sed 's/^/  - /'
+                echo ""
+                just set-hf-token
+                just create-hf-token-secret
+            fi
+            VLLM_HF_TOKEN_FROM_SECRET="true"
+        else
+            # No ESO - create direct Kubernetes Secret
+            echo "The following models require a HuggingFace token:"
+            echo "${models_needing_token}" | sed 's/^/  - /'
+            echo ""
+            token=""
+            if [ -n "${VLLM_HF_TOKEN}" ]; then
+                token="${VLLM_HF_TOKEN}"
+            fi
+            just create-hf-token-secret "${token}"
+            VLLM_HF_TOKEN_FROM_SECRET="true"
+        fi
+    fi
+
+    # Check if API key Secret exists
+    if kubectl get externalsecret vllm-api-key-external-secret -n ${VLLM_NAMESPACE} &>/dev/null; then
+        echo "Using existing API key from ExternalSecret"
+        VLLM_API_KEY_FROM_SECRET="true"
+    elif kubectl get secret vllm-api-key -n ${VLLM_NAMESPACE} &>/dev/null; then
+        echo "Using existing API key from Secret"
+        VLLM_API_KEY_FROM_SECRET="true"
+    fi
+
+    gomplate -d models=models.yaml -f values.gomplate.yaml -o values.yaml
+
+    helm upgrade vllm vllm/vllm-stack \
+        --version ${VLLM_CHART_VERSION} -n ${VLLM_NAMESPACE} \
+        --wait --timeout ${VLLM_HELM_TIMEOUT} \
+        -f values.yaml
+
+    echo ""
+    echo "vLLM upgraded successfully"
+    echo ""
+    echo "Configured models:"
+    yq -r '.[] | "  - \(.name): \(.modelURL)"' models.yaml
+
+# Uninstall vLLM
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall vllm -n ${VLLM_NAMESPACE} --wait --ignore-not-found
+    just delete-hf-token-secret
+    just delete-api-key-secret
+    just delete-namespace
+    echo "vLLM uninstalled"
+
+# Show vLLM logs for a specific model
+logs model='':
+    #!/bin/bash
+    set -euo pipefail
+    model="{{ model }}"
+    if [ -z "${model}" ]; then
+        models=$(kubectl get pods -n ${VLLM_NAMESPACE} -l environment=test \
+            -o jsonpath='{range .items[*]}{.metadata.labels.model}{"\n"}{end}' | sort -u | grep -v '^$')
+        if [ -z "${models}" ]; then
+            echo "No vLLM model pods found"
+            exit 1
+        fi
+        model=$(echo "${models}" | gum choose --header="Select model:")
+    fi
+    kubectl logs -n ${VLLM_NAMESPACE} -l model=${model} -f --tail=100
+
+# Show router logs
+router-logs:
+    kubectl logs -n ${VLLM_NAMESPACE} -l environment=router -f --tail=100
+
+# Get pod status
+status:
+    kubectl get pods -n ${VLLM_NAMESPACE}
+
+# Get service endpoints
+endpoints:
+    kubectl get svc -n ${VLLM_NAMESPACE}
+
+# Port forward to vLLM router service
+port-forward port='8000':
+    kubectl port-forward -n ${VLLM_NAMESPACE} svc/vllm-router {{ port }}:80
+
+# Test vLLM API with completions endpoint
+test-completions model='' prompt='Hello, how are you?':
+    #!/bin/bash
+    set -euo pipefail
+    model="{{ model }}"
+    if [ -z "${model}" ]; then
+        models=$(yq -r '.[].name' models.yaml 2>/dev/null || echo "")
+        if [ -n "${models}" ]; then
+            model=$(echo "${models}" | gum choose --header="Select model:")
+        else
+            echo "Error: No models configured"
+            exit 1
+        fi
+    fi
+    ROUTER_POD=$(kubectl get pods -n ${VLLM_NAMESPACE} -l environment=router -o jsonpath='{.items[0].metadata.name}')
+    kubectl exec -n ${VLLM_NAMESPACE} ${ROUTER_POD} -- curl -s http://localhost:8000/v1/completions \
+        -H "Content-Type: application/json" \
+        -d "{\"model\": \"${model}\", \"prompt\": \"{{ prompt }}\", \"max_tokens\": 100}"
+
+# List available models from API
+list-api-models:
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get svc vllm-router-service -n ${VLLM_NAMESPACE} &>/dev/null; then
+        echo "Error: vLLM router service not found. Is vLLM installed?"
+        exit 1
+    fi
+    response=$(kubectl run -n ${VLLM_NAMESPACE} curl-tmp --rm -i --restart=Never \
+        --image=curlimages/curl:latest --quiet \
+        -- -s http://vllm-router-service:80/v1/models 2>/dev/null)
+    models=$(echo "${response}" | jq -r '.data[].id' 2>/dev/null)
+    if [ -z "${models}" ]; then
+        echo "No models available (model pods may not be ready)"
+        echo ""
+        echo "Check pod status with: just vllm::status"
+    else
+        echo "Available models:"
+        echo "${models}" | while read -r model; do
+            echo "  - ${model}"
+        done
+    fi

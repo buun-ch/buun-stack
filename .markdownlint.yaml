@@ -1,8 +1,11 @@
 default: true
+first-line-heading: false
 line-length: false
 no-bare-urls: false
 no-duplicate-heading: false
 no-emphasis-as-heading: false
 no-inline-html: false
+table-column-style:
+  style: aligned
 ul-indent:
   indent: 4

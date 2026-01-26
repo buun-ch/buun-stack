@@ -141,3 +141,5 @@ dist
 /private/
 .mcp.json
 /.playwright-mcp/
+vllm/models.yaml
+.claude/settings.local.json

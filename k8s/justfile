@@ -165,7 +165,7 @@ stop:
     # Wait for Longhorn volumes to be fully detached
     if helm status longhorn -n ${LONGHORN_NAMESPACE} &>/dev/null; then
         echo "[$(elapsed)] Waiting for Longhorn volumes to be detached..."
-        TIMEOUT=30
+        TIMEOUT=90
         ELAPSED=0
         while [ $ELAPSED -lt $TIMEOUT ]; do
             ATTACHED=$(kubectl get volumes.longhorn.io -n ${LONGHORN_NAMESPACE} -o json 2>/dev/null | \
