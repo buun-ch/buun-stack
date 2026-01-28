@@ -348,6 +348,7 @@ build-kernel-images:
     (
         cd ../python-package
         rm -rf dist/ build/ *.egg-info/
+        pip install --upgrade build
         SETUPTOOLS_SCM_PRETEND_VERSION_FOR_BUUNSTACK=0.1.0 python -m build --wheel
     )
     (
