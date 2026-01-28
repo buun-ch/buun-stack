@@ -24,7 +24,7 @@ loki:
           period: 24h
 
   limits_config:
-    retention_period: 168h
+    retention_period: 72h
     ingestion_rate_mb: 10
     ingestion_burst_size_mb: 20
     max_streams_per_user: 10000
@@ -47,7 +47,7 @@ singleBinary:
 
   persistence:
     enabled: true
-    size: 10Gi
+    size: 20Gi
 
 # Disable other deployment modes
 read:
