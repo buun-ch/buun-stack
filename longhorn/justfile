@@ -1,7 +1,7 @@
 set fallback := true
 
 export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
-export LONGHORN_VERSION := env("LONGHORN_VERSION", "1.10.1")
+export LONGHORN_VERSION := env("LONGHORN_VERSION", "1.11.0")
 export LONGHORN_HOST := env("LONGHORN_HOST", "")
 export LONGHORN_OIDC_CLIENT_ID := env("LONGHORN_OIDC_CLIENT_ID", "longhorn")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
@@ -43,7 +43,7 @@ delete-namespace:
 install:
     #!/bin/bash
     set -euo pipefail
-    # https://longhorn.io/docs/1.9.1/deploy/install/install-with-helm/
+    # https://longhorn.io/docs/1.11.0/deploy/install/install-with-helm/
     just add-helm-repo
     helm upgrade --cleanup-on-fail --install longhorn longhorn/longhorn \
         --version ${LONGHORN_VERSION} -n ${LONGHORN_NAMESPACE} --create-namespace --wait \
