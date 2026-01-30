@@ -152,12 +152,15 @@ stop:
     # Drain the node to gracefully evict all pods and detach Longhorn volumes
     # This is the recommended way to shutdown with Longhorn (see: https://github.com/longhorn/longhorn/issues/7206)
     echo "[$(elapsed)] Draining node to gracefully detach Longhorn volumes..."
+    # For single-node clusters, use --disable-eviction to bypass PodDisruptionBudgets
+    # which would otherwise block eviction indefinitely
     kubectl drain "$NODE_NAME" \
         --ignore-daemonsets \
         --delete-emptydir-data \
         --force \
-        --grace-period=30 \
-        --timeout=90s 2>&1 || {
+        --disable-eviction \
+        --grace-period=60 \
+        --timeout=180s 2>&1 || {
             echo "⚠ Drain had warnings (this is usually OK for single-node clusters)"
         }
     echo "[$(elapsed)] Drain completed"
@@ -264,27 +267,83 @@ start:
     kubectl wait --for=condition=Ready nodes --all --timeout=60s
 
     # Uncordon the node if it was cordoned by 'just k8s::stop'
+    # This must happen before waiting for Longhorn, as Deployment pods need a schedulable node
     NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
     if [ -n "$NODE_NAME" ]; then
-        NODE_SCHEDULABLE=$(kubectl get node "$NODE_NAME" -o jsonpath='{.spec.unschedulable}' 2>/dev/null || echo "false")
-        if [ "$NODE_SCHEDULABLE" = "true" ]; then
-            echo "Uncordoning node $NODE_NAME..."
-            kubectl uncordon "$NODE_NAME"
-        fi
+        echo "Uncordoning node $NODE_NAME..."
+        kubectl uncordon "$NODE_NAME" 2>/dev/null || true
     fi
 
-    # Wait for Longhorn CSI plugin to be ready before other pods start using volumes
-    if helm status longhorn -n longhorn &>/dev/null; then
+    # Wait for Longhorn to be ready before other pods start using volumes
+    if helm status longhorn -n ${LONGHORN_NAMESPACE} &>/dev/null; then
+        echo "Waiting for Longhorn manager to be ready..."
+        # Longhorn manager may crash on startup due to concurrency issues after stop/start
+        # Retry up to 3 times with pod restart
+        MANAGER_READY=false
+        for i in 1 2 3; do
+            if kubectl wait --for=condition=Ready pod -l app=longhorn-manager -n ${LONGHORN_NAMESPACE} --timeout=60s 2>/dev/null; then
+                MANAGER_READY=true
+                break
+            fi
+            echo "⚠ Longhorn manager not ready (attempt $i/3), restarting pods..."
+            kubectl delete pod -l app=longhorn-manager -n ${LONGHORN_NAMESPACE} --ignore-not-found
+            sleep 5
+        done
+        if [ "$MANAGER_READY" = "true" ]; then
+            echo "✓ Longhorn manager is ready"
+            # Wait for longhorn-backend service endpoints to be available
+            echo "Waiting for Longhorn backend service to be ready..."
+            for i in $(seq 1 30); do
+                ENDPOINTS=$(kubectl get endpoints longhorn-backend -n ${LONGHORN_NAMESPACE} -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)
+                if [ -n "$ENDPOINTS" ]; then
+                    echo "✓ Longhorn backend service is ready"
+                    break
+                fi
+                sleep 2
+            done
+        else
+            echo "⚠ Longhorn manager may not be fully ready, continuing..."
+        fi
+
         echo "Waiting for Longhorn CSI plugin to be ready..."
-        if ! kubectl wait --for=condition=Ready pod -l app=longhorn-csi-plugin -n longhorn --timeout=120s 2>/dev/null; then
-            echo "⚠ Longhorn CSI plugin not ready, restarting pod..."
-            kubectl delete pod -l app=longhorn-csi-plugin -n longhorn --ignore-not-found
-            kubectl wait --for=condition=Ready pod -l app=longhorn-csi-plugin -n longhorn --timeout=120s
+        CSI_READY=false
+        for i in 1 2 3; do
+            if kubectl wait --for=condition=Ready pod -l app=longhorn-csi-plugin -n ${LONGHORN_NAMESPACE} --timeout=90s 2>/dev/null; then
+                CSI_READY=true
+                break
+            fi
+            echo "⚠ Longhorn CSI plugin not ready (attempt $i/3), restarting pod..."
+            kubectl delete pod -l app=longhorn-csi-plugin -n ${LONGHORN_NAMESPACE} --ignore-not-found
+            sleep 10
+        done
+        if [ "$CSI_READY" = "true" ]; then
+            echo "✓ Longhorn CSI plugin is ready"
+        else
+            echo "⚠ Longhorn CSI plugin may not be fully ready, continuing..."
         fi
-        echo "✓ Longhorn CSI plugin is ready"
+
+        # Wait for volumes to become healthy
+        echo "Waiting for Longhorn volumes to be healthy..."
+        TIMEOUT=120
+        ELAPSED=0
+        while [ $ELAPSED -lt $TIMEOUT ]; do
+            UNHEALTHY=$(kubectl get volumes.longhorn.io -n ${LONGHORN_NAMESPACE} -o json 2>/dev/null | \
+                jq -r '.items[] | select(.status.robustness != "healthy") | .metadata.name' 2>/dev/null || true)
+            if [ -z "$UNHEALTHY" ]; then
+                echo "✓ All Longhorn volumes are healthy"
+                break
+            fi
+            UNHEALTHY_COUNT=$(echo "$UNHEALTHY" | grep -c . || echo 0)
+            echo "  Waiting for $UNHEALTHY_COUNT volume(s) to become healthy..."
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+        done
+        if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "⚠ Some volumes may not be healthy yet, continuing..."
+        fi
     fi
 
-    echo "k3s started on ${LOCAL_K8S_HOST}."
+    echo "✓ k3s started on ${LOCAL_K8S_HOST}."
 
 # Restart k3s cluster (with CSI cleanup)
 restart:
