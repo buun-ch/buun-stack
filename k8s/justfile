@@ -255,6 +255,40 @@ stop:
     echo "  just k8s::start"
     echo "  just vault::unseal  # If Vault is installed"
 
+# Uncordon node (handles Longhorn webhook blocking)
+uncordon:
+    #!/bin/bash
+    set -euo pipefail
+    NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    if [ -z "$NODE_NAME" ]; then
+        echo "No node found"
+        exit 1
+    fi
+
+    is_schedulable() {
+        ! kubectl get node "$NODE_NAME" -o jsonpath='{.spec.unschedulable}' 2>/dev/null | grep -q "true"
+    }
+
+    if is_schedulable; then
+        echo "✓ Node $NODE_NAME is already schedulable"
+        exit 0
+    fi
+
+    echo "Uncordoning node $NODE_NAME..."
+    kubectl uncordon "$NODE_NAME" 2>&1 || true
+
+    if is_schedulable; then
+        echo "✓ Node uncordoned"
+        exit 0
+    fi
+
+    # Longhorn webhook may block uncordon, temporarily remove it
+    echo "⚠ Uncordon failed, removing Longhorn webhooks temporarily..."
+    kubectl delete validatingwebhookconfigurations longhorn-webhook-validator --ignore-not-found
+    kubectl delete mutatingwebhookconfigurations longhorn-webhook-mutator --ignore-not-found
+    kubectl uncordon "$NODE_NAME"
+    echo "✓ Node uncordoned (webhooks will be recreated by Longhorn manager)"
+
 # Start k3s cluster
 start:
     #!/bin/bash
@@ -266,13 +300,8 @@ start:
     sleep 5
     kubectl wait --for=condition=Ready nodes --all --timeout=60s
 
-    # Uncordon the node if it was cordoned by 'just k8s::stop'
-    # This must happen before waiting for Longhorn, as Deployment pods need a schedulable node
-    NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-    if [ -n "$NODE_NAME" ]; then
-        echo "Uncordoning node $NODE_NAME..."
-        kubectl uncordon "$NODE_NAME" 2>/dev/null || true
-    fi
+    # Uncordon node (may need to remove Longhorn webhooks temporarily)
+    just k8s::uncordon
 
     # Wait for Longhorn to be ready before other pods start using volumes
     if helm status longhorn -n ${LONGHORN_NAMESPACE} &>/dev/null; then
