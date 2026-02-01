@@ -60,6 +60,9 @@ RUN /opt/setup-scripts/setup_spark.py \
 COPY ipython_kernel_config.py "/etc/ipython/"
 RUN fix-permissions "/etc/ipython/"
 
+# macOS Rosetta virtualization creates junk directory which gets owned by root
+RUN rm -rf "/home/${NB_USER}/.cache/"
+
 USER ${NB_UID}
 
 # Remove torch to fix `critical libmamba filesystem error` on executing `memba install`
@@ -78,6 +81,7 @@ RUN pip uninstall -y \
 RUN mamba install --yes \
     'aif360' \
     'avro' \
+    'captum' \
     'chromadb' \
     'clickhouse-connect' \
     'csvkit' \
@@ -91,28 +95,14 @@ RUN mamba install --yes \
     'grpcio-status' \
     'grpcio' \
     'hvac' \
+    'ipywidgets' \
     'jupyter-collaboration' \
     'keras' \
     'langchain' \
-    'langchain-ai21' \
-    'langchain-anthropic' \
-    'langchain-aws' \
-    'langchain-azure-dynamic-sessions' \
     'langchain-chroma' \
     'langchain-community' \
-    'langchain-experimental' \
-    'langchain-fireworks' \
-    'langchain-google-genai' \
-    'langchain-groq' \
-    'langchain-mistralai' \
-    'langchain-mongodb' \
-    'langchain-nomic' \
-    'langchain-prompty' \
+    'langchain-openai' \
     'langchain-qdrant' \
-    'langchain-robocorp' \
-    'langchain-text-splitters' \
-    'langchain-together' \
-    'langchain-voyageai' \
     'langgraph' \
     'langgraph-checkpoint' \
     'langgraph-sdk' \
@@ -121,14 +111,17 @@ RUN mamba install --yes \
     'nest-asyncio' \
     'openai' \
     'openai-agents' \
-    'pandas=2.2.2' \
+    'pandas=2.2.3' \
     'pandas-profiling' \
     'pillow' \
+    'plotly' \
     'polars' \
     'psycopg2' \
     'pyarrow' \
     'qdrant-client' \
+    'ragas' \
     'rapidfuzz' \
+    'seaborn' \
     'simple-salesforce' \
     'tensorflow' \
     'transformers' \
@@ -138,28 +131,22 @@ RUN mamba install --yes \
     fix-permissions "${CONDA_DIR}" && \
     fix-permissions "/home/${NB_USER}"
 
-# RUN pip install pyspark[connect,ml,mllib,pandas-on-spark,sql]==4.0.0.dev2
-# RUN pip install pyspark[connect,ml,mllib,pandas-on-spark,sql]==3.5.4
-
 # URL to use for pip downloads
 ARG pip_repository_url="https://pypi.org/simple/"
 
 RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_repository_url}" \
     agno \
-    cognee \
-    cognee-integration-langgraph \
-    cognee-community-hybrid-adapter-falkor \
-    cognee-community-vector-adapter-qdrant \
     dagster-dlt \
     falkordb \
     fastembed \
     feature-engine \
+    'huggingface-hub>=1.3' \
     kreuzberg \
     langfuse \
     mlflow \
     pydantic-ai \
-    ragas[all,tracing] \
     smolagents \
+    'statsmodels>=0.14.0' \
     tavily-python \
     tweet-preprocessor
 
@@ -171,18 +158,15 @@ RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_
 # Provides /mcp/v1 endpoint for Claude Code integration
 RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip \
     pip install -i "${pip_repository_url}" \
-        'jupyter-mcp-server==0.21.0' \
-        'jupyter-mcp-tools>=0.1.4' \
+        'jupyter-mcp-server' \
+        'jupyter-mcp-tools' \
  && pip uninstall -y pycrdt datalayer_pycrdt \
- && pip install -i "${pip_repository_url}" 'datalayer_pycrdt==0.12.17' \
+ && pip install -i "${pip_repository_url}" 'datalayer_pycrdt' \
  && jupyter server extension enable jupyter_mcp_server
 
 # Install PyTorch with pip (https://pytorch.org/get-started/locally/)
-# langchain-openai must be updated to avoid pydantic v2 error
-# https://github.com/run-llama/llama_index/issues/16540https://github.com/run-llama/llama_index/issues/16540
 # hadolint ignore=DL3013
 RUN pip install --no-cache-dir --index-url 'https://download.pytorch.org/whl/cpu' --upgrade \
-    langchain-openai \
     torch \
     torchaudio \
     torchvision

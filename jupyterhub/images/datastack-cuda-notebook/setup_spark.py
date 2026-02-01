@@ -9,6 +9,7 @@
 import argparse
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -33,11 +34,10 @@ def get_latest_spark_version() -> str:
     """
     LOGGER.info("Downloading Spark versions information")
     all_refs = get_all_refs("https://archive.apache.org/dist/spark/")
-    versions = [
-        ref.removeprefix("spark-").removesuffix("/")
-        for ref in all_refs
-        if ref.startswith("spark-") and "incubating" not in ref
-    ]
+    LOGGER.info(f"All refs: {all_refs}")
+    pattern = re.compile(r"^spark-(\d+\.\d+\.\d+)/$")
+    versions = [match.group(1) for ref in all_refs if (match := pattern.match(ref))]
+    LOGGER.info(f"Available versions: {versions}")
 
     # Compare versions semantically
     def version_array(ver: str) -> tuple[int, int, int, str]:
@@ -55,6 +55,7 @@ def get_latest_spark_version() -> str:
 
 
 def download_spark(
+    *,
     spark_version: str,
     hadoop_version: str,
     scala_version: str,
@@ -70,6 +71,7 @@ def download_spark(
         spark_dir_name += f"-scala{scala_version}"
     LOGGER.info(f"Spark directory name: {spark_dir_name}")
     spark_url = spark_download_url / f"spark-{spark_version}" / f"{spark_dir_name}.tgz"
+    LOGGER.info(f"Spark download URL: {spark_url}")
 
     tmp_file = Path("/tmp/spark.tar.gz")
     subprocess.check_call(
