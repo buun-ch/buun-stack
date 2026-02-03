@@ -123,6 +123,7 @@ RUN mamba install --yes \
     'rapidfuzz' \
     'seaborn' \
     'simple-salesforce' \
+    'stable-baselines3' \
     'tensorflow' \
     'transformers' \
     'unstructured' \
@@ -140,6 +141,7 @@ RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_
     falkordb \
     fastembed \
     feature-engine \
+    'gymnasium[classic-control]' \
     'huggingface-hub>=1.3' \
     kreuzberg \
     langfuse \
