@@ -1,0 +1,58 @@
+--- a/actions.py
++++ b/actions.py
+@@ -24,6 +24,31 @@
+ from jupyter_server_nbmodel.event_logger import event_logger
+ 
+ 
++def _apply_carriage_return(text: str) -> str:
++    """Apply carriage return processing to simulate terminal behavior.
++
++    Handles \\r characters by overwriting from the beginning of the line,
++    matching how terminals render tqdm progress bars.
++    """
++    lines = text.split("\n")
++    result = []
++    for line in lines:
++        if "\r" in line:
++            parts = line.split("\r")
++            visible = parts[0]
++            for part in parts[1:]:
++                if not part:
++                    visible = ""
++                elif len(part) >= len(visible):
++                    visible = part
++                else:
++                    visible = part + visible[len(part):]
++            result.append(visible)
++        else:
++            result.append(line)
++    return "\n".join(result)
++
++
+ if t.TYPE_CHECKING:
+     import jupyter_client
+     from nbformat import NotebookNode
+@@ -99,11 +124,21 @@
+                     if text.endswith((os.linesep, "\n")):
+                         text = text[:-1]
+                     if (not cell_outputs) or (cell_outputs[-1].get("name", None) != output["name"]):
+-                        output["text"] = [text]
++                        if "\r" in text:
++                            text = _apply_carriage_return(text)
++                        output["text"] = [text]
+                         cell_outputs.append(output)
+                     else:
+                         last_output = cell_outputs[-1]
+-                        last_output["text"].append(text)
++                        old_text = list(last_output["text"])
++                        if old_text and "\r" in text:
++                            combined = old_text[-1] + text
++                            processed = _apply_carriage_return(combined)
++                            new_lines = processed.split("\n")
++                            old_text[-1:] = new_lines
++                        else:
++                            old_text.append(text)
++                        last_output["text"] = old_text
+                         cell_outputs[-1] = last_output
+             else:
+                 with cell_outputs.doc.transaction():

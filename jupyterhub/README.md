@@ -23,6 +23,7 @@ JupyterHub provides a multi-user Jupyter notebook environment with Keycloak OIDC
 - [Troubleshooting](#troubleshooting)
 - [Technical Implementation Details](#technical-implementation-details)
 - [Performance Considerations](#performance-considerations)
+- [Patches for jupyter-server-nbmodel](#patches-for-jupyter-server-nbmodel)
 - [Known Limitations](#known-limitations)
 
 ## Installation
@@ -1071,6 +1072,29 @@ For production deployments, consider:
 - Using faster storage backends
 - Configuring resource limits per user
 - Setting up monitoring and alerts
+
+## Patches for jupyter-server-nbmodel
+
+The buun-stack kernel images apply patches to `jupyter-server-nbmodel` (a dependency of `jupyter-mcp-server`) to fix issues with cell output handling. These patches are applied during Docker image build in both `datastack-notebook` and `datastack-cuda-notebook`.
+
+### fix-nbmodel-pager.patch
+
+Fixes pager output (e.g., `print?`, `help()`) not being displayed in cell outputs.
+
+When a user invokes the pager (such as typing `object?` to view documentation), JupyterLab's frontend `OutputArea` handles the `payload` in the execute reply and renders it as `display_data`. However, `jupyter-server-nbmodel` did not process pager payloads, so the documentation output was silently discarded when cells were executed via the MCP server.
+
+This patch processes `payload` entries with `source: "page"` from the execute reply and converts them to `display_data` outputs, matching JupyterLab's `OutputArea._onExecuteReply` behavior.
+
+### fix-nbmodel-stream-cr.patch
+
+Fixes tqdm progress bars rendering as multiple lines instead of updating in place.
+
+tqdm uses `\r` (carriage return) to overwrite the current line when updating the progress bar. JupyterLab's frontend `OutputArea` has [complex logic](https://github.com/jupyterlab/jupyterlab/blob/7ae2d436fc410b0cff51042a3350ba71f54f4445/packages/outputarea/src/model.ts#L518) to handle `\r` in stream outputs, but `jupyter-server-nbmodel` appends each stream chunk to the Y document text array without processing `\r`. This causes each progress bar update to appear as a separate line.
+
+This patch adds an `_apply_carriage_return` helper function that simulates terminal `\r` behavior and integrates it into the stream output handling in `_output_hook`:
+
+- For new stream outputs containing `\r`, the text is processed before being stored
+- For appended stream outputs containing `\r`, the last text element is combined with the new text and processed together, then stored back
 
 ## Known Limitations
 

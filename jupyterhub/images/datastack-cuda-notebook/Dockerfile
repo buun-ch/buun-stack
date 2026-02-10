@@ -159,7 +159,7 @@ RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip pip install -i "${pip_
 # jupyter-mcp-server as Jupyter Server Extension
 # https://jupyter-mcp-server.datalayer.tech/setup/jupyter/local_mcp/
 # Provides /mcp/v1 endpoint for Claude Code integration
-COPY fix-nbmodel-pager.patch /opt/setup-scripts/
+COPY fix-nbmodel-pager.patch fix-nbmodel-stream-cr.patch /opt/setup-scripts/
 RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip \
     pip install -i "${pip_repository_url}" \
         'jupyter-mcp-server' \
@@ -168,7 +168,8 @@ RUN --mount=type=cache,target=/home/${NB_USER}/.cache/pip \
  && pip install -i "${pip_repository_url}" 'datalayer_pycrdt' \
  && jupyter server extension enable jupyter_mcp_server \
  && cd "$(python -c 'import jupyter_server_nbmodel; from pathlib import Path; print(Path(jupyter_server_nbmodel.__file__).parent)')" \
- && patch -p1 < /opt/setup-scripts/fix-nbmodel-pager.patch
+ && patch -p1 < /opt/setup-scripts/fix-nbmodel-pager.patch \
+ && patch -p1 < /opt/setup-scripts/fix-nbmodel-stream-cr.patch
 
 # Install PyTorch with CUDA 12.x support (https://pytorch.org/get-started/locally/)
 # https://github.com/run-llama/llama_index/issues/16540
