@@ -1,0 +1,32 @@
+--- a/actions.py
++++ b/actions.py
+@@ -219,6 +219,23 @@
+         )
+     )
+     reply_content = reply["content"]
++
++    # Process pager payloads (e.g. from `print?`) as display_data outputs,
++    # matching JupyterLab's OutputArea._onExecuteReply behavior.
++    payloads = reply_content.get("payload", [])
++    if reply_content.get("status") == "ok":
++        for payload in payloads:
++            if payload.get("source") == "page" and "data" in payload:
++                output = nbformat.v4.new_output(
++                    output_type="display_data",
++                    data=payload["data"],
++                    metadata={},
++                )
++                outputs.append(output)
++                if ycell is not None:
++                    with ycell["outputs"].doc.transaction():
++                        ycell["outputs"].append(output)
++
+     if ycell is not None:
+         execution_end_time = datetime.now(timezone.utc).isoformat()[:-6]
+         with ycell.doc.transaction():
+@@ -247,6 +264,7 @@
+         "execution_count": reply_content.get("execution_count"),
+         # FIXME quid for buffers
+         "outputs": json.dumps(outputs),
++        "payload": json.dumps(payloads),
+     }

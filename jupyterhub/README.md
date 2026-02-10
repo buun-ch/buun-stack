@@ -175,6 +175,19 @@ This checks:
 - jupyter-mcp-server extension is enabled
 - MCP endpoint is responding
 
+### Cell Index Display
+
+When `jupyter-mcp-tools` is installed, code cells show two bracketed numbers in the input prompt:
+
+```text
+[3] [2]:
+```
+
+- **`[3]`** (bold) -- Kernel execution count. The order in which the cell was executed in the current kernel session.
+- **`[2]`** (orange, italic) -- Cell index. The 0-based position of the cell in the notebook. MCP tools use this index to identify cells.
+
+If only one number is displayed, it means the execution count is missing. This can happen after "Restart Kernel and Run All Cells". **Refresh the browser** to restore the correct display.
+
 ### Technical Details
 
 - **Transport**: HTTP (streamable-http)
@@ -1066,3 +1079,4 @@ For production deployments, consider:
 3. **Cull Settings**: Server idle timeout is set to 2 hours by default. Adjust `cull.timeout` and `cull.every` in the Helm values for different requirements
 4. **NFS Storage**: When using NFS storage, ensure proper permissions are set on the NFS server. The default `JUPYTER_FSGID` is 100
 5. **ExternalSecret Dependency**: Requires External Secrets Operator to be installed and configured
+6. **"Run All Cells" execution order issue**: When `jupyter-mcp-server` is installed, its required dependency `jupyter-server-nbmodel` takes over cell execution on the server side. This causes "Run All Cells" to execute cells without waiting for the previous cell to complete, because the frontend sends concurrent HTTP requests for each cell. An `ExecutionStack` fix was merged in [datalayer/jupyter-server-nbmodel#14](https://github.com/datalayer/jupyter-server-nbmodel/pull/14), but the issue may still occur depending on the version. Additionally, "Restart Kernel and Run All Cells" has a separate unresolved bug that causes execution to stop prematurely ([datalayer/jupyter-server-nbmodel#51](https://github.com/datalayer/jupyter-server-nbmodel/issues/51)). If MCP integration is not needed, removing `jupyter-mcp-server` (and consequently `jupyter-server-nbmodel`) from the kernel image resolves the issue
