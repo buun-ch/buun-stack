@@ -116,16 +116,16 @@ redis:
     username: "default"
     existingSecret: redis-auth
     existingSecretPasswordKey: secret
-  # Resource recommendations from Goldilocks VPA
-  # valkey target: cpu=15m, memory=100Mi
+  # Memory limit must accommodate dataset + AOF rewrite fork (copy-on-write).
+  # Observed RDB ~172MB → limit 256Mi caused OOMKill during AOF auto-rewrite.
   master:
     resources:
       requests:
         cpu: 25m
-        memory: 128Mi
+        memory: 256Mi
       limits:
         cpu: 100m
-        memory: 256Mi
+        memory: 768Mi
 
 clickhouse:
   deploy: false
