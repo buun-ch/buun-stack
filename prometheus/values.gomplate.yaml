@@ -153,7 +153,10 @@ prometheus:
           readOnlyRootFilesystem: true
     # Retention settings
     retention: 30d
-    retentionSize: "50GB"
+    retentionSize: "90GB"
+
+    # Allow enough time for WAL replay after crash recovery (default: 900s)
+    maximumStartupDurationSeconds: 1800
 
     # Storage
     storageSpec:
@@ -162,7 +165,7 @@ prometheus:
           accessModes: ["ReadWriteOnce"]
           resources:
             requests:
-              storage: 50Gi
+              storage: 100Gi
 
     # ServiceMonitor selection
     # Select ServiceMonitors with release label only in namespaces with enable-monitoring label
