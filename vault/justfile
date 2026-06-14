@@ -413,6 +413,28 @@ exist-root path:
     {{ _vault_root_env_setup }}
     vault kv get -mount=secret {{ path }} &>/dev/null
 
+# Dump the KV secret path hierarchy (paths and field names only, no values)
+dump-tree path='':
+    #!/bin/bash
+    set -euo pipefail
+    {{ _vault_oidc_env_setup }}
+    walk() {
+        local prefix="$1"
+        local item
+        while IFS= read -r item; do
+            [ -z "${item}" ] && continue
+            if [[ "${item}" == */ ]]; then
+                walk "${prefix}${item}"
+            else
+                local fields
+                fields=$(vault kv get -mount=secret -format=json "${prefix}${item}" 2>/dev/null \
+                    | jq -r '.data.data | keys | join(", ")')
+                echo "${prefix}${item}  [${fields}]"
+            fi
+        done < <(vault kv list -mount=secret -format=json "${prefix}" 2>/dev/null | jq -r '.[]')
+    }
+    walk "{{ path }}"
+
 # Check the environment
 [private]
 check-env:
