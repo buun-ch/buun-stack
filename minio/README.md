@@ -665,15 +665,68 @@ This removes:
 - Keycloak client
 - **Note**: PersistentVolumeClaim is also deleted, losing all data
 
-### Backup Before Uninstall
+### Backup and Restore
+
+The `backup` and `restore` recipes mirror all buckets between MinIO and a local
+directory. They are designed for cluster rebuilds where the underlying
+PersistentVolumeClaim (and the Vault that stores credentials) is wiped.
+
+> **Note**: These recipes connect directly to the in-cluster endpoint
+> (`minio.${MINIO_NAMESPACE}.svc.cluster.local:9000`), so an active
+> `telepresence connect` (or equivalent cluster network access) is required.
+> The local `mc` binary is used, not the one inside the pod.
+
+#### Back Up All Buckets
 
 ```bash
-# Mirror all buckets to local directory
-mc mirror myminio/ ./minio-backup/
+# Mirror all buckets to the default directory (./minio-backup)
+just minio::backup
 
-# Or use specific bucket
-mc mirror myminio/important-bucket/ ./backup/
+# Or specify a custom directory
+just minio::backup /path/to/backup
 ```
+
+The default directory can also be overridden via the `MINIO_BACKUP_DIR`
+environment variable.
+
+#### Restore All Buckets
+
+```bash
+# Restore from the default directory (./minio-backup)
+just minio::restore
+
+# Or restore from a custom directory
+just minio::restore /path/to/backup
+```
+
+Restore prompts for confirmation before overwriting and recreates any missing
+buckets automatically from the directory structure.
+
+#### Cluster Rebuild Workflow
+
+```bash
+# 1. Before tearing down the cluster (telepresence connected)
+just minio::backup
+
+# 2. Rebuild the cluster, then reinstall MinIO
+just minio::install
+
+# 3. Recreate service users/buckets as part of each service's install
+#    (e.g. just dagster::install), or manually:
+#    just minio::create-user <user> <bucket>
+
+# 4. Restore object data (telepresence connected)
+just minio::restore
+```
+
+**What is and isn't restored:**
+
+- **Restored**: object data in all buckets (with `--preserve` metadata).
+  Missing buckets are recreated automatically.
+- **Not restored**: IAM users, policies, and per-bucket anonymous access
+  settings (e.g. `set-public-download`). Root and service-account access keys
+  are regenerated on reinstall and stored fresh in Vault — re-apply public
+  access policies and any service reconfiguration after restore.
 
 ## References
 

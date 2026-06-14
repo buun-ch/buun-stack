@@ -7,6 +7,7 @@ export MINIO_STORAGE_SIZE := env("MINIO_STORAGE_SIZE", "50Gi")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export MINIO_BACKUP_DIR := env("MINIO_BACKUP_DIR", "./minio-backup")
 
 [private]
 default:
@@ -355,3 +356,53 @@ show-public-access path='':
 
     kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
         mc anonymous get local/${PATH_ARG}
+
+# Back up all buckets to a local directory (requires telepresence connect)
+backup dir='':
+    #!/bin/bash
+    set -euo pipefail
+    DEST="{{ dir }}"
+    [ -z "${DEST}" ] && DEST="${MINIO_BACKUP_DIR}"
+    mkdir -p "${DEST}"
+
+    ENDPOINT="http://minio.${MINIO_NAMESPACE}.svc.cluster.local:9000"
+    ROOT_USER=$(just root-username)
+    ROOT_PASSWORD=$(just root-password)
+
+    echo "Connecting to ${ENDPOINT} ..."
+    mc alias set minio-backup "${ENDPOINT}" "${ROOT_USER}" "${ROOT_PASSWORD}" >/dev/null
+    trap 'mc alias remove minio-backup >/dev/null 2>&1 || true' EXIT
+
+    echo "Mirroring all buckets to ${DEST} ..."
+    mc mirror --preserve --overwrite "minio-backup/" "${DEST}/"
+
+    echo "✅ Backup completed: ${DEST}"
+
+# Restore all buckets from a local directory (requires telepresence connect)
+restore dir='':
+    #!/bin/bash
+    set -euo pipefail
+    SRC="{{ dir }}"
+    [ -z "${SRC}" ] && SRC="${MINIO_BACKUP_DIR}"
+    if [ ! -d "${SRC}" ]; then
+        echo "Backup directory not found: ${SRC}"
+        exit 1
+    fi
+
+    ENDPOINT="http://minio.${MINIO_NAMESPACE}.svc.cluster.local:9000"
+    ROOT_USER=$(just root-username)
+    ROOT_PASSWORD=$(just root-password)
+
+    if ! gum confirm "Restore buckets from ${SRC} into ${ENDPOINT}? Existing objects will be overwritten."; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    echo "Connecting to ${ENDPOINT} ..."
+    mc alias set minio-backup "${ENDPOINT}" "${ROOT_USER}" "${ROOT_PASSWORD}" >/dev/null
+    trap 'mc alias remove minio-backup >/dev/null 2>&1 || true' EXIT
+
+    echo "Mirroring ${SRC} back to MinIO ..."
+    mc mirror --preserve --overwrite "${SRC}/" "minio-backup/"
+
+    echo "✅ Restore completed from: ${SRC}"
