@@ -1,8 +1,9 @@
 set fallback := true
 
 export GOLDILOCKS_NAMESPACE := env("GOLDILOCKS_NAMESPACE", "goldilocks")
-export VPA_NAMESPACE := env("VPA_NAMESPACE", "vpa")
+export GOLDILOCKS_CHART_VERSION := env("GOLDILOCKS_CHART_VERSION", "10.4.0")
 export GOLDILOCKS_HOST := env("GOLDILOCKS_HOST", "")
+export VPA_NAMESPACE := env("VPA_NAMESPACE", "vpa")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 
 [private]
@@ -81,6 +82,7 @@ install:
     # Install Goldilocks with Helm
     helm upgrade --install goldilocks fairwinds-stable/goldilocks \
         --namespace ${GOLDILOCKS_NAMESPACE} \
+        --version ${GOLDILOCKS_CHART_VERSION} \
         --values values.yaml \
         --wait
 
