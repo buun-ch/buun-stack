@@ -14,7 +14,7 @@ High-performance S3-compatible object storage for Kubernetes:
 - Keycloak (for OIDC authentication)
 - External Secrets Operator (optional, for Vault integration)
 - Vault (optional, for credential storage)
-- Storage provisioner (e.g., Longhorn)
+- A working StorageClass on the cluster (k3s `local-path` by default)
 
 ## Installation
 
@@ -671,10 +671,16 @@ The `backup` and `restore` recipes mirror all buckets between MinIO and a local
 directory. They are designed for cluster rebuilds where the underlying
 PersistentVolumeClaim (and the Vault that stores credentials) is wiped.
 
-> **Note**: These recipes connect directly to the in-cluster endpoint
-> (`minio.${MINIO_NAMESPACE}.svc.cluster.local:9000`), so an active
-> `telepresence connect` (or equivalent cluster network access) is required.
-> The local `mc` binary is used, not the one inside the pod.
+> **Note**: These recipes connect over the Ingress host (`https://${MINIO_HOST}`)
+> using the local `mc` binary, which gives the real network bandwidth for bulk
+> transfers. If `MINIO_HOST` is not set, they fall back to the in-cluster
+> endpoint (`minio.${MINIO_NAMESPACE}.svc.cluster.local:9000`), which requires an
+> active `telepresence connect` (or equivalent cluster network access) — note
+> that tunneling bulk data through telepresence is significantly slower.
+>
+> Both recipes show an overall progress line (percentage, transferred / total
+> size, and file count). The percentage is based on the total dataset size, so
+> for incremental runs where only a few objects change it may not reach 100%.
 
 #### Back Up All Buckets
 

@@ -7,7 +7,9 @@ export MINIO_STORAGE_SIZE := env("MINIO_STORAGE_SIZE", "50Gi")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export MINIO_HOST := env("MINIO_HOST", "")
 export MINIO_BACKUP_DIR := env("MINIO_BACKUP_DIR", "./minio-backup")
+export MINIO_LOCAL_PORT := env("MINIO_LOCAL_PORT", "19000")
 
 [private]
 default:
@@ -137,7 +139,7 @@ install:
     just add-helm-repo
     gomplate -f minio-values.gomplate.yaml -o minio-values.yaml
     helm upgrade --install minio minio/minio \
-        --version ${MINIO_CHART_VERSION} -n ${MINIO_NAMESPACE} --create-namespace --wait \
+        --version ${MINIO_CHART_VERSION} -n ${MINIO_NAMESPACE} --create-namespace --wait=legacy \
         -f minio-values.yaml
 
 # Uninstall MinIO
@@ -357,7 +359,48 @@ show-public-access path='':
     kubectl -n ${MINIO_NAMESPACE} exec deploy/minio -- \
         mc anonymous get local/${PATH_ARG}
 
-# Back up all buckets to a local directory (requires telepresence connect)
+# Render an overall transfer progress line from `mc mirror --json` output.
+# The total size is read lazily from ${TOTAL_FILE} (computed in the background),
+# so transfer starts immediately and the percentage appears once it is ready.
+[private]
+_minio_progress := '''
+    jq --unbuffered -r 'select(.status=="success") | .size // 0' \
+    | awk -v tf="${TOTAL_FILE}" '
+        function loadtotal(  v){ if (t>0) return; if ((getline v < tf)>0){ t=v+0 } close(tf) }
+        function h(x,  u,i){
+            split("B KiB MiB GiB TiB",u," "); i=1;
+            while(x>=1024 && i<5){x/=1024;i++}; return sprintf("%.1f %s",x,u[i])
+        }
+        { loadtotal(); d+=$1; n++;
+          if (t>0) printf "\r  %5.1f%%  %s / %s  (%d files)        ", d*100/t, h(d), h(t), n;
+          else     printf "\r  %s  (%d files)        ", h(d), n;
+          fflush() }
+        END{ printf "\n" }'
+'''
+
+# Start a kubectl port-forward to the MinIO service and wait until it is ready.
+# This bypasses the Ingress/Cloudflare tunnel, which throttles bulk transfers.
+# Sets ENDPOINT and PF_PID; the caller must kill PF_PID on exit.
+[private]
+_minio_port_forward := '''
+    echo "Starting port-forward to svc/minio on localhost:${MINIO_LOCAL_PORT} ..."
+    kubectl -n ${MINIO_NAMESPACE} port-forward svc/minio "${MINIO_LOCAL_PORT}:9000" \
+        >/dev/null 2>&1 &
+    PF_PID=$!
+    for _ in $(seq 1 30); do
+        if curl -sf "http://localhost:${MINIO_LOCAL_PORT}/minio/health/live" >/dev/null 2>&1; then
+            break
+        fi
+        if ! kill -0 "${PF_PID}" 2>/dev/null; then
+            echo "port-forward exited unexpectedly" >&2
+            exit 1
+        fi
+        sleep 0.5
+    done
+    ENDPOINT="http://localhost:${MINIO_LOCAL_PORT}"
+'''
+
+# Back up all buckets to a local directory (via Ingress host)
 backup dir='':
     #!/bin/bash
     set -euo pipefail
@@ -365,20 +408,25 @@ backup dir='':
     [ -z "${DEST}" ] && DEST="${MINIO_BACKUP_DIR}"
     mkdir -p "${DEST}"
 
-    ENDPOINT="http://minio.${MINIO_NAMESPACE}.svc.cluster.local:9000"
     ROOT_USER=$(just root-username)
     ROOT_PASSWORD=$(just root-password)
 
+    {{ _minio_port_forward }}
+    TOTAL_FILE=$(mktemp)
+    trap 'kill ${PF_PID} 2>/dev/null || true; mc alias remove minio-backup >/dev/null 2>&1 || true; rm -f "${TOTAL_FILE}"' EXIT
+
     echo "Connecting to ${ENDPOINT} ..."
     mc alias set minio-backup "${ENDPOINT}" "${ROOT_USER}" "${ROOT_PASSWORD}" >/dev/null
-    trap 'mc alias remove minio-backup >/dev/null 2>&1 || true' EXIT
+
+    # Compute total size in the background so the transfer can start immediately
+    (mc du --json "minio-backup/" 2>/dev/null | jq -s '[.[].size // 0] | add // 0' >"${TOTAL_FILE}") &
 
     echo "Mirroring all buckets to ${DEST} ..."
-    mc mirror --preserve --overwrite "minio-backup/" "${DEST}/"
+    mc mirror --preserve --overwrite --json "minio-backup/" "${DEST}/" | {{ _minio_progress }}
 
     echo "✅ Backup completed: ${DEST}"
 
-# Restore all buckets from a local directory (requires telepresence connect)
+# Restore all buckets from a local directory (via Ingress host)
 restore dir='':
     #!/bin/bash
     set -euo pipefail
@@ -389,20 +437,25 @@ restore dir='':
         exit 1
     fi
 
-    ENDPOINT="http://minio.${MINIO_NAMESPACE}.svc.cluster.local:9000"
     ROOT_USER=$(just root-username)
     ROOT_PASSWORD=$(just root-password)
 
-    if ! gum confirm "Restore buckets from ${SRC} into ${ENDPOINT}? Existing objects will be overwritten."; then
+    if ! gum confirm "Restore buckets from ${SRC} into MinIO? Existing objects will be overwritten."; then
         echo "Aborted."
         exit 0
     fi
 
+    {{ _minio_port_forward }}
+    TOTAL_FILE=$(mktemp)
+    trap 'kill ${PF_PID} 2>/dev/null || true; mc alias remove minio-backup >/dev/null 2>&1 || true; rm -f "${TOTAL_FILE}"' EXIT
+
     echo "Connecting to ${ENDPOINT} ..."
     mc alias set minio-backup "${ENDPOINT}" "${ROOT_USER}" "${ROOT_PASSWORD}" >/dev/null
-    trap 'mc alias remove minio-backup >/dev/null 2>&1 || true' EXIT
+
+    # Compute total size in the background so the transfer can start immediately
+    (du -sk "${SRC}" 2>/dev/null | awk '{print $1*1024}' >"${TOTAL_FILE}") &
 
     echo "Mirroring ${SRC} back to MinIO ..."
-    mc mirror --preserve --overwrite "${SRC}/" "minio-backup/"
+    mc mirror --preserve --overwrite --json "${SRC}/" "minio-backup/" | {{ _minio_progress }}
 
     echo "✅ Restore completed from: ${SRC}"
