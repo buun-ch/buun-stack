@@ -12,7 +12,7 @@ data:
     email_domains = "*"
     reverse_proxy = true
     {{- if .Env.SKIP_AUTH_ROUTES }}
-    skip_auth_routes = [{{ range $i, $route := (split .Env.SKIP_AUTH_ROUTES ",") }}{{ if $i }},{{ end }}
+    skip_auth_routes = [{{ range $i, $route := (strings.Split "," .Env.SKIP_AUTH_ROUTES) }}{{ if $i }},{{ end }}
       "^{{ $route }}"{{ end }}
     ]
     {{- end }}
