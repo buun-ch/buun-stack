@@ -12,7 +12,7 @@ image:
 image:
   repository: burakince/mlflow
   pullPolicy: {{ .Env.MLFLOW_IMAGE_PULL_POLICY }}
-  tag: "3.6.0"  # MLflow 3.6.0
+  tag: "3.13.0"  # MLflow 3.13.0
 {{- end }}
 
 # Backend store configuration (PostgreSQL)
@@ -57,9 +57,8 @@ log:
   enabled: false
 
 # A map of arguments to pass to the `mlflow server` command (OIDC enabled)
-# Use oidc-auth-fastapi for FastAPI/ASGI compatibility with Uvicorn
 extraArgs:
-  appName: "oidc-auth-fastapi"
+  appName: "oidc-auth"
   # Limit to 1 worker to avoid /mlflow/metrics directory creation conflicts
   workers: "1"
   # Allow connections from external hostname and Kubernetes internal access

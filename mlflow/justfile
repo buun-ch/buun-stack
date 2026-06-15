@@ -1,10 +1,10 @@
 set fallback := true
 
 export MLFLOW_NAMESPACE := env("MLFLOW_NAMESPACE", "mlflow")
-export MLFLOW_CHART_VERSION := env("MLFLOW_CHART_VERSION", "1.8.0")
+export MLFLOW_CHART_VERSION := env("MLFLOW_CHART_VERSION", "1.8.5")
 export MLFLOW_HOST := env("MLFLOW_HOST", "")
 export IMAGE_REGISTRY := env("IMAGE_REGISTRY", "localhost:30500")
-export MLFLOW_IMAGE_TAG := env("MLFLOW_IMAGE_TAG", "3.6.0-oidc")
+export MLFLOW_IMAGE_TAG := env("MLFLOW_IMAGE_TAG", "3.13.0-oidc")
 export MLFLOW_IMAGE_PULL_POLICY := env("MLFLOW_IMAGE_PULL_POLICY", "IfNotPresent")
 export MLFLOW_OIDC_ENABLED := env("MLFLOW_OIDC_ENABLED", "true")
 export POSTGRES_NAMESPACE := env("POSTGRES_NAMESPACE", "postgres")
@@ -341,7 +341,8 @@ install:
 
     echo "Installing MLflow Helm chart from Community Charts with OIDC..."
     helm upgrade --cleanup-on-fail --install mlflow community-charts/mlflow \
-        --version ${MLFLOW_CHART_VERSION} -n ${MLFLOW_NAMESPACE} --wait --timeout=10m -f values.yaml
+        --version ${MLFLOW_CHART_VERSION} -n ${MLFLOW_NAMESPACE} --wait=legacy --timeout=10m \
+        -f values.yaml
 
     if [ "${MONITORING_ENABLED}" = "true" ]; then
         echo "Enabling Prometheus monitoring for namespace ${MLFLOW_NAMESPACE}..."
@@ -389,7 +390,8 @@ upgrade:
 
     echo "Upgrading MLflow Helm chart from Community Charts..."
     helm upgrade mlflow community-charts/mlflow \
-        --version ${MLFLOW_CHART_VERSION} -n ${MLFLOW_NAMESPACE} --wait --timeout=10m -f values.yaml
+        --version ${MLFLOW_CHART_VERSION} -n ${MLFLOW_NAMESPACE} --wait=legacy --timeout=10m \
+        -f values.yaml
 
     echo "MLflow upgraded successfully"
     echo "Access MLflow at: https://${MLFLOW_HOST}"
