@@ -8,12 +8,10 @@ global:
     monitoring:
       enablePrometheus: true
 
-  # Kafka configuration
+  # Kafka configuration (KRaft mode - no Zookeeper)
   kafka:
     bootstrap:
       server: "datahub-prerequisites-kafka:9092"
-    zookeeper:
-      server: "datahub-prerequisites-zookeeper:2181"
 
   # Global database configuration
   sql:

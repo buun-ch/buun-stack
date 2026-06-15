@@ -36,50 +36,29 @@ elasticsearch:
       xpack.security.transport.ssl.enabled: false
       xpack.security.http.ssl.enabled: false
 
-# Kafka configuration
+# Kafka configuration (KRaft mode - Zookeeper-less)
 kafka:
   enabled: true
-  replicaCount: 1
-  # Resource limits
-  resources:
-    requests:
-      cpu: "100m"
-      memory: "512Mi"
-    limits:
-      cpu: "500m"
-      memory: "1Gi"
-  # Persistence
-  persistence:
-    enabled: true
-    size: "10Gi"
-  # Zookeeper configuration
-  zookeeper:
-    enabled: true
+  # KRaft controller nodes act as combined controller+broker
+  controller:
     replicaCount: 1
+    # Keep JVM heap within the memory limit to avoid OOMKill
+    heapOpts: -Xmx512m -Xms512m
     resources:
       requests:
         cpu: "100m"
-        memory: "256Mi"
+        memory: "512Mi"
       limits:
         cpu: "500m"
-        memory: "512Mi"
+        memory: "1Gi"
     persistence:
       enabled: true
-      size: "5Gi"
-    livenessProbe:
-      enabled: true
-      initialDelaySeconds: 30
-      periodSeconds: 20
-      timeoutSeconds: 15
-      failureThreshold: 6
-      successThreshold: 1
-    readinessProbe:
-      enabled: true
-      initialDelaySeconds: 5
-      periodSeconds: 20
-      timeoutSeconds: 15
-      failureThreshold: 6
-      successThreshold: 1
+      size: "10Gi"
+  # KRaft mode replaces Zookeeper
+  kraft:
+    enabled: true
+  zookeeper:
+    enabled: false
 
 # Schema Registry
 cp-schema-registry:
