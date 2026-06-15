@@ -1,7 +1,7 @@
 set fallback := true
 
 export LOKI_NAMESPACE := env("LOKI_NAMESPACE", "monitoring")
-export LOKI_CHART_VERSION := env("LOKI_CHART_VERSION", "6.49.0")
+export LOKI_CHART_VERSION := env("LOKI_CHART_VERSION", "7.0.0")
 export PROMTAIL_CHART_VERSION := env("PROMTAIL_CHART_VERSION", "6.17.1")
 export LOKI_RETENTION := env("LOKI_RETENTION", "72h")
 export LOKI_STORAGE_SIZE := env("LOKI_STORAGE_SIZE", "20Gi")
