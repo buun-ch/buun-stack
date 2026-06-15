@@ -29,7 +29,7 @@ This will:
 
 ## Prerequisites
 
-- Kubernetes cluster with Longhorn storage
+- Kubernetes cluster with a working StorageClass (k3s `local-path` by default)
 - For secret management: Vault and External Secrets Operator (optional but recommended)
 - For monitoring: kube-prometheus-stack (optional)
 
