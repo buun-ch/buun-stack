@@ -49,7 +49,7 @@ Dagster's official Helm chart only supports adding projects during installation.
 
 This solution:
 
-- Copies project files to a shared PVC (ReadWriteMany with Longhorn, or ReadWriteOnce fallback)
+- Copies project files to a shared PVC (ReadWriteOnce by default; set `DAGSTER_USER_CODE_STORAGE_CLASS` to a StorageClass that supports RWX for true sharing)
 - Updates the workspace ConfigMap to register the new project
 - Restarts Dagster components to load the updated workspace
 
@@ -146,7 +146,7 @@ This command restarts both `dagster-webserver` and `dagster-daemon` to force an 
 Uses Kubernetes PersistentVolumeClaims for storage:
 
 - **dagster-storage-pvc**: Main Dagster storage (ReadWriteOnce)
-- **dagster-user-code-pvc**: Shared user code storage (ReadWriteMany with Longhorn)
+- **dagster-user-code-pvc**: Shared user code storage (ReadWriteOnce; set `DAGSTER_USER_CODE_STORAGE_CLASS` to an RWX-capable StorageClass for multi-pod sharing)
 
 ### MinIO Storage (Optional)
 

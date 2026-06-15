@@ -5,13 +5,10 @@ metadata:
   namespace: {{ .Env.DAGSTER_NAMESPACE }}
 spec:
   accessModes:
-    {{- if eq .Env.STORAGE_CLASS "longhorn" }}
-    - ReadWriteMany  # Longhorn supports RWX
-    {{- else }}
-    - ReadWriteOnce  # Default storage class typically supports RWO
-    {{- end }}
-  {{- if .Env.STORAGE_CLASS }}
-  storageClassName: {{ .Env.STORAGE_CLASS }}
+    - ReadWriteOnce
+  {{- $sc := getenv "STORAGE_CLASS" "" }}
+  {{- if $sc }}
+  storageClassName: {{ $sc }}
   {{- end }}
   resources:
     requests:

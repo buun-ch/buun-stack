@@ -1,9 +1,9 @@
 set fallback := true
 
 export DAGSTER_NAMESPACE := env("DAGSTER_NAMESPACE", "dagster")
-export DAGSTER_CHART_VERSION := env("DAGSTER_CHART_VERSION", "1.11.10")
+export DAGSTER_CHART_VERSION := env("DAGSTER_CHART_VERSION", "1.13.9")
 export DAGSTER_CONTAINER_IMAGE := env("DAGSTER_CONTAINER_IMAGE", "docker.io/dagster/dagster-k8s")
-export DAGSTER_CONTAINER_TAG := env("DAGSTER_CONTAINER_TAG", "1.11.13")
+export DAGSTER_CONTAINER_TAG := env("DAGSTER_CONTAINER_TAG", "1.13.9")
 export DAGSTER_CONTAINER_PULL_POLICY := env("DAGSTER_CONTAINER_PULL_POLICY", "IfNotPresent")
 export DAGSTER_HOST := env("DAGSTER_HOST", "")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
@@ -14,7 +14,6 @@ export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export DAGSTER_STORAGE_TYPE := env("DAGSTER_STORAGE_TYPE", "")
 export DAGSTER_EXTRA_PACKAGES := env("DAGSTER_EXTRA_PACKAGES", "")
 export DOCKER_CMD := env("DOCKER_CMD", "docker")
-export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
 
 # export DAGSTER_EXTRA_PACKAGES := env("DAGSTER_EXTRA_PACKAGES", "dlt[duckdb] pyarrow pyiceberg s3fs simple-salesforce")
 
@@ -246,15 +245,7 @@ setup-pvc-storage:
     set -euo pipefail
     echo "Setting up PVC storage for Dagster..."
 
-    # Detect storage class
-    export STORAGE_CLASS=""
-    if kubectl get storageclass longhorn &>/dev/null && \
-        kubectl get pods -n ${LONGHORN_NAMESPACE} &>/dev/null | grep -q longhorn-manager; then
-        echo "Longhorn detected - using longhorn storage class"
-        export STORAGE_CLASS="longhorn"
-    else
-        echo "Using default storage class"
-    fi
+    export STORAGE_CLASS="${DAGSTER_STORAGE_CLASS:-}"
 
     # Create PVC for Dagster storage if it doesn't exist
     if ! kubectl get pvc dagster-storage-pvc -n ${DAGSTER_NAMESPACE} &>/dev/null; then
@@ -280,23 +271,13 @@ setup-pvc-storage:
     fi
     echo "PVC storage setup completed"
 
-# Setup shared PVC for user code (supports ReadWriteMany with Longhorn)
+# Setup shared PVC for user code
 setup-user-code-pvc:
     #!/bin/bash
     set -euo pipefail
     echo "Setting up shared PVC for user code..."
 
-    # Detect if Longhorn is available (same as Airbyte)
-    export LONGHORN_AVAILABLE="false"
-
-    if kubectl get storageclass longhorn &>/dev/null && \
-        kubectl get pods -n ${LONGHORN_NAMESPACE} &>/dev/null | grep -q longhorn-manager; then
-        echo "Longhorn detected - using ReadWriteMany with longhorn storage class"
-        export LONGHORN_AVAILABLE="true"
-    else
-        echo "Longhorn not detected - using ReadWriteOnce"
-        export LONGHORN_AVAILABLE="false"
-    fi
+    export STORAGE_CLASS="${DAGSTER_USER_CODE_STORAGE_CLASS:-}"
 
     # Create PVC for user code if it doesn't exist
     if ! kubectl get pvc dagster-user-code-pvc -n ${DAGSTER_NAMESPACE} &>/dev/null; then
