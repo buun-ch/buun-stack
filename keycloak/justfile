@@ -4,7 +4,7 @@ set fallback := true
 # https://www.keycloak.org/operator/installation
 
 export KEYCLOAK_NAMESPACE := env("KEYCLOAK_NAMESPACE", "keycloak")
-export KEYCLOAK_OPERATOR_VERSION := env("KEYCLOAK_OPERATOR_VERSION", "26.5.0")
+export KEYCLOAK_OPERATOR_VERSION := env("KEYCLOAK_OPERATOR_VERSION", "26.6.3")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export K8S_OIDC_CLIENT_ID := env('K8S_OIDC_CLIENT_ID', "k8s")
@@ -51,7 +51,7 @@ create-credentials:
 
         echo "Waiting for ExternalSecret to sync..."
         kubectl wait --for=condition=Ready externalsecret/keycloak-credentials \
-            -n ${KEYCLOAK_NAMESPACE} --timeout=60s
+            -n ${KEYCLOAK_NAMESPACE} --timeout=180s
 
         # Create bootstrap admin secret for Keycloak Operator (username/password format)
         kubectl delete secret keycloak-bootstrap-admin -n ${KEYCLOAK_NAMESPACE} --ignore-not-found

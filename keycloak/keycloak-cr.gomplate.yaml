@@ -1,4 +1,4 @@
-apiVersion: k8s.keycloak.org/v2alpha1
+apiVersion: k8s.keycloak.org/v2beta1
 kind: Keycloak
 metadata:
   name: keycloak
@@ -43,7 +43,7 @@ spec:
       value: "true"
 
   # Keycloak takes ~20 seconds to start, so we configure probes accordingly
-  # Note: Keycloak Operator v2alpha1 only supports periodSeconds and failureThreshold
+  # Note: Keycloak Operator probes only support periodSeconds and failureThreshold
   startupProbe:
     periodSeconds: 10
     failureThreshold: 20
