@@ -1,12 +1,11 @@
 set fallback := true
 
 export OLLAMA_NAMESPACE := env("OLLAMA_NAMESPACE", "ollama")
-export OLLAMA_CHART_VERSION := env("OLLAMA_CHART_VERSION", "1.36.0")
+export OLLAMA_CHART_VERSION := env("OLLAMA_CHART_VERSION", "1.61.0")
 export OLLAMA_HOST := env("OLLAMA_HOST", "")
 export OLLAMA_GPU_ENABLED := env("OLLAMA_GPU_ENABLED", "")
 export OLLAMA_GPU_TYPE := env("OLLAMA_GPU_TYPE", "nvidia")
 export OLLAMA_GPU_COUNT := env("OLLAMA_GPU_COUNT", "1")
-export OLLAMA_MODELS := env("OLLAMA_MODELS", "")
 export OLLAMA_STORAGE_SIZE := env("OLLAMA_STORAGE_SIZE", "30Gi")
 export OLLAMA_HELM_TIMEOUT := env("OLLAMA_HELM_TIMEOUT", "60m")
 export OLLAMA_MEMORY_REQUEST := env("OLLAMA_MEMORY_REQUEST", "2Gi")
@@ -61,24 +60,18 @@ install:
         fi
     fi
 
-    if [ -z "${OLLAMA_MODELS}" ]; then
-        OLLAMA_MODELS=$(
-            gum input --prompt="Models to pull (comma-separated): " --width=100 \
-            --placeholder="e.g., llama3.2:1b,deepseek-r1:7b" \
-            --value="llama3.2:1b"
-        )
-    fi
-
     gomplate -f values.gomplate.yaml -o values.yaml
     helm upgrade --install ollama ollama/ollama \
         --version ${OLLAMA_CHART_VERSION} -n ${OLLAMA_NAMESPACE} \
-        --wait --timeout ${OLLAMA_HELM_TIMEOUT} \
+        --wait=legacy --timeout ${OLLAMA_HELM_TIMEOUT} \
         -f values.yaml
 
     echo ""
     echo "Ollama installed successfully"
     echo "GPU enabled: ${OLLAMA_GPU_ENABLED}"
-    echo "Models: ${OLLAMA_MODELS}"
+    echo ""
+    echo "Pull models with: just ollama::pull <model>"
+    echo "Example: just ollama::pull llama3.2:1b"
 
 # Upgrade Ollama
 upgrade:
@@ -93,18 +86,10 @@ upgrade:
         fi
     fi
 
-    if [ -z "${OLLAMA_MODELS}" ]; then
-        OLLAMA_MODELS=$(
-            gum input --prompt="Models to pull (comma-separated): " --width=100 \
-            --placeholder="e.g., llama3.2:1b,deepseek-r1:7b" \
-            --value="llama3.2:1b"
-        )
-    fi
-
     gomplate -f values.gomplate.yaml -o values.yaml
     helm upgrade ollama ollama/ollama \
         --version ${OLLAMA_CHART_VERSION} -n ${OLLAMA_NAMESPACE} \
-        --wait --timeout ${OLLAMA_HELM_TIMEOUT} \
+        --wait=legacy --timeout ${OLLAMA_HELM_TIMEOUT} \
         -f values.yaml
 
     echo "Ollama upgraded successfully"

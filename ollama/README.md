@@ -27,7 +27,8 @@ just ollama::install
 During installation, you will be prompted for:
 
 - **GPU support**: Enable/disable NVIDIA GPU acceleration
-- **Models to pull**: Comma-separated list of models to download (e.g., `qwen3:8b,deepseek-r1:8b`)
+
+Models are pulled separately after install (see [Model Management](#model-management)).
 
 ### Environment Variables
 
@@ -38,13 +39,14 @@ During installation, you will be prompted for:
 | `OLLAMA_GPU_ENABLED` | (prompt) | Enable GPU support (`true`/`false`) |
 | `OLLAMA_GPU_TYPE` | `nvidia` | GPU type (`nvidia` or `amd`) |
 | `OLLAMA_GPU_COUNT` | `1` | Number of GPUs to allocate |
-| `OLLAMA_MODELS` | (prompt) | Comma-separated list of models |
 | `OLLAMA_STORAGE_SIZE` | `30Gi` | Persistent volume size for models |
 
 ### Example with Environment Variables
 
 ```bash
-OLLAMA_GPU_ENABLED=true OLLAMA_MODELS="qwen3:8b,llama3.2:3b" just ollama::install
+OLLAMA_GPU_ENABLED=true just ollama::install
+just ollama::pull qwen3:8b
+just ollama::pull llama3.2:3b
 ```
 
 ## Model Management

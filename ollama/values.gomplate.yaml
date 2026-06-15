@@ -8,17 +8,6 @@ ollama:
     type: {{ .Env.OLLAMA_GPU_TYPE }}
     number: {{ .Env.OLLAMA_GPU_COUNT }}
 
-  models:
-    # https://ollama.com/search
-    pull:
-{{- $models := .Env.OLLAMA_MODELS | strings.Split "," }}
-{{- range $models }}
-{{- $model := . | strings.TrimSpace }}
-{{- if ne $model "" }}
-      - {{ $model }}
-{{- end }}
-{{- end }}
-
 podSecurityContext:
   fsGroup: 1000
   seccompProfile:
