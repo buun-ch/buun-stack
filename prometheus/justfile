@@ -1,7 +1,7 @@
 set fallback := true
 
 export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
-export PROMETHEUS_CHART_VERSION := env("PROMETHEUS_CHART_VERSION", "80.14.2")
+export PROMETHEUS_CHART_VERSION := env("PROMETHEUS_CHART_VERSION", "86.2.3")
 export GRAFANA_HOST := env("GRAFANA_HOST", "")
 export PROMETHEUS_HOST := env("PROMETHEUS_HOST", "")
 export ALERTMANAGER_HOST := env("ALERTMANAGER_HOST", "")
@@ -116,6 +116,18 @@ install: check-env
     # Create credentials if not exists
     if ! kubectl get secret grafana-admin-credentials -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
         just create-credentials
+    fi
+
+    # Initialize datasource variables
+    export TEMPO_ENABLED=""
+    export LOKI_ENABLED=""
+
+    # Preserve existing datasource configurations
+    if helm status tempo -n ${TEMPO_NAMESPACE} &>/dev/null; then
+        export TEMPO_ENABLED="true"
+    fi
+    if helm status loki -n ${LOKI_NAMESPACE} &>/dev/null; then
+        export LOKI_ENABLED="true"
     fi
 
     gomplate -f values.gomplate.yaml -o values.yaml
