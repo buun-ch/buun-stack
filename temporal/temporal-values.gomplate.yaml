@@ -1,3 +1,5 @@
+imagePullSecrets: []
+
 server:
   replicaCount: 1
   securityContext:
@@ -8,32 +10,42 @@ server:
     seccompProfile:
       type: RuntimeDefault
   config:
+    logLevel: "info"
     persistence:
-      default:
-        driver: "sql"
-        sql:
-          driver: "postgres12"
-          host: "postgres-cluster-rw.postgres"
-          port: 5432
-          database: temporal
-          user: temporal
-          existingSecret: temporal-postgres-auth
-          maxConns: 20
-          maxIdleConns: 20
-          maxConnLifetime: "1h"
-
-      visibility:
-        driver: "sql"
-        sql:
-          driver: "postgres12"
-          host: "postgres-cluster-rw.postgres"
-          port: 5432
-          database: temporal_visibility
-          user: temporal
-          existingSecret: temporal-postgres-auth
-          maxConns: 20
-          maxIdleConns: 20
-          maxConnLifetime: "1h"
+      defaultStore: default
+      visibilityStore: visibility
+      numHistoryShards: 512
+      datastores:
+        default:
+          sql:
+            createDatabase: false
+            manageSchema: true
+            pluginName: postgres12
+            driverName: postgres12
+            databaseName: temporal
+            connectAddr: "postgres-cluster-rw.postgres:5432"
+            connectProtocol: "tcp"
+            user: temporal
+            existingSecret: temporal-postgres-auth
+            secretKey: password
+            maxConns: 20
+            maxIdleConns: 20
+            maxConnLifetime: "1h"
+        visibility:
+          sql:
+            createDatabase: false
+            manageSchema: true
+            pluginName: postgres12
+            driverName: postgres12
+            databaseName: temporal_visibility
+            connectAddr: "postgres-cluster-rw.postgres:5432"
+            connectProtocol: "tcp"
+            user: temporal
+            existingSecret: temporal-postgres-auth
+            secretKey: password
+            maxConns: 20
+            maxIdleConns: 20
+            maxConnLifetime: "1h"
 
 {{- if .Env.MONITORING_ENABLED }}
   metrics:
@@ -162,33 +174,10 @@ web:
       cpu: 200m
       memory: 256Mi
 
-cassandra:
-  enabled: false
-
-mysql:
-  enabled: false
-
-postgresql:
-  enabled: false
-
-elasticsearch:
-  enabled: false
-
-prometheus:
-  enabled: false
-
-grafana:
-  enabled: false
-
 schema:
-  createDatabase:
-    enabled: false
-  setup:
-    enabled: true
-    backoffLimit: 100
-  update:
-    enabled: true
-    backoffLimit: 100
+  useHelmHooks: true
+  backoffLimit: 100
+  ttlSecondsAfterFinished: 86400
   securityContext:
     runAsUser: 1000
     runAsGroup: 1000
@@ -202,3 +191,7 @@ schema:
       drop:
         - ALL
     readOnlyRootFilesystem: false
+
+shims:
+  dockerize: false
+  elasticsearchTool: false

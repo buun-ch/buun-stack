@@ -1,7 +1,7 @@
 set fallback := true
 
 export TEMPORAL_NAMESPACE := env("TEMPORAL_NAMESPACE", "temporal")
-export TEMPORAL_CHART_VERSION := env("TEMPORAL_CHART_VERSION", "0.73.1")
+export TEMPORAL_CHART_VERSION := env("TEMPORAL_CHART_VERSION", "1.2.0")
 export TEMPORAL_HOST := env("TEMPORAL_HOST", "")
 export TEMPORAL_OIDC_CLIENT_ID := env("TEMPORAL_OIDC_CLIENT_ID", "temporal")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
@@ -296,7 +296,7 @@ install:
 
     echo "Installing Temporal Helm chart..."
     helm upgrade --cleanup-on-fail --install temporal temporal/temporal \
-        --version ${TEMPORAL_CHART_VERSION} -n ${TEMPORAL_NAMESPACE} --wait \
+        --version ${TEMPORAL_CHART_VERSION} -n ${TEMPORAL_NAMESPACE} --wait=legacy \
         -f temporal-values.yaml --timeout 15m
 
     echo "Configuring dynamic config for Worker Insights..."
@@ -348,7 +348,7 @@ upgrade:
     gomplate -f temporal-values.gomplate.yaml -o temporal-values.yaml
 
     helm upgrade temporal temporal/temporal \
-        --version ${TEMPORAL_CHART_VERSION} -n ${TEMPORAL_NAMESPACE} --wait \
+        --version ${TEMPORAL_CHART_VERSION} -n ${TEMPORAL_NAMESPACE} --wait=legacy \
         -f temporal-values.yaml --timeout 15m
 
     echo "Configuring dynamic config for Worker Insights..."
