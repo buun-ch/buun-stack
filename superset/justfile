@@ -1,7 +1,7 @@
 set fallback := true
 
 export SUPERSET_NAMESPACE := env("SUPERSET_NAMESPACE", "superset")
-export SUPERSET_CHART_VERSION := env("SUPERSET_CHART_VERSION", "0.15.0")
+export SUPERSET_CHART_VERSION := env("SUPERSET_CHART_VERSION", "0.15.5")
 export SUPERSET_HOST := env("SUPERSET_HOST", "")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
@@ -216,7 +216,8 @@ install:
     gomplate -f superset-values.gomplate.yaml -o superset-values.yaml
 
     helm upgrade --cleanup-on-fail --install superset superset/superset \
-        --version ${SUPERSET_CHART_VERSION} -n ${SUPERSET_NAMESPACE} --wait \
+        --version ${SUPERSET_CHART_VERSION} -n ${SUPERSET_NAMESPACE} \
+        --wait=legacy --timeout 10m \
         -f superset-values.yaml
 
     echo ""
@@ -271,7 +272,8 @@ upgrade:
 
     gomplate -f superset-values.gomplate.yaml -o superset-values.yaml
     helm upgrade superset superset/superset \
-        --version ${SUPERSET_CHART_VERSION} -n ${SUPERSET_NAMESPACE} --wait \
+        --version ${SUPERSET_CHART_VERSION} -n ${SUPERSET_NAMESPACE} \
+        --wait=legacy --timeout 10m \
         -f superset-values.yaml
 
     echo "Superset upgraded successfully"
@@ -279,19 +281,22 @@ upgrade:
 # Uninstall Superset
 uninstall delete-db='true':
     #!/bin/bash
-    set -euo pipefail
-    helm uninstall superset -n ${SUPERSET_NAMESPACE} --ignore-not-found --wait
-    just delete-secrets
-    just delete-keycloak-client
-    just delete-namespace
+    set -uo pipefail
+    # Each step is fault-tolerant so cleanup always reaches the database/role and
+    # Vault secrets, even when an earlier resource is already gone or fails.
+    helm uninstall superset -n ${SUPERSET_NAMESPACE} --ignore-not-found --wait=legacy || true
+    just delete-secrets || true
+    just delete-keycloak-client || true
+    just delete-namespace || true
     if [ "{{ delete-db }}" = "true" ]; then
-        just postgres::delete-user-and-db superset superset
+        just postgres::delete-user-and-db superset superset || true
         just vault::delete superset/config || true
     fi
 
     if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
         just vault::delete superset/oauth || true
     fi
+    echo "Superset uninstall completed."
 
 # Restore Superset datasets, charts, and dashboards from backup
 restore backup_file charts_only='false':
