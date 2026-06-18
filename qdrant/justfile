@@ -1,7 +1,7 @@
 set fallback := true
 
 export QDRANT_NAMESPACE := env("QDRANT_NAMESPACE", "qdrant")
-export QDRANT_VERSION := env("QDRANT_VERSION", "1.15.5")
+export QDRANT_VERSION := env("QDRANT_VERSION", "1.18.2")
 export QDRANT_HOST := env("QDRANT_HOST", "")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 
