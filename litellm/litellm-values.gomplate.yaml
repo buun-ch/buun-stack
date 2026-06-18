@@ -10,23 +10,27 @@ podSecurityContext: {}
 
 securityContext: {}
 
-# Resource recommendations from Goldilocks VPA
-# litellm target: cpu=11m, memory=549Mi
+# Startup loads the full proxy (21 models + prisma + langfuse/redis);
+# measured peak ~1.55Gi, steady ~1.1Gi. 1Gi limit OOMKills at startup.
+# Goldilocks 549Mi reflects steady-state of an older, smaller config.
 resources:
   requests:
     cpu: 25m
-    memory: 512Mi
+    memory: 1Gi
   limits:
     cpu: 200m
-    memory: 1Gi
+    memory: 2Gi
 
 migrationJob:
+  # After prisma migrate, the job boots the full litellm proxy
+  # (run_server --skip_server_startup + prisma generate); measured peak
+  # ~2.16Gi, so 1Gi/2Gi OOMKill (exit 137). 3Gi gives headroom.
   resources:
     requests:
       cpu: 100m
       memory: 512Mi
     limits:
-      memory: 1Gi
+      memory: 3Gi
 
 environmentSecrets:
   - apikey
@@ -78,6 +82,10 @@ db:
 
 redis:
   enabled: true
+  # Bitnami unpublished versioned tags from docker.io/bitnami in 2025;
+  # legacy free images were moved to docker.io/bitnamilegacy.
+  image:
+    repository: bitnamilegacy/redis
   # Resource recommendations from Goldilocks VPA
   # redis target: cpu=15m, memory=100Mi
   master:

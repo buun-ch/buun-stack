@@ -1,7 +1,7 @@
 set fallback := true
 
 export LITELLM_NAMESPACE := env("LITELLM_NAMESPACE", "litellm")
-export LITELLM_CHART_VERSION := env("LITELLM_CHART_VERSION", "0.1.833")
+export LITELLM_CHART_VERSION := env("LITELLM_CHART_VERSION", "1.89.0")
 export LITELLM_HOST := env("LITELLM_HOST", "")
 export LITELLM_OIDC_CLIENT_ID := env("LITELLM_OIDC_CLIENT_ID", "litellm")
 export LITELLM_OIDC_ENABLED := env("LITELLM_OIDC_ENABLED", "")
@@ -77,7 +77,7 @@ verify-api-keys:
         echo ""
         echo "Please set the API keys:"
         for p in "${missing[@]}"; do
-            echo "  just litellm::set-api-key provider=$p"
+            echo "  just litellm::set-api-key $p"
         done
         exit 1
     fi
@@ -196,7 +196,7 @@ add-model:
     if [ "$original_provider" != "ollama" ]; then
         echo ""
         echo "Don't forget to set the API key if not already done:"
-        echo "  just litellm::set-api-key provider=${original_provider}"
+        echo "  just litellm::set-api-key ${original_provider}"
     fi
     echo ""
     echo "Run 'just litellm::install' or 'just litellm::upgrade' to apply changes."
