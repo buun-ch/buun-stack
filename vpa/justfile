@@ -45,8 +45,10 @@ install:
     gomplate -f values.gomplate.yaml -o values.yaml
 
     # Install VPA with Helm
+    # Use --wait=legacy to avoid Helm v4 strict CRD readiness check that
+    # spuriously fails with "status: Unknown" on CRDs from the chart's crds/ dir.
     helm upgrade --install vpa fairwinds-stable/vpa --namespace ${VPA_NAMESPACE} \
-        --values values.yaml --wait
+        --values values.yaml --wait=legacy --timeout 10m
 
     echo "VPA installed successfully in namespace: ${VPA_NAMESPACE}"
     echo ""
