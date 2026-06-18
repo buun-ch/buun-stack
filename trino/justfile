@@ -1,7 +1,7 @@
 set fallback := true
 
 export TRINO_NAMESPACE := env("TRINO_NAMESPACE", "trino")
-export TRINO_CHART_VERSION := env("TRINO_CHART_VERSION", "1.41.0")
+export TRINO_CHART_VERSION := env("TRINO_CHART_VERSION", "1.42.2")
 export TRINO_IMAGE_TAG := env("TRINO_IMAGE_TAG", "477")
 export TRINO_HOST := env("TRINO_HOST", "")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
