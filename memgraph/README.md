@@ -17,7 +17,7 @@ Memgraph is an in-memory graph database built for real-time streaming and fast g
 
 ## Prerequisites
 
-- Kubernetes cluster with Longhorn storage
+- Kubernetes cluster with a working StorageClass (k3s `local-path` by default)
 - For secret management: Vault and External Secrets Operator (optional but recommended)
 - For monitoring: kube-prometheus-stack (optional)
 - Host kernel parameter: `vm.max_map_count=524288`

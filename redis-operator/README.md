@@ -10,7 +10,7 @@ Kubernetes operator for managing Redis instances with support for multiple deplo
 ## Prerequisites
 
 - Kubernetes cluster (k3s)
-- Longhorn storage class (for persistent storage)
+- A StorageClass on the cluster (k3s `local-path` by default)
 - Prometheus (optional, for monitoring)
 
 ## Installation

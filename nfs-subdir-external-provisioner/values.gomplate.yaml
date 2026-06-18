@@ -1,0 +1,31 @@
+replicaCount: 1
+
+nfs:
+    server: {{ .Env.NFS_SERVER }}
+    path: {{ .Env.NFS_PATH }}
+    reclaimPolicy: Retain
+{{- $opts := getenv "NFS_MOUNT_OPTIONS" "" }}
+{{- if $opts }}
+    mountOptions:
+{{- range ($opts | strings.Split ",") }}
+        - {{ . | strings.TrimSpace }}
+{{- end }}
+{{- end }}
+
+storageClass:
+    create: true
+    defaultClass: false
+    name: {{ .Env.NFS_STORAGE_CLASS_NAME }}
+    allowVolumeExpansion: true
+    reclaimPolicy: {{ .Env.NFS_RECLAIM_POLICY }}
+    archiveOnDelete: {{ .Env.NFS_ARCHIVE_ON_DELETE }}
+    accessModes: ReadWriteOnce
+    volumeBindingMode: Immediate
+
+resources:
+    requests:
+        cpu: 50m
+        memory: 64Mi
+    limits:
+        cpu: 50m
+        memory: 64Mi

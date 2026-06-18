@@ -261,17 +261,7 @@ setup-local-storage:
     set -euo pipefail
     echo "Setting up local storage for Airbyte..."
 
-    # Detect if Longhorn is available
-    export LONGHORN_AVAILABLE="false"
-
-    if kubectl get storageclass longhorn &>/dev/null && \
-        kubectl get pods -n longhorn &>/dev/null | grep -q longhorn-manager; then
-        echo "Longhorn detected - using ReadWriteMany with longhorn storage class"
-        export LONGHORN_AVAILABLE="true"
-    else
-        echo "Longhorn not detected - using ReadWriteOnce with default storage class"
-        export LONGHORN_AVAILABLE="false"
-    fi
+    export STORAGE_CLASS="${AIRBYTE_STORAGE_CLASS:-}"
 
     # Create PVC for local storage if it doesn't exist
     if ! kubectl get pvc airbyte-storage-pvc -n ${AIRBYTE_NAMESPACE} &>/dev/null; then

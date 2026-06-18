@@ -40,7 +40,7 @@ just postgres::setup-cdc mydb airbyte_slot airbyte_pub etl_user
 ## Storage Configuration
 
 - **MinIO**: S3-compatible object storage for scalable data staging
-- **Local**: Persistent volumes with automatic Longhorn RWX detection
+- **Local**: ReadWriteOnce PVC by default; set `AIRBYTE_STORAGE_CLASS` to an RWX-capable StorageClass when multi-pod access is required
 
 ## Authentication
 

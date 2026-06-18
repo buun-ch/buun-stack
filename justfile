@@ -25,13 +25,13 @@ mod lakekeeper
 mod librechat
 mod litellm
 mod loki
-mod longhorn
 mod meilisearch
 mod memgraph
 mod metabase
 mod mlflow
 mod minio
 mod nats
+mod nfs-subdir-external-provisioner
 mod nvidia-device-plugin
 mod fairwinds-polaris
 mod oauth2-proxy

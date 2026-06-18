@@ -59,6 +59,34 @@ just airflow::uninstall
 just airflow::uninstall true
 ```
 
+## Storage Backend Considerations
+
+The DAG storage PVC (`airflow-dags-pvc`) is also mounted into JupyterHub user
+pods at `/home/jovyan/airflow-dags/`, so the two need to share the same
+volume. How that share works depends on the StorageClass.
+
+> [!IMPORTANT]
+> Kubernetes `ReadWriteOnce` means "writable by a single **Node**" — not a
+> single Pod. Multiple Pods on the same Node can mount an RWO PVC at once.
+> This is what makes single-node sharing work; it also explains why adding a
+> second node silently breaks the share.
+
+**Single node (default)**
+
+- `AIRFLOW_DAGS_STORAGE_CLASS=` (leave empty → cluster default `local-path`)
+- `AIRFLOW_DAGS_ACCESS_MODE=ReadWriteOnce`
+- All Pods land on the same Node, so RWO sharing works. local-path is fast and has no extra dependencies.
+
+**Multi-node**
+
+- `AIRFLOW_DAGS_STORAGE_CLASS=nfs`
+- `AIRFLOW_DAGS_ACCESS_MODE=ReadWriteMany`
+- Pods on other Nodes need true RWX. Install the [NFS Subdir External Provisioner](../nfs-subdir-external-provisioner/README.md) first.
+
+If you add a second Node while still on local-path, Pods scheduled to the new
+Node will fail to mount `airflow-dags-pvc` and stay `Pending` — the symptom is
+not obvious, so re-check this setting before scaling.
+
 ## DAG Deployment
 
 ### 1. Access JupyterHub

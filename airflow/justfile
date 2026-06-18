@@ -1,14 +1,13 @@
 set fallback := true
 
 export AIRFLOW_NAMESPACE := env("AIRFLOW_NAMESPACE", "datastack")
-export AIRFLOW_CHART_VERSION := env("AIRFLOW_CHART_VERSION", "1.18.0")
+export AIRFLOW_CHART_VERSION := env("AIRFLOW_CHART_VERSION", "1.22.0")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export AIRFLOW_DAGS_PERSISTENCE_ENABLED := env("AIRFLOW_DAGS_PERSISTENCE_ENABLED", "")
-export AIRFLOW_DAGS_STORAGE_TYPE := env("AIRFLOW_DAGS_STORAGE_TYPE", "")
-export AIRFLOW_NFS_IP := env("AIRFLOW_NFS_IP", "")
-export AIRFLOW_NFS_PATH := env("AIRFLOW_NFS_PATH", "")
 export AIRFLOW_DAGS_STORAGE_SIZE := env("AIRFLOW_DAGS_STORAGE_SIZE", "10Gi")
+export AIRFLOW_DAGS_STORAGE_CLASS := env("AIRFLOW_DAGS_STORAGE_CLASS", "")
+export AIRFLOW_DAGS_ACCESS_MODE := env("AIRFLOW_DAGS_ACCESS_MODE", "ReadWriteOnce")
 export AIRFLOW_EXTRA_PACKAGES := env("AIRFLOW_EXTRA_PACKAGES", "'PyJWT>=2.10' cryptography 'requests>=2.32' 'dlt[duckdb,filesystem,postgres,s3]' pyarrow pyiceberg s3fs simple-salesforce")
 export MONITORING_ENABLED := env("MONITORING_ENABLED", "")
 export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
@@ -315,10 +314,6 @@ install:
             AIRFLOW_DAGS_PERSISTENCE_ENABLED="false"
         fi
     fi
-    # Force default storage type (NFS disabled due to permission issues)
-    if [ "${AIRFLOW_DAGS_PERSISTENCE_ENABLED}" = "true" ]; then
-        AIRFLOW_DAGS_STORAGE_TYPE="default"
-    fi
     echo "Installing Airflow..."
     just create-namespace
 
@@ -331,7 +326,7 @@ install:
     just add-helm-repo
 
     if [ "${AIRFLOW_DAGS_PERSISTENCE_ENABLED}" = "true" ]; then
-        just setup-dags-storage "default"
+        just setup-dags-storage
     fi
 
     KEYCLOAK_HOST=${KEYCLOAK_HOST} KEYCLOAK_REALM=${KEYCLOAK_REALM} \
@@ -367,7 +362,7 @@ install:
     AIRFLOW_WEBSERVER_SECRET_KEY=$(just utils::random-password) \
         gomplate -f airflow-values.gomplate.yaml -o airflow-values.yaml
     helm upgrade --install airflow apache-airflow/airflow \
-        --version ${AIRFLOW_CHART_VERSION} -n ${AIRFLOW_NAMESPACE} --wait \
+        --version ${AIRFLOW_CHART_VERSION} -n ${AIRFLOW_NAMESPACE} --wait=legacy --timeout 10m \
         -f airflow-values.yaml
     echo "Synchronizing Airflow permissions..."
     kubectl exec deployment/airflow-scheduler -n ${AIRFLOW_NAMESPACE} -- airflow sync-perm
@@ -507,15 +502,16 @@ delete-api-user username='':
     fi
 
 # Setup DAG storage (PVC)
-setup-dags-storage storage-type='':
+setup-dags-storage:
     #!/bin/bash
     set -euo pipefail
-    echo "Setting up DAG storage (default)..."
-    echo "Creating PersistentVolumeClaim with default StorageClass..."
-    kubectl apply -n ${AIRFLOW_NAMESPACE} -f dags-pvc.yaml
-    echo "✅ Default storage configured"
+    echo "Setting up DAG storage..."
+    echo "Creating PersistentVolumeClaim..."
+    gomplate -f dags-pvc.gomplate.yaml | kubectl apply -n ${AIRFLOW_NAMESPACE} -f -
+    echo "✅ DAG storage configured"
     echo "   PVC: airflow-dags-pvc"
-    echo "   Uses cluster default StorageClass (k3s local-path, etc.)"
+    echo "   StorageClass: ${AIRFLOW_DAGS_STORAGE_CLASS:-<cluster default>}"
+    echo "   Access mode: ${AIRFLOW_DAGS_ACCESS_MODE}"
     echo ""
     echo "DAG storage is ready for use"
     echo "Mount path in pods: /opt/airflow/dags"

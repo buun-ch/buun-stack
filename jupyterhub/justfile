@@ -5,11 +5,14 @@ export JUPYTERHUB_CHART_VERSION := env("JUPYTERHUB_CHART_VERSION", "4.3.2")
 export JUPYTERHUB_OIDC_CLIENT_ID := env("JUPYTERHUB_OIDC_CLIENT_ID", "jupyterhub")
 export JUPYTERHUB_OIDC_CLIENT_SESSION_IDLE := env("JUPYTERHUB_OIDC_CLIENT_SESSION_IDLE", "86400")
 export JUPYTERHUB_OIDC_CLIENT_SESSION_MAX := env("JUPYTERHUB_OIDC_CLIENT_SESSION_MAX", "604800")
-export JUPYTERHUB_NFS_PV_ENABLED := env("JUPYTERHUB_NFS_PV_ENABLED", "")
 export JUPYTERHUB_STORAGE_CLASS := env("JUPYTERHUB_STORAGE_CLASS", "")
+export JUPYTERHUB_STORAGE_CAPACITY := env("JUPYTERHUB_STORAGE_CAPACITY", "10Gi")
+export JUPYTERHUB_NFS_PV_ENABLED := env("JUPYTERHUB_NFS_PV_ENABLED", "")
+export JUPYTER_NFS_IP := env("JUPYTER_NFS_IP", "")
+export JUPYTER_NFS_PATH := env("JUPYTER_NFS_PATH", "")
 export JUPYTERHUB_VAULT_INTEGRATION_ENABLED := env("JUPYTERHUB_VAULT_INTEGRATION_ENABLED", "")
 export JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED := env("JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED", "")
-export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-71")
+export JUPYTER_PYTHON_KERNEL_TAG := env("JUPYTER_PYTHON_KERNEL_TAG", "python-3.12-72")
 export KERNEL_IMAGE_BUUN_STACK_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_REPOSITORY", "buun-stack-notebook")
 export KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY := env("KERNEL_IMAGE_BUUN_STACK_CUDA_REPOSITORY", "buun-stack-cuda-notebook")
 export JUPYTER_PROFILE_MINIMAL_ENABLED := env("JUPYTER_PROFILE_MINIMAL_ENABLED", "false")
@@ -31,10 +34,9 @@ export VAULT_AGENT_LOG_LEVEL := env("VAULT_AGENT_LOG_LEVEL", "info")
 export JUPYTER_BUUNSTACK_LOG_LEVEL := env("JUPYTER_BUUNSTACK_LOG_LEVEL", "warning")
 export IMAGE_REGISTRY := env("IMAGE_REGISTRY", "localhost:30500")
 export SPARK_DOWNLOAD_URL := env("SPARK_DOWNLOAD_URL", "https://dlcdn.apache.org/spark/")
-export SPARK_VERSION := env("SPARK_VERSION", "4.1.1")
+export SPARK_VERSION := env("SPARK_VERSION", "4.1.2")
 export PIP_REPOSITORY_URL := env("PIP_REPOSITORY_URL", "https://pypi.org/simple/")
 export AIRFLOW_DAGS_STORAGE_SIZE := env("AIRFLOW_DAGS_STORAGE_SIZE", "10Gi")
-export LONGHORN_NAMESPACE := env("LONGHORN_NAMESPACE", "longhorn")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export VAULT_HOST := env("VAULT_HOST", "")
 export VAULT_ADDR := "https://" + VAULT_HOST
@@ -194,18 +196,13 @@ install root_token='':
     export JUPYTER_FSGID=${JUPYTER_FSGID:-100}
     export PVC_NAME=""
     if [ -z "${JUPYTERHUB_NFS_PV_ENABLED}" ]; then
-        if gum confirm "Are you going to use NFS PV?"; then
+        if gum confirm "Use static NFS PV for user home volumes (each user gets <export>/<username>)?"; then
             JUPYTERHUB_NFS_PV_ENABLED=true
         else
             JUPYTERHUB_NFS_PV_ENABLED=false
         fi
     fi
     if [ "${JUPYTERHUB_NFS_PV_ENABLED}" = "true" ]; then
-        if ! helm status longhorn -n ${LONGHORN_NAMESPACE} &>/dev/null; then
-            echo "Longhorn is not installed. Please install Longhorn first." >&2
-            exit 1
-        fi
-        JUPYTERHUB_STORAGE_CLASS=${JUPYTERHUB_STORAGE_CLASS:-longhorn}
         export JUPYTER_NFS_IP=${JUPYTER_NFS_IP:-}
         while [ -z "${JUPYTER_NFS_IP}" ]; do
             JUPYTER_NFS_IP=$(
@@ -229,6 +226,14 @@ install root_token='':
             gomplate -f nfs-pv.gomplate.yaml | kubectl apply -f -
         fi
         kubectl apply -n ${JUPYTERHUB_NAMESPACE} -f nfs-pvc.yaml
+    elif [ -z "${JUPYTERHUB_STORAGE_CLASS}" ]; then
+        AVAILABLE_SCS=$(kubectl get storageclass -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
+        echo "Available StorageClasses: ${AVAILABLE_SCS:-<none>}"
+        JUPYTERHUB_STORAGE_CLASS=$(
+            gum input --prompt="StorageClass for user home volumes (empty = cluster default): " \
+            --width=100 --placeholder="e.g., local-path"
+        ) || JUPYTERHUB_STORAGE_CLASS=""
+        export JUPYTERHUB_STORAGE_CLASS
     fi
 
     if [ -z "${JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED}" ]; then
@@ -331,7 +336,7 @@ uninstall:
         just vault::delete jupyterhub/admin-service || true
     fi
 
-# Delete JupyterHub PV and StorageClass
+# Delete JupyterHub NFS PV and StorageClass
 delete-pv:
     #!/bin/bash
     set -euo pipefail

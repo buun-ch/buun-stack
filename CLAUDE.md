@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-buun-stack is a Kubernetes development stack for self-hosted environments with enterprise-grade components (k3s, Vault, Keycloak, PostgreSQL, Longhorn) orchestrated through Just task runner recipes.
+buun-stack is a Kubernetes development stack for self-hosted environments with enterprise-grade components (k3s, Vault, Keycloak, PostgreSQL) orchestrated through Just task runner recipes.
 
 ## Essential Commands
 
@@ -49,7 +49,6 @@ create-user-and-db username='' db_name='' password='':
 
 ```bash
 just k8s::install              # Deploy k3s cluster
-just longhorn::install         # Storage layer
 just vault::install            # Secrets management
 just postgres::install         # Database cluster
 just keycloak::install         # Identity provider

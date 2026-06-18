@@ -5,6 +5,9 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - 📺 [Remote-Accessible Kubernetes Home Lab](https://www.youtube.com/playlist?list=PLbAvvJK22Y6vJPrUC6GrfNMXneYspckAo) (YouTube playlist)
 - 📝 [Building a Remote-Accessible Kubernetes Home Lab with k3s](https://dev.to/buun-ch/building-a-remote-accessible-kubernetes-home-lab-with-k3s-5g05) (Dev.to article)
 
+> [!NOTE]
+> **Longhorn is no longer part of the standard install.** The default StorageClass is now k3s's `local-path`. Longhorn remains available as an opt-in module under [`custom-example/longhorn`](./custom-example/longhorn) for users who still want it.
+
 ## Architecture
 
 ### Foundation
@@ -37,7 +40,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 
 ### Storage (Optional)
 
-- **[Longhorn](https://longhorn.io/)**: Distributed block storage
+- **[NFS Subdir External Provisioner](https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner)**: Dynamic RWX volumes backed by an existing NFS server
 - **[MinIO](https://min.io/)**: S3-compatible object storage
 
 ### GPU Support (Optional)
@@ -84,6 +87,15 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - **[OAuth2 Proxy](https://oauth2-proxy.github.io/oauth2-proxy/)**: Authentication proxy for adding Keycloak authentication
 - **[Fairwinds Polaris](https://polaris.docs.fairwinds.com/)**: Kubernetes configuration validation and security auditing
 
+### Opt-in Add-ons (under `custom-example/`)
+
+The [`custom-example/`](./custom-example) directory ships modules that are not part of the standard install but can be enabled from your own `custom/justfile`:
+
+- **[Airbyte](https://airbyte.com/)**: ELT data integration platform
+- **[Bytebase](https://bytebase.com/)**: Database schema change and version control
+- **[Cube](https://cube.dev/)**: Semantic layer for analytics APIs
+- **[Longhorn](https://longhorn.io/)**: Distributed block storage (legacy; superseded by the NFS provisioner above)
+
 ## Quick Start
 
 For detailed step-by-step instructions, see the [Installation Guide](./INSTALLATION.md).
@@ -101,7 +113,6 @@ For detailed step-by-step instructions, see the [Installation Guide](./INSTALLAT
 
    ```bash
    just k8s::install
-   just longhorn::install
    just vault::install
    just postgres::install
    just keycloak::install
@@ -195,13 +206,15 @@ Resource recommendation dashboard for right-sizing workloads:
 
 [📖 See VPA Documentation](./vpa/README.md)
 
-### Longhorn
+### NFS Subdir External Provisioner (Optional)
 
-Enterprise-grade distributed storage system:
+Dynamic RWX volumes backed by an existing NFS server:
 
-- **Highly Available**: Block storage with no single point of failure
-- **Backup & Recovery**: Built-in disaster recovery capabilities
-- **NFS Support**: Persistent volumes with NFS compatibility
+- **ReadWriteMany**: Multiple pods can mount the same volume
+- **Bring Your Own NFS**: Works with any NFS server (NAS, TrueNAS, Linux NFS, etc.)
+- **Lightweight**: Only deploys the provisioner; storage capacity is the NFS server itself
+
+[📖 See NFS Provisioner Documentation](./nfs-subdir-external-provisioner/README.md)
 
 ### MinIO
 
@@ -216,7 +229,7 @@ S3-compatible object storage:
 Multi-user platform for interactive computing:
 
 - **Keycloak Authentication**: OAuth2 integration with SSO
-- **Persistent Storage**: User notebooks stored in Longhorn volumes
+- **Persistent Storage**: User notebooks stored on the cluster's StorageClass (k3s `local-path` by default; NFS optional)
 - **Collaborative**: Shared computing environment for teams
 - **GPU Support**: CUDA-enabled notebooks with nvidia-device-plugin integration
 
@@ -297,7 +310,7 @@ Lightning-fast, typo-tolerant search engine:
 Kubernetes operator for managing Redis instances:
 
 - **Multiple Modes**: Standalone, Cluster, Replication, and Sentinel configurations
-- **Persistent Storage**: Automatic PVC provisioning with Longhorn
+- **Persistent Storage**: Automatic PVC provisioning on the cluster's default StorageClass
 - **Monitoring**: Redis Exporter sidecar for Prometheus metrics
 - **Security**: Non-root containers with proper security contexts
 

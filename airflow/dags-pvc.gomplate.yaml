@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airflow-dags-pvc
+spec:
+  accessModes:
+    - {{ getenv "AIRFLOW_DAGS_ACCESS_MODE" "ReadWriteOnce" }}
+  {{- $sc := getenv "AIRFLOW_DAGS_STORAGE_CLASS" "" }}
+  {{- if $sc }}
+  storageClassName: {{ $sc }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Env.AIRFLOW_DAGS_STORAGE_SIZE }}

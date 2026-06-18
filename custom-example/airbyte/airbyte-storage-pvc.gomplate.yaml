@@ -5,14 +5,11 @@ metadata:
   namespace: {{ .Env.AIRBYTE_NAMESPACE }}
 spec:
   accessModes:
-    {{- if .Env.LONGHORN_AVAILABLE }}
-    - ReadWriteMany
-    {{- else }}
     - ReadWriteOnce
-    {{- end }}
+  {{- $sc := getenv "STORAGE_CLASS" "" }}
+  {{- if $sc }}
+  storageClassName: {{ $sc }}
+  {{- end }}
   resources:
     requests:
       storage: 10Gi
-  {{- if .Env.LONGHORN_AVAILABLE }}
-  storageClassName: longhorn
-  {{- end }}

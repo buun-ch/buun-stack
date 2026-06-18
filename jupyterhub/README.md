@@ -37,14 +37,13 @@ just jupyterhub::install
 This will prompt for:
 
 - JupyterHub host (FQDN)
-- NFS PV usage (if Longhorn is installed)
-- NFS server details (if NFS is enabled)
+- `JUPYTERHUB_STORAGE_CLASS` (StorageClass for user home volumes; leave empty for cluster default)
 - Vault integration setup (requires root token for initial setup)
 
 ## Prerequisites
 
 - Keycloak must be installed and configured
-- For NFS storage: Longhorn must be installed
+- A StorageClass on the cluster (k3s `local-path` by default; for NFS-backed homes set `JUPYTERHUB_NFS_PV_ENABLED=true` with `JUPYTER_NFS_IP` / `JUPYTER_NFS_PATH` to mount an existing NFS export directly)
 - For Vault integration: Vault and External Secrets Operator must be installed
 - Helm repository must be accessible
 
@@ -836,25 +835,67 @@ User token renewal is handled within the notebook environment by the `buunstack`
 
 ## Storage Options
 
-### Default Storage
+User home volumes can be provisioned two ways:
 
-Uses Kubernetes PersistentVolumes for user home directories.
+- **Dynamic** — one PVC per user via the StorageClass selected by
+  `JUPYTERHUB_STORAGE_CLASS` (leave empty for the cluster default, k3s
+  `local-path`).
+- **Static NFS** — set `JUPYTERHUB_NFS_PV_ENABLED=true` to mount an existing
+  NFS export directly, where each user maps to `<NFS_PATH>/<username>`.
 
-### NFS Storage
+### Default (`local-path`)
 
-For shared storage across nodes, configure NFS:
+Per-user homes stored on the node's local disk. Fast and simple, but tied to
+the node where the user pod first lands.
+
+### Sharing the Airflow DAGs PVC
+
+When `JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED=true`, user pods also mount
+Airflow's `airflow-dags-pvc` at `/home/jovyan/airflow-dags/`. The PVC is
+owned by the Airflow module, so its StorageClass and access mode are set
+there — see
+[airflow/README.md → Storage Backend Considerations](../airflow/README.md#storage-backend-considerations).
+
+> [!IMPORTANT]
+> The default `local-path` StorageClass works for this share only on a
+> single-node cluster (`ReadWriteOnce` covers "single Node", not "single
+> Pod"). Once you add a second Node, switch the Airflow DAGs PVC to NFS
+> (`AIRFLOW_DAGS_STORAGE_CLASS=nfs`, `AIRFLOW_DAGS_ACCESS_MODE=ReadWriteMany`)
+> or user pods scheduled to other Nodes will fail to start.
+
+### NFS-backed homes (static PV)
+
+For shared, host-independent storage, JupyterHub mounts an existing NFS export
+directly through a static PersistentVolume. Each user's home maps to a
+per-username subdirectory on the export (`<NFS_PATH>/<username>`), so data
+already laid out that way is used as-is.
 
 ```bash
-JUPYTERHUB_NFS_PV_ENABLED=true
-JUPYTER_NFS_IP=192.168.10.1
-JUPYTER_NFS_PATH=/volume1/drive1/jupyter
+just env::set JUPYTERHUB_NFS_PV_ENABLED=true
+just env::set JUPYTER_NFS_IP=192.168.10.1
+just env::set JUPYTER_NFS_PATH=/volume1/drive1/jupyter
+just jupyterhub::install
 ```
 
-NFS storage requires:
+`just jupyterhub::install` then creates the `jupyter-nfs-static` StorageClass,
+the `jupyter-nfs-pv` PersistentVolume (pointing at
+`JUPYTER_NFS_IP:JUPYTER_NFS_PATH`), and the `jupyter-nfs-pvc` claim. z2jh mounts
+it with `subPath: {username}`, so user `buun` gets `<NFS_PATH>/buun/` as
+`/home/jovyan`.
 
-- Longhorn storage system installed
-- NFS server accessible from cluster nodes
-- Proper NFS export permissions configured
+NFS prerequisites:
+
+- NFS server reachable from cluster nodes
+- Proper export permissions
+- `nfs-utils` / `nfs-common` installed on every node
+
+> [!NOTE]
+> This static approach does **not** use the
+> [nfs-subdir-external-provisioner](../nfs-subdir-external-provisioner/README.md).
+> kubelet mounts the export directly from the PV's `spec.nfs`. The dynamic `nfs`
+> StorageClass would instead allocate an empty per-PVC subdirectory
+> (`<NFS_PATH>/<namespace>-claim-<username>-<uuid>/`) unrelated to your existing
+> `<NFS_PATH>/<username>` data — which is why NFS homes use the static PV here.
 
 ## Configuration
 
@@ -871,8 +912,14 @@ JUPYTERHUB_OIDC_CLIENT_ID=jupyterhub
 # Keycloak integration
 KEYCLOAK_REALM=buunstack
 
-# Storage
+# Storage (leave empty for the cluster default, e.g. local-path)
+JUPYTERHUB_STORAGE_CLASS=
+JUPYTERHUB_STORAGE_CAPACITY=10Gi
+
+# NFS-backed homes (static PV; mounts <JUPYTER_NFS_PATH>/<username> per user)
 JUPYTERHUB_NFS_PV_ENABLED=false
+JUPYTER_NFS_IP=
+JUPYTER_NFS_PATH=
 
 # Vault integration
 JUPYTERHUB_VAULT_INTEGRATION_ENABLED=false

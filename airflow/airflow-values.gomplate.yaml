@@ -62,7 +62,7 @@ images:
 workers:
   extraInitContainers:
     - name: install-packages
-      image: apache/airflow:3.0.2
+      image: apache/airflow:3.2.2
       command:
         - /bin/bash
         - -c
@@ -101,7 +101,7 @@ workers:
 scheduler:
   extraInitContainers:
     - name: install-packages
-      image: apache/airflow:3.0.2
+      image: apache/airflow:3.2.2
       command:
         - /bin/bash
         - -c
@@ -133,7 +133,7 @@ scheduler:
 dagProcessor:
   extraInitContainers:
     - name: install-packages
-      image: apache/airflow:3.0.2
+      image: apache/airflow:3.2.2
       command:
         - /bin/bash
         - -c
@@ -229,11 +229,7 @@ data:
 dags:
   persistence:
     enabled: {{ .Env.AIRFLOW_DAGS_PERSISTENCE_ENABLED | default "true" }}
-    {{- if eq (.Env.AIRFLOW_DAGS_STORAGE_TYPE | default "default") "nfs" }}
-    existingClaim: airflow-dags-nfs-pvc
-    {{- else }}
     existingClaim: airflow-dags-pvc
-    {{- end }}
 
 ingress:
   apiServer:

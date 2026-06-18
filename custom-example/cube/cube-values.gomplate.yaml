@@ -83,7 +83,6 @@ ingress:
 persistence:
   enabled: true
   size: {{ .Env.CUBE_STORAGE_SIZE | default "1Gi" }}
-  storageClass: longhorn
   accessMode: ReadWriteOnce
   # Mount path for Cube configuration and schema files
   mountPath: /cube/conf

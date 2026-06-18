@@ -1,0 +1,109 @@
+set fallback := true
+
+export NFS_NAMESPACE := env("NFS_NAMESPACE", "nfs-provisioner")
+export NFS_CHART_VERSION := env("NFS_CHART_VERSION", "4.0.18")
+export NFS_SERVER := env("NFS_SERVER", "")
+export NFS_PATH := env("NFS_PATH", "")
+export NFS_STORAGE_CLASS_NAME := env("NFS_STORAGE_CLASS_NAME", "nfs")
+export NFS_RECLAIM_POLICY := env("NFS_RECLAIM_POLICY", "Delete")
+export NFS_ARCHIVE_ON_DELETE := env("NFS_ARCHIVE_ON_DELETE", "true")
+export NFS_MOUNT_OPTIONS := env("NFS_MOUNT_OPTIONS", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Add Helm repository
+add-helm-repo:
+    helm repo add nfs-subdir-external-provisioner \
+        https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/
+    helm repo update nfs-subdir-external-provisioner
+
+# Remove Helm repository
+remove-helm-repo:
+    helm repo remove nfs-subdir-external-provisioner
+
+# Create namespace
+create-namespace:
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace ${NFS_NAMESPACE} &>/dev/null; then
+        kubectl create namespace ${NFS_NAMESPACE}
+    else
+        echo "Namespace ${NFS_NAMESPACE} already exists."
+    fi
+    kubectl label namespace ${NFS_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=baseline --overwrite
+
+# Delete namespace
+delete-namespace:
+    #!/bin/bash
+    set -euo pipefail
+    if kubectl get namespace ${NFS_NAMESPACE} &>/dev/null; then
+        kubectl delete namespace ${NFS_NAMESPACE} --ignore-not-found
+    else
+        echo "Namespace ${NFS_NAMESPACE} does not exist."
+    fi
+
+# Install NFS subdir external provisioner
+install:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${NFS_SERVER}" ]; do
+        NFS_SERVER=$(
+            gum input --prompt="NFS server (IP or hostname): " --width=100 \
+            --placeholder="e.g., 192.168.1.10 or nas.example.com"
+        )
+    done
+    while [ -z "${NFS_PATH}" ]; do
+        NFS_PATH=$(
+            gum input --prompt="NFS export path: " --width=100 \
+            --placeholder="e.g., /export/k8s"
+        )
+    done
+    export NFS_SERVER NFS_PATH
+
+    just add-helm-repo
+    just create-namespace
+    gomplate -f values.gomplate.yaml -o values.yaml
+    helm upgrade --cleanup-on-fail --install nfs-subdir-external-provisioner \
+        nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
+        --version ${NFS_CHART_VERSION} -n ${NFS_NAMESPACE} --wait \
+        -f values.yaml
+    echo ""
+    echo "✓ NFS provisioner installed."
+    echo "  StorageClass: ${NFS_STORAGE_CLASS_NAME}"
+    echo "  NFS server:   ${NFS_SERVER}:${NFS_PATH}"
+
+# Uninstall NFS subdir external provisioner
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall nfs-subdir-external-provisioner \
+        -n ${NFS_NAMESPACE} --ignore-not-found --wait
+    just delete-namespace
+
+# Test provisioner by creating a small PVC and verifying it binds
+test:
+    #!/bin/bash
+    set -euo pipefail
+    NAME="nfs-provisioner-test-$(date +%s)"
+    cat <<EOF | kubectl apply -f -
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: ${NAME}
+      namespace: default
+    spec:
+      accessModes: [ReadWriteMany]
+      storageClassName: ${NFS_STORAGE_CLASS_NAME}
+      resources:
+        requests:
+          storage: 1Mi
+    EOF
+    echo "Waiting for PVC to bind..."
+    kubectl wait --for=jsonpath='{.status.phase}'=Bound \
+        pvc/${NAME} -n default --timeout=60s
+    kubectl get pvc ${NAME} -n default
+    kubectl delete pvc ${NAME} -n default
+    echo "✓ Provisioner is working."

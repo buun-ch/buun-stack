@@ -35,7 +35,6 @@ workers:
   persistence:
     enabled: true
     size: 10Gi
-    storageClass: longhorn
 
 # Storage configuration
 storage:

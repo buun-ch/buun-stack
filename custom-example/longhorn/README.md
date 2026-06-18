@@ -2,25 +2,51 @@
 
 Longhorn is a lightweight, reliable, and powerful distributed block storage system for Kubernetes.
 
+> [!NOTE]
+> **Longhorn is no longer part of the standard buun-stack install.** It lives here as an opt-in module. The recommended path for shared (RWX) storage is the [NFS Subdir External Provisioner](../../nfs-subdir-external-provisioner/README.md); for local (RWO) storage the k3s default `local-path` is used.
+
 ## Table of Contents
 
+- [Enabling the Module](#enabling-the-module)
 - [Installation](#installation)
 - [Resource Configuration](#resource-configuration)
 - [OAuth2-Proxy Integration](#oauth2-proxy-integration)
 - [References](#references)
+
+## Enabling the Module
+
+Add the module to your `custom/justfile` so the recipes become reachable from the top:
+
+```just
+mod longhorn '../custom-example/longhorn/justfile'
+```
+
+After this, the recipes are invoked as `just custom::longhorn::<recipe>`.
 
 ## Installation
 
 ### Prerequisites
 
 - Kubernetes cluster with sufficient resources
-- Storage class support
-- Open-iSCSI installed on nodes
+- A working StorageClass on the cluster (Longhorn adds its own on top)
+- Open-iSCSI installed and running on every node
+
+Install open-iscsi:
+
+```bash
+# Arch Linux
+sudo pacman -S open-iscsi
+sudo systemctl enable --now iscsid
+
+# Ubuntu/Debian
+sudo apt-get install open-iscsi
+sudo systemctl enable --now iscsid
+```
 
 ### Install Longhorn
 
 ```bash
-just longhorn::install
+just custom::longhorn::install
 ```
 
 This command will:
@@ -64,14 +90,14 @@ Longhorn Helm chart **does not support** configuring resource requests/limits fo
 Since Helm values don't work, we apply resource configurations **after installation** using `kubectl patch`:
 
 ```bash
-just longhorn::patch-resources
+just custom::longhorn::patch-resources
 ```
 
-This recipe is automatically called by `just longhorn::install`.
+This recipe is automatically called by `just custom::longhorn::install`.
 
 ### Resource Values
 
-All resource values are based on **Goldilocks/VPA recommendations** and rounded to clean values following [resource management best practices](../docs/resource-management.md).
+All resource values are based on **Goldilocks/VPA recommendations** and rounded to clean values following [resource management best practices](../../docs/resource-management.md).
 
 The `patch-resources` recipe configures resources for the following components:
 
@@ -82,7 +108,7 @@ The `patch-resources` recipe configures resources for the following components:
 - **Longhorn Manager DaemonSet** (longhorn-manager): Core component with Burstable QoS to allow CPU bursts during intensive storage operations. Includes 2 containers: main manager and pre-pull-share-manager-image
 - **Longhorn UI** (longhorn-ui): Guaranteed QoS
 
-For specific resource values, refer to the `patch-resources` recipe in [longhorn/justfile](justfile).
+For specific resource values, refer to the `patch-resources` recipe in [justfile](justfile).
 
 ### Manual Resource Updates
 
@@ -91,14 +117,14 @@ If you need to update resource configurations:
 1. **Edit the justfile:**
 
    ```bash
-   vim longhorn/justfile
+   vim custom-example/longhorn/justfile
    # Modify the patch-resources recipe
    ```
 
 2. **Apply changes:**
 
    ```bash
-   just longhorn::patch-resources
+   just custom::longhorn::patch-resources
    ```
 
 3. **Verify:**
@@ -127,7 +153,7 @@ Longhorn UI can be protected with OAuth2-Proxy for Keycloak authentication.
 ### Setup OAuth2-Proxy
 
 ```bash
-just longhorn::oauth2-proxy-install
+just custom::longhorn::oauth2-proxy-install
 ```
 
 This will:
@@ -139,7 +165,7 @@ This will:
 
 **Resource Configuration:**
 
-OAuth2-Proxy resources are configured in the gomplate template ([oauth2-proxy/oauth2-proxy-deployment.gomplate.yaml](../oauth2-proxy/oauth2-proxy-deployment.gomplate.yaml)) with Guaranteed QoS based on Goldilocks/VPA recommendations.
+OAuth2-Proxy resources are configured in the gomplate template ([oauth2-proxy/oauth2-proxy-deployment.gomplate.yaml](../../oauth2-proxy/oauth2-proxy-deployment.gomplate.yaml)) with Guaranteed QoS based on Goldilocks/VPA recommendations.
 
 ### Access Longhorn UI
 
@@ -154,7 +180,7 @@ You'll be redirected to Keycloak for authentication.
 ### Remove OAuth2-Proxy
 
 ```bash
-just longhorn::oauth2-proxy-uninstall
+just custom::longhorn::oauth2-proxy-uninstall
 ```
 
 ## References
@@ -162,5 +188,5 @@ just longhorn::oauth2-proxy-uninstall
 - [Longhorn Documentation](https://longhorn.io/docs/)
 - [Longhorn GitHub Repository](https://github.com/longhorn/longhorn)
 - [Longhorn Helm Chart](https://github.com/longhorn/charts)
-- [Resource Management Best Practices](../docs/resource-management.md)
+- [Resource Management Best Practices](../../docs/resource-management.md)
 - [GitHub Issue #1502 - Resource requests/limits support](https://github.com/longhorn/longhorn/issues/1502)

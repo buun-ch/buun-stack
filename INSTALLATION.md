@@ -38,7 +38,7 @@ For Arch Linux users, configure sshd to support keyboard-interactive authenticat
 
 Create `/etc/ssh/sshd_config.d/10-pamauth.conf`:
 
-```
+```text
 KbdInteractiveAuthentication yes
 AuthenticationMethods publickey keyboard-interactive:pam
 ```
@@ -53,7 +53,7 @@ Create sudoers file for your account (replace `buun` with your username):
 
 `/etc/sudoers.d/buun`:
 
-```
+```text
 buun ALL=(ALL:ALL) NOPASSWD: ALL
 ```
 
@@ -140,7 +140,7 @@ sudo systemctl edit --force --full cloudflared.service
 
 Add the following content (replace `<TOKEN VALUE>` with your token):
 
-```
+```text
 [Unit]
 Description=Cloudflare Tunnel
 After=network.target
@@ -186,7 +186,7 @@ brew install cloudflared
 
 Configure SSH in `~/.ssh/config`:
 
-```
+```text
 Host yourdomain
   Hostname ssh.yourdomain.com
   ProxyCommand /opt/homebrew/bin/cloudflared access ssh --hostname %h
@@ -199,42 +199,6 @@ ssh yourdomain
 ```
 
 ## Installing Core Components
-
-### Longhorn - Distributed Storage
-
-Longhorn provides distributed block storage with support for PersistentVolumes and NFS exports.
-
-#### Prerequisites for Longhorn
-
-Install open-iscsi on the Linux machine:
-
-```bash
-# Arch Linux
-sudo pacman -S open-iscsi
-sudo systemctl enable iscsid
-sudo systemctl start iscsid
-
-# Ubuntu/Debian
-sudo apt-get install open-iscsi
-sudo systemctl enable iscsid
-sudo systemctl start iscsid
-```
-
-If you use NFS volumes, install nfs-utils/nfs-common:
-
-```bash
-# Arch Linux
-sudo pacman -S nfs-utils
-
-# Ubuntu/Debian
-sudo apt-get install nfs-common
-```
-
-#### Install Longhorn
-
-```bash
-just longhorn::install
-```
 
 ### HashiCorp Vault - Secrets Management (Optional but Recommended)
 

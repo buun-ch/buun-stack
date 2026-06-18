@@ -238,7 +238,7 @@ singleuser:
       storageAccessModes:
         - ReadWriteOnce
     {{ end -}}
-    capacity: 10Gi
+    capacity: {{ .Env.JUPYTERHUB_STORAGE_CAPACITY }}
     {{- if eq .Env.JUPYTERHUB_AIRFLOW_DAGS_PERSISTENCE_ENABLED "true" }}
     extraVolumes:
       - name: airflow-dags

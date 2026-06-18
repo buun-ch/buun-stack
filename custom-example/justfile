@@ -7,5 +7,4 @@ default:
 mod airbyte 'airbyte/justfile'
 mod cube 'cube/justfile'
 mod bytebase 'bytebase/justfile'
-mod miniflux 'miniflux/justfile'
-mod reddit-rss 'reddit-rss/justfile'
+mod longhorn 'longhorn/justfile'

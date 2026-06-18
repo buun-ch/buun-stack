@@ -15,7 +15,7 @@ KServe is a standard Model Inference Platform on Kubernetes for Machine Learning
 ## Prerequisites
 
 - Kubernetes cluster (installed via `just k8s::install`)
-- Longhorn storage (installed via `just longhorn::install`)
+- A working StorageClass on the cluster (k3s `local-path` by default)
 - **cert-manager** (required, installed via `just cert-manager::install`)
 - MinIO (optional, for S3-compatible model storage via `just minio::install`)
 - Prometheus (optional, for monitoring via `just prometheus::install`)

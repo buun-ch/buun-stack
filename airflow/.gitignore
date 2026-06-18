@@ -1,4 +1,5 @@
 airflow-values.yaml
 airflow-database-external-secret.yaml
 airflow-oauth-external-secret.yaml
+dags-pvc.yaml
 webserver_config.py

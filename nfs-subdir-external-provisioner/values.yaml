@@ -1,0 +1,24 @@
+replicaCount: 1
+
+nfs:
+    server: 192.168.68.50
+    path: /volume1/Drive/JupyterHub
+    reclaimPolicy: Retain
+
+storageClass:
+    create: true
+    defaultClass: false
+    name: nfs
+    allowVolumeExpansion: true
+    reclaimPolicy: Delete
+    archiveOnDelete: true
+    accessModes: ReadWriteOnce
+    volumeBindingMode: Immediate
+
+resources:
+    requests:
+        cpu: 50m
+        memory: 64Mi
+    limits:
+        cpu: 50m
+        memory: 64Mi
