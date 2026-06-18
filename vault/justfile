@@ -1,7 +1,7 @@
 set fallback := true
 
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
-export VAULT_CHART_VERSION := env("VAULT_CHART_VERSION", "0.31.0")
+export VAULT_CHART_VERSION := env("VAULT_CHART_VERSION", "0.33.0")
 export VAULT_HOST := env("VAULT_HOST", "")
 export VAULT_ADDR := "https://" + VAULT_HOST
 export VAULT_DEBUG := env("VAULT_DEBUG", "false")
