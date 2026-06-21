@@ -1,4 +1,4 @@
-set fallback
+set fallback := true
 
 export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export MINIO_CHART_VERSION := env("MINIO_CHART_VERSION", "5.4.0")
