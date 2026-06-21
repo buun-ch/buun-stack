@@ -41,7 +41,8 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 ### Storage (Optional)
 
 - **[NFS Subdir External Provisioner](https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner)**: Dynamic RWX volumes backed by an existing NFS server
-- **[MinIO](https://min.io/)**: S3-compatible object storage
+- **[MinIO](https://min.io/)**: S3-compatible object storage (uses the `pgsty/minio` community fork)
+- **[RustFS](https://rustfs.com/)**: S3-compatible object storage written in Rust (MinIO alternative, evaluation)
 
 ### GPU Support (Optional)
 
@@ -223,6 +224,19 @@ S3-compatible object storage:
 - **S3 API**: Drop-in replacement for AWS S3
 - **High Performance**: Distributed object storage with erasure coding
 - **Multi-Tenancy**: Isolated storage buckets per application
+- **Community Fork**: Uses the `pgsty/minio` image, since MinIO's upstream Community Edition is archived/EOL; the embedded admin console is restored
+
+[📖 See MinIO Documentation](./minio/README.md)
+
+### RustFS
+
+S3-compatible object storage written in Rust (MinIO alternative, **evaluation**):
+
+- **S3 API**: Drop-in S3 replacement, Apache-2.0 licensed
+- **Lightweight**: Single Rust binary with strong small-object performance
+- **Beta**: Not yet 1.0.0 GA; deployed alongside MinIO for evaluation, not production-critical workloads
+
+[📖 See RustFS Documentation](./rustfs/README.md)
 
 ### JupyterHub
 

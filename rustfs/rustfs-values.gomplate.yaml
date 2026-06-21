@@ -1,0 +1,106 @@
+image:
+  registry: docker.io
+  repository: rustfs/rustfs
+  tag: {{ .Env.RUSTFS_IMAGE_TAG }}
+  imagePullPolicy: IfNotPresent
+
+# Root credentials are provided via an existing Secret (ESO or direct).
+# Key names match the chart defaults (access-key / secret-key).
+auth:
+  existingSecret: "rustfs"
+  existingSecretAccessKeyKey: "access-key"
+  existingSecretSecretKeyKey: "secret-key"
+
+# Standalone evaluation deployment (single pod, single data PVC).
+deploymentType: "deployment"
+replicaCount: 1
+
+config:
+  consoleEnabled: true
+  # Port the cluster ingress terminates on (traefik websecure = 443).
+  externalAddress: ":443"
+  logLevel: "info"
+  # Empty TLS path => RustFS runs plain HTTP. TLS is terminated at the traefik
+  # ingress. A non-empty path makes RustFS (>= beta.8) fatally require certs.
+  tlsPath: ""
+
+service:
+  type: ClusterIP
+  port: 9000
+
+consoleService:
+  enabled: true
+  type: ClusterIP
+  port: 9001
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: {{ .Env.RUSTFS_HOST }}
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - {{ .Env.RUSTFS_HOST }}
+
+consoleIngress:
+  enabled: true
+  className: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: {{ .Env.RUSTFS_CONSOLE_HOST }}
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - {{ .Env.RUSTFS_CONSOLE_HOST }}
+
+dataPersistence:
+  enabled: true
+  storageClass: local-path
+  size: {{ .Env.RUSTFS_STORAGE_SIZE }}
+  accessModes:
+    - ReadWriteOnce
+
+# Logs go to stdout; no dedicated PVC for the evaluation setup.
+logsPersistence:
+  enabled: false
+
+# No TLS material on the backend (HTTP only; TLS terminated at ingress).
+tlsPersistence:
+  enabled: false
+
+# Resource configuration (starting values; tune with Goldilocks/VPA later).
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+  limits:
+    cpu: 200m
+    memory: 512Mi
+
+# Pod Security Standards (restricted). The chart renders these verbatim,
+# so seccompProfile is added here to satisfy restricted enforcement.
+podSecurityContext:
+  fsGroup: 1001
+  fsGroupChangePolicy: "OnRootMismatch"
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  readOnlyRootFilesystem: false
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop:
+      - ALL

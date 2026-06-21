@@ -1,0 +1,205 @@
+set fallback := true
+
+export RUSTFS_NAMESPACE := env("RUSTFS_NAMESPACE", "rustfs")
+# CloudPirates RustFS chart (OCI). RustFS itself is still beta (1.0.0 GA ~ 2026-07);
+# this module is intended for staging / evaluation alongside MinIO.
+export RUSTFS_CHART := env("RUSTFS_CHART", "oci://registry-1.docker.io/cloudpirates/rustfs")
+export RUSTFS_CHART_VERSION := env("RUSTFS_CHART_VERSION", "0.9.1")
+export RUSTFS_IMAGE_TAG := env("RUSTFS_IMAGE_TAG", "1.0.0-beta.8")
+export RUSTFS_STORAGE_SIZE := env("RUSTFS_STORAGE_SIZE", "50Gi")
+export RUSTFS_HOST := env("RUSTFS_HOST", "")
+export RUSTFS_CONSOLE_HOST := env("RUSTFS_CONSOLE_HOST", "")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export RUSTFS_BACKUP_DIR := env("RUSTFS_BACKUP_DIR", "./rustfs-backup")
+export RUSTFS_LOCAL_PORT := env("RUSTFS_LOCAL_PORT", "19100")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Create RustFS namespace
+create-namespace:
+    kubectl get namespace ${RUSTFS_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${RUSTFS_NAMESPACE}
+
+# Delete RustFS namespace
+delete-namespace:
+    kubectl delete namespace ${RUSTFS_NAMESPACE} --ignore-not-found
+
+# Create root credentials via External Secret or direct Secret
+create-root-credentials:
+    #!/bin/bash
+    set -euo pipefail
+    access_key="rustfsadmin"
+    secret_key=$(just utils::random-password)
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Creating root credentials via ExternalSecret..."
+        just vault::put rustfs/admin access_key="${access_key}" secret_key="${secret_key}"
+
+        kubectl delete externalsecret rustfs -n ${RUSTFS_NAMESPACE} --ignore-not-found
+        gomplate -f rustfs-root-external-secret.gomplate.yaml | kubectl apply -f -
+
+        echo "Waiting for ExternalSecret to sync..."
+        sleep 2
+        kubectl wait --for=condition=Ready externalsecret/rustfs \
+            -n ${RUSTFS_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating root secret directly..."
+        kubectl delete secret rustfs -n ${RUSTFS_NAMESPACE} --ignore-not-found
+        kubectl create secret generic rustfs -n ${RUSTFS_NAMESPACE} \
+            --from-literal=access-key="${access_key}" \
+            --from-literal=secret-key="${secret_key}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put rustfs/admin access_key="${access_key}" secret_key="${secret_key}"
+        fi
+    fi
+
+# Install RustFS (standalone, root-credentials auth; OIDC can be added later)
+install:
+    #!/bin/bash
+    set -euo pipefail
+    export RUSTFS_HOST=${RUSTFS_HOST:-}
+    if [ "${RUSTFS_HOST}" = "" ]; then
+        RUSTFS_HOST=$(
+            gum input --prompt="RustFS host (FQDN): " --width=100 \
+            --placeholder="e.g., rustfs.example.com"
+        )
+    fi
+    export RUSTFS_CONSOLE_HOST=${RUSTFS_CONSOLE_HOST:-}
+    if [ "${RUSTFS_CONSOLE_HOST}" = "" ]; then
+        RUSTFS_CONSOLE_HOST=$(
+            gum input --prompt="RustFS Console host (FQDN): " --width=100 \
+            --placeholder="e.g., rustfs-console.example.com"
+        )
+    fi
+
+    just create-namespace
+
+    kubectl label namespace ${RUSTFS_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=restricted --overwrite
+
+    just create-root-credentials
+
+    gomplate -f rustfs-values.gomplate.yaml -o rustfs-values.yaml
+    helm upgrade --install rustfs ${RUSTFS_CHART} \
+        --version ${RUSTFS_CHART_VERSION} -n ${RUSTFS_NAMESPACE} --create-namespace --wait=legacy \
+        -f rustfs-values.yaml
+
+# Uninstall RustFS
+uninstall:
+    helm uninstall rustfs -n ${RUSTFS_NAMESPACE} --wait --ignore-not-found
+    kubectl delete namespace ${RUSTFS_NAMESPACE} --ignore-not-found
+
+# Print RustFS root access key
+root-access-key:
+    @kubectl -n ${RUSTFS_NAMESPACE} get secret rustfs -o jsonpath='{.data.access-key}' | base64 -d
+    @echo
+
+# Print RustFS root secret key
+root-secret-key:
+    @kubectl -n ${RUSTFS_NAMESPACE} get secret rustfs -o jsonpath='{.data.secret-key}' | base64 -d
+    @echo
+
+# Start a kubectl port-forward to the RustFS service and wait until it is ready.
+# Sets ENDPOINT and PF_PID; the caller must kill PF_PID on exit.
+[private]
+_rustfs_port_forward := '''
+    echo "Starting port-forward to svc/rustfs on localhost:${RUSTFS_LOCAL_PORT} ..."
+    kubectl -n ${RUSTFS_NAMESPACE} port-forward svc/rustfs "${RUSTFS_LOCAL_PORT}:9000" \
+        >/dev/null 2>&1 &
+    PF_PID=$!
+    for _ in $(seq 1 30); do
+        if curl -sf "http://localhost:${RUSTFS_LOCAL_PORT}/" >/dev/null 2>&1; then
+            break
+        fi
+        if ! kill -0 "${PF_PID}" 2>/dev/null; then
+            echo "port-forward exited unexpectedly" >&2
+            exit 1
+        fi
+        sleep 0.5
+    done
+    ENDPOINT="http://localhost:${RUSTFS_LOCAL_PORT}"
+'''
+
+# Create a bucket (S3 API via local mc against a port-forward)
+create-bucket bucket='':
+    #!/bin/bash
+    set -euo pipefail
+    BUCKET="{{ bucket }}"
+    while [ -z "${BUCKET}" ]; do
+        BUCKET=$(
+            gum input --prompt="Bucket name: " --width=100 \
+            --placeholder="e.g., my-bucket"
+        )
+    done
+
+    ACCESS_KEY=$(just root-access-key)
+    SECRET_KEY=$(just root-secret-key)
+
+    {{ _rustfs_port_forward }}
+    trap 'kill ${PF_PID} 2>/dev/null || true; mc alias remove rustfs-local >/dev/null 2>&1 || true' EXIT
+
+    mc alias set rustfs-local "${ENDPOINT}" "${ACCESS_KEY}" "${SECRET_KEY}" >/dev/null
+    mc mb --ignore-existing "rustfs-local/${BUCKET}"
+    echo "✅ Bucket created: ${BUCKET}"
+
+# List buckets
+list-buckets:
+    #!/bin/bash
+    set -euo pipefail
+    ACCESS_KEY=$(just root-access-key)
+    SECRET_KEY=$(just root-secret-key)
+
+    {{ _rustfs_port_forward }}
+    trap 'kill ${PF_PID} 2>/dev/null || true; mc alias remove rustfs-local >/dev/null 2>&1 || true' EXIT
+
+    mc alias set rustfs-local "${ENDPOINT}" "${ACCESS_KEY}" "${SECRET_KEY}" >/dev/null
+    mc ls rustfs-local/
+
+# Back up all buckets to a local directory
+backup dir='':
+    #!/bin/bash
+    set -euo pipefail
+    DEST="{{ dir }}"
+    [ -z "${DEST}" ] && DEST="${RUSTFS_BACKUP_DIR}"
+    mkdir -p "${DEST}"
+
+    ACCESS_KEY=$(just root-access-key)
+    SECRET_KEY=$(just root-secret-key)
+
+    {{ _rustfs_port_forward }}
+    trap 'kill ${PF_PID} 2>/dev/null || true; mc alias remove rustfs-backup >/dev/null 2>&1 || true' EXIT
+
+    mc alias set rustfs-backup "${ENDPOINT}" "${ACCESS_KEY}" "${SECRET_KEY}" >/dev/null
+    echo "Mirroring all buckets to ${DEST} ..."
+    mc mirror --preserve --overwrite "rustfs-backup/" "${DEST}/"
+    echo "✅ Backup completed: ${DEST}"
+
+# Restore all buckets from a local directory
+restore dir='':
+    #!/bin/bash
+    set -euo pipefail
+    SRC="{{ dir }}"
+    [ -z "${SRC}" ] && SRC="${RUSTFS_BACKUP_DIR}"
+    if [ ! -d "${SRC}" ]; then
+        echo "Backup directory not found: ${SRC}"
+        exit 1
+    fi
+
+    if ! gum confirm "Restore buckets from ${SRC} into RustFS? Existing objects will be overwritten."; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    ACCESS_KEY=$(just root-access-key)
+    SECRET_KEY=$(just root-secret-key)
+
+    {{ _rustfs_port_forward }}
+    trap 'kill ${PF_PID} 2>/dev/null || true; mc alias remove rustfs-backup >/dev/null 2>&1 || true' EXIT
+
+    mc alias set rustfs-backup "${ENDPOINT}" "${ACCESS_KEY}" "${SECRET_KEY}" >/dev/null
+    echo "Mirroring ${SRC} back to RustFS ..."
+    mc mirror --preserve --overwrite "${SRC}/" "rustfs-backup/"
+    echo "✅ Restore completed from: ${SRC}"

@@ -41,6 +41,7 @@ mod prometheus
 mod qdrant
 mod querybook
 mod redis-operator
+mod rustfs
 mod security
 mod superset
 mod tempo
