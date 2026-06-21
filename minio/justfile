@@ -1,7 +1,13 @@
-set fallback := true
+set fallback
 
 export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export MINIO_CHART_VERSION := env("MINIO_CHART_VERSION", "5.4.0")
+# Community fork (pgsty/minio) images. MinIO Inc. stopped publishing CE binaries/images
+# in 2025; pgsty restores the embedded admin console and keeps the upstream RELEASE tag scheme.
+export MINIO_IMAGE_REPO := env("MINIO_IMAGE_REPO", "pgsty/minio")
+export MINIO_IMAGE_TAG := env("MINIO_IMAGE_TAG", "RELEASE.2026-06-18T00-00-00Z")
+export MINIO_MC_IMAGE_REPO := env("MINIO_MC_IMAGE_REPO", "pgsty/mc")
+export MINIO_MC_IMAGE_TAG := env("MINIO_MC_IMAGE_TAG", "RELEASE.2026-04-17T00-00-00Z")
 export MINIO_OIDC_CLIENT_ID := env("MINIO_OIDC_CLIENT_ID", "minio")
 export MINIO_STORAGE_SIZE := env("MINIO_STORAGE_SIZE", "50Gi")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")

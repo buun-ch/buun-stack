@@ -37,6 +37,38 @@ You will be prompted for:
 
 The stack uses the official [MinIO Helm Chart](https://github.com/minio/minio/tree/master/helm/minio).
 
+## Container Images
+
+This module uses the community fork [`pgsty/minio`](https://github.com/pgsty/minio)
+instead of the upstream `quay.io/minio/minio` image.
+
+MinIO, Inc. stopped publishing Community Edition binaries and Docker images in 2025
+and archived the repository (read-only) in early 2026, so the upstream CE no longer
+receives security patches. The `pgsty/minio` fork (maintained by Pigsty) keeps the
+upstream `RELEASE.*` tag scheme, restores the embedded admin console that was removed
+from CE, and rebuilds the Docker images. It is not affiliated with MinIO, Inc.
+
+The official MinIO Helm Chart is kept as-is; only the image references are overridden:
+
+| Image | Repository | Default tag |
+|-------|------------|-------------|
+| Server | `pgsty/minio` | `RELEASE.2026-06-18T00-00-00Z` |
+| Client (`mc`) | `pgsty/mc` | `RELEASE.2026-04-17T00-00-00Z` |
+
+Tags are pinned via the `justfile` and can be overridden with environment variables
+in `.env.local`:
+
+```bash
+MINIO_IMAGE_REPO       # default: pgsty/minio
+MINIO_IMAGE_TAG        # default: RELEASE.2026-06-18T00-00-00Z
+MINIO_MC_IMAGE_REPO    # default: pgsty/mc
+MINIO_MC_IMAGE_TAG     # default: RELEASE.2026-04-17T00-00-00Z
+```
+
+To follow new releases, check the latest `RELEASE.*` tags on
+[Docker Hub](https://hub.docker.com/r/pgsty/minio), bump the values above, and
+re-run `just minio::install`.
+
 ## Pod Security Standards
 
 The minio namespace uses **restricted** Pod Security Standard enforcement.

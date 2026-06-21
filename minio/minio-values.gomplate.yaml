@@ -4,6 +4,16 @@ clusterDomain: {{ .Env.MINIO_HOST }}
 
 existingSecret: "minio"
 
+image:
+  repository: {{ .Env.MINIO_IMAGE_REPO }}
+  tag: {{ .Env.MINIO_IMAGE_TAG }}
+  pullPolicy: IfNotPresent
+
+mcImage:
+  repository: {{ .Env.MINIO_MC_IMAGE_REPO }}
+  tag: {{ .Env.MINIO_MC_IMAGE_TAG }}
+  pullPolicy: IfNotPresent
+
 oidc:
   enabled: true
   configUrl: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}/.well-known/openid-configuration"
