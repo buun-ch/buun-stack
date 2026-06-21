@@ -50,10 +50,10 @@ from CE, and rebuilds the Docker images. It is not affiliated with MinIO, Inc.
 
 The official MinIO Helm Chart is kept as-is; only the image references are overridden:
 
-| Image | Repository | Default tag |
-|-------|------------|-------------|
-| Server | `pgsty/minio` | `RELEASE.2026-06-18T00-00-00Z` |
-| Client (`mc`) | `pgsty/mc` | `RELEASE.2026-04-17T00-00-00Z` |
+| Image         | Repository    | Default tag                    |
+|---------------|---------------|--------------------------------|
+| Server        | `pgsty/minio` | `RELEASE.2026-06-18T00-00-00Z` |
+| Client (`mc`) | `pgsty/mc`    | `RELEASE.2026-04-17T00-00-00Z` |
 
 Tags are pinned via the `justfile` and can be overridden with environment variables
 in `.env.local`:
