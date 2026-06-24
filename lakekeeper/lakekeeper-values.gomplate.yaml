@@ -1,43 +1,20 @@
 catalog:
   image:
     repository: quay.io/lakekeeper/catalog
-    tag: v0.9.3
+    tag: v0.12.2
     pullPolicy: IfNotPresent
 
-  replicaCount: 1
+  replicas: 1
 
-  # Configuration using the correct structure
-  config:
-    LAKEKEEPER__OPENID_PROVIDER_URI: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}"
-    LAKEKEEPER__OPENID_AUDIENCE: "lakekeeper"
-    LAKEKEEPER__UI__OPENID_CLIENT_ID: "lakekeeper"
-    LAKEKEEPER__UI__OPENID_SCOPE: "openid profile lakekeeper"
-
-  # Secret management configuration
-  secrets:
-    backend: "postgres"
+  # Lakekeeper configuration (mounted as environment variables)
+  # https://docs.lakekeeper.io/docs/latest/configuration/
+  # OIDC/authz/secret-backend settings are configured via the dedicated
+  # auth/authz/secretBackend values below, so this map is left empty.
+  config: {}
 
   # Service configuration
   service:
     type: ClusterIP
-    port: 8080
-
-  # Health probes
-  probes:
-    liveness:
-      enabled: true
-      httpGet:
-        path: /health
-        port: http
-      initialDelaySeconds: 30
-      periodSeconds: 10
-    readiness:
-      enabled: true
-      httpGet:
-        path: /health
-        port: http
-      initialDelaySeconds: 5
-      periodSeconds: 5
 
   # Resource limits (based on Goldilocks/VPA recommendations, rounded to clean values)
   resources:
@@ -87,18 +64,28 @@ catalog:
       enabled: true
       secretName: lakekeeper-tls
 
-# Authentication configuration
+# Authentication configuration (OIDC via Keycloak)
 auth:
   oauth2:
     providerUri: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}"
     audience: "lakekeeper"
-  authz:
-    backend: "allowall"
+    ui:
+      clientID: "lakekeeper"
+      scopes: "openid profile lakekeeper"
+
+# Authorization backend
+authz:
+  backend: "allowall"
+
+# Secret backend for storing storage credentials.
+# The encryption key Secret is generated and kept by the chart across upgrades
+# (helm.sh/resource-policy: keep), so no key needs to be supplied here.
+secretBackend:
+  type: "Postgres"
 
 # PostgreSQL subchart (disabled since we use external)
 postgresql:
   enabled: false
-
 
 # External database configuration
 externalDatabase:

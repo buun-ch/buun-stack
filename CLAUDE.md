@@ -97,6 +97,28 @@ kubectl --context <host>-oidc get nodes       # Test OIDC auth
 - **Templates**: `*.gomplate.yaml` files use environment variables from `.env.local`
 - **Custom Extensions**: `custom.just` can be created for additional workflows
 
+### In-Cluster Service Access (Telepresence)
+
+Recipes that reach a service via its in-cluster DNS name (`*.svc.cluster.local`)
+require an active `telepresence connect` from the local machine. Any such recipe
+MUST call `just utils::check-telepresence` as its first step (right after
+`set -euo pipefail`) so it fails fast with a clear message instead of an opaque
+`curl` "could not resolve host" error.
+
+```just
+my-recipe:
+    #!/bin/bash
+    set -euo pipefail
+    just utils::check-telepresence
+    curl -s "http://myservice.${MY_NAMESPACE}.svc.cluster.local:8080/..."
+```
+
+- The shared implementation lives in `utils/justfile` (`check-telepresence`).
+  Do NOT re-implement it per module; always call `just utils::check-telepresence`.
+- It greps for `Traffic Manager: Connected` in `telepresence status` output —
+  `telepresence status` exits 0 even when disconnected, so the exit code alone is
+  not a reliable check.
+
 ### Resource Management
 
 All components should have appropriate resource requests and limits configured. See [docs/resource-management.md](docs/resource-management.md) for:

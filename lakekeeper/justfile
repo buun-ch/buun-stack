@@ -1,9 +1,16 @@
 set fallback := true
 
 export LAKEKEEPER_NAMESPACE := env("LAKEKEEPER_NAMESPACE", "lakekeeper")
-export LAKEKEEPER_CHART_VERSION := env("LAKEKEEPER_CHART_VERSION", "0.7.1")
+export LAKEKEEPER_CHART_VERSION := env("LAKEKEEPER_CHART_VERSION", "0.11.0")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+
+# Object storage backend for warehouses: minio | rustfs
+export LAKEKEEPER_S3_BACKEND := env("LAKEKEEPER_S3_BACKEND", "minio")
+# S3 access delegation method: sts (vended credentials) | remote-signing
+export LAKEKEEPER_S3_DELEGATION := env("LAKEKEEPER_S3_DELEGATION", "sts")
+export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
+export RUSTFS_NAMESPACE := env("RUSTFS_NAMESPACE", "rustfs")
 
 [private]
 default:
@@ -234,16 +241,20 @@ install:
 
     gomplate -f lakekeeper-values.gomplate.yaml -o lakekeeper-values.yaml
 
-    # Use --wait=false to avoid circular dependency:
-    # Helm waits for post-install hooks (migration job) to complete,
-    # but migration job can't start until Helm deployment finishes
+    # Use --wait=hookOnly so Helm waits only for the migration hook job,
+    # not for the catalog Deployment to become Ready (readiness is checked
+    # explicitly below). This is the Helm v4 replacement for the deprecated
+    # boolean --wait=false.
     helm upgrade --install lakekeeper lakekeeper/lakekeeper \
         --version ${LAKEKEEPER_CHART_VERSION} -n ${LAKEKEEPER_NAMESPACE} \
-        --timeout=10m --wait=false \
+        --timeout=10m --wait=hookOnly \
         -f lakekeeper-values.yaml
 
     echo "Waiting for database migration to complete..."
-    kubectl wait --for=condition=complete job/lakekeeper-db-migration-1 \
+    # The migration job name is suffixed with the Helm release revision
+    # (lakekeeper-db-migration-<revision>), so resolve it instead of hardcoding "1"
+    REVISION=$(helm status lakekeeper -n ${LAKEKEEPER_NAMESPACE} -o json | jq -r '.version')
+    kubectl wait --for=condition=complete job/lakekeeper-db-migration-${REVISION} \
         -n ${LAKEKEEPER_NAMESPACE} --timeout=300s
 
     echo "Waiting for Lakekeeper deployment to be ready..."
@@ -298,15 +309,45 @@ cleanup:
         echo "Cleanup cancelled"
     fi
 
-# Create warehouse with vended credentials enabled (STS)
+# Create warehouse (backend/delegation via LAKEKEEPER_S3_BACKEND, LAKEKEEPER_S3_DELEGATION)
 create-warehouse warehouse_name='default' bucket='warehouse':
     #!/bin/bash
     set -euo pipefail
-    echo "Creating warehouse '{{ warehouse_name }}' with vended credentials (STS) enabled..."
+    just utils::check-telepresence
 
-    # Get MinIO credentials
-    MINIO_ACCESS_KEY=$(kubectl get secret -n minio minio -o jsonpath='{.data.rootUser}' | base64 -d)
-    MINIO_SECRET_KEY=$(kubectl get secret -n minio minio -o jsonpath='{.data.rootPassword}' | base64 -d)
+    # Resolve S3 endpoint and root credentials for the selected backend
+    case "${LAKEKEEPER_S3_BACKEND}" in
+        minio)
+            S3_ENDPOINT="http://minio.${MINIO_NAMESPACE}:9000"
+            S3_ACCESS_KEY=$(kubectl get secret -n ${MINIO_NAMESPACE} minio -o jsonpath='{.data.rootUser}' | base64 -d)
+            S3_SECRET_KEY=$(kubectl get secret -n ${MINIO_NAMESPACE} minio -o jsonpath='{.data.rootPassword}' | base64 -d)
+            ;;
+        rustfs)
+            S3_ENDPOINT="http://rustfs.${RUSTFS_NAMESPACE}:9000"
+            S3_ACCESS_KEY=$(kubectl get secret -n ${RUSTFS_NAMESPACE} rustfs -o jsonpath='{.data.access-key}' | base64 -d)
+            S3_SECRET_KEY=$(kubectl get secret -n ${RUSTFS_NAMESPACE} rustfs -o jsonpath='{.data.secret-key}' | base64 -d)
+            ;;
+        *)
+            echo "Error: unknown LAKEKEEPER_S3_BACKEND '${LAKEKEEPER_S3_BACKEND}' (expected: minio | rustfs)" >&2
+            exit 1
+            ;;
+    esac
+
+    # Build the access-delegation fields for the storage profile
+    case "${LAKEKEEPER_S3_DELEGATION}" in
+        sts)
+            DELEGATION_FIELDS='"sts-enabled": true, "remote-signing-enabled": false,'
+            ;;
+        remote-signing)
+            DELEGATION_FIELDS='"sts-enabled": false, "remote-signing-enabled": true,'
+            ;;
+        *)
+            echo "Error: unknown LAKEKEEPER_S3_DELEGATION '${LAKEKEEPER_S3_DELEGATION}' (expected: sts | remote-signing)" >&2
+            exit 1
+            ;;
+    esac
+
+    echo "Creating warehouse '{{ warehouse_name }}' (backend=${LAKEKEEPER_S3_BACKEND}, delegation=${LAKEKEEPER_S3_DELEGATION}, endpoint=${S3_ENDPOINT})..."
 
     # Create warehouse JSON configuration
     WAREHOUSE_CONFIG=$(cat <<EOF
@@ -314,17 +355,17 @@ create-warehouse warehouse_name='default' bucket='warehouse':
       "warehouse-name": "{{ warehouse_name }}",
       "storage-credential": {
         "type": "s3",
-        "aws-access-key-id": "$MINIO_ACCESS_KEY",
-        "aws-secret-access-key": "$MINIO_SECRET_KEY",
+        "aws-access-key-id": "$S3_ACCESS_KEY",
+        "aws-secret-access-key": "$S3_SECRET_KEY",
         "credential-type": "access-key"
       },
       "storage-profile": {
         "type": "s3",
         "bucket": "{{ bucket }}",
         "region": "us-east-1",
-        "sts-enabled": true,
+        ${DELEGATION_FIELDS}
         "flavor": "s3-compat",
-        "endpoint": "http://minio.minio:9000",
+        "endpoint": "$S3_ENDPOINT",
         "path-style-access": true,
         "key-prefix": "{{ warehouse_name }}"
       },
@@ -383,6 +424,7 @@ create-warehouse warehouse_name='default' bucket='warehouse':
 create-warehouse-namespace warehouse_name namespace:
     #!/bin/bash
     set -euo pipefail
+    just utils::check-telepresence
     echo "Creating namespace '{{ namespace }}' in warehouse '{{ warehouse_name }}'..."
 
     # Get API client credentials for authentication
@@ -467,6 +509,7 @@ create-warehouse-namespace warehouse_name namespace:
 list-warehouses:
     #!/bin/bash
     set -euo pipefail
+    just utils::check-telepresence
     echo "Listing all warehouses..."
 
     # Get API client credentials for authentication
@@ -513,6 +556,7 @@ list-warehouses:
 get-warehouse warehouse_name:
     #!/bin/bash
     set -euo pipefail
+    just utils::check-telepresence
     echo "Getting details for warehouse '{{ warehouse_name }}'..."
 
     # Get API client credentials for authentication
@@ -584,6 +628,7 @@ get-warehouse warehouse_name:
 delete-warehouse-namespace warehouse_name namespace:
     #!/bin/bash
     set -euo pipefail
+    just utils::check-telepresence
     echo "This will delete namespace '{{ namespace }}' from warehouse '{{ warehouse_name }}'."
     if ! gum confirm "Are you sure you want to proceed?"; then
         echo "Deletion cancelled"
@@ -659,6 +704,7 @@ delete-warehouse-namespace warehouse_name namespace:
 list-warehouse-namespaces warehouse_name:
     #!/bin/bash
     set -euo pipefail
+    just utils::check-telepresence
     echo "Listing namespaces in warehouse '{{ warehouse_name }}'..."
 
     # Get API client credentials for authentication
@@ -727,6 +773,7 @@ list-warehouse-namespaces warehouse_name:
 list-tables warehouse_name namespace:
     #!/bin/bash
     set -euo pipefail
+    just utils::check-telepresence
     echo "Listing tables in namespace '{{ namespace }}' of warehouse '{{ warehouse_name }}'..."
 
     # Get API client credentials for authentication
@@ -793,6 +840,7 @@ list-tables warehouse_name namespace:
 delete-table warehouse_name namespace table_name:
     #!/bin/bash
     set -euo pipefail
+    just utils::check-telepresence
     echo "Deleting table '{{ table_name }}' from namespace '{{ namespace }}' in warehouse '{{ warehouse_name }}'..."
 
     # Get API client credentials for authentication
@@ -857,6 +905,7 @@ delete-table warehouse_name namespace table_name:
 list-views warehouse_name namespace:
     #!/bin/bash
     set -euo pipefail
+    just utils::check-telepresence
     echo "Listing views in namespace '{{ namespace }}' of warehouse '{{ warehouse_name }}'..."
 
     # Get API client credentials for authentication
@@ -923,6 +972,7 @@ list-views warehouse_name namespace:
 delete-view warehouse_name namespace view_name:
     #!/bin/bash
     set -euo pipefail
+    just utils::check-telepresence
     echo "Deleting view '{{ view_name }}' from namespace '{{ namespace }}' in warehouse '{{ warehouse_name }}'..."
 
     # Get API client credentials for authentication
@@ -987,6 +1037,7 @@ delete-view warehouse_name namespace view_name:
 delete-all-views-in-namespace warehouse_name namespace:
     #!/bin/bash
     set -euo pipefail
+    just utils::check-telepresence
     echo "Deleting all views in namespace '{{ namespace }}' of warehouse '{{ warehouse_name }}'..."
 
     # Get API client credentials
@@ -1074,6 +1125,7 @@ delete-all-views-in-namespace warehouse_name namespace:
 delete-all-tables-in-namespace warehouse_name namespace:
     #!/bin/bash
     set -euo pipefail
+    just utils::check-telepresence
     echo "Deleting all tables in namespace '{{ namespace }}' of warehouse '{{ warehouse_name }}'..."
 
     # Get API client credentials
@@ -1161,6 +1213,7 @@ delete-all-tables-in-namespace warehouse_name namespace:
 delete-warehouse warehouse_name force='false':
     #!/bin/bash
     set -euo pipefail
+    just utils::check-telepresence
 
     # Get API client credentials for authentication
     CLIENT_SECRET=$(just vault::get lakekeeper/api-client/lakekeeper-api client_secret 2>/dev/null || echo "")

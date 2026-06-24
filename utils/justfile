@@ -8,6 +8,22 @@ default:
 random-password length='48':
     @LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | fold -w {{length}} | head -n 1
 
+# Check that telepresence is connected (for recipes that use in-cluster DNS)
+check-telepresence:
+    #!/bin/bash
+    set -euo pipefail
+    if ! command -v telepresence &>/dev/null; then
+        echo "Error: telepresence is not installed" >&2
+        exit 1
+    fi
+    # `telepresence status` exits 0 even when disconnected, so check the output
+    if ! telepresence status 2>/dev/null | grep -qi "Traffic Manager: Connected"; then
+        echo "Error: telepresence is not connected" >&2
+        echo "This recipe reaches an in-cluster service via *.svc.cluster.local." >&2
+        echo "Please run: telepresence connect" >&2
+        exit 1
+    fi
+
 # Check if connection to host and port is possible
 check-connection host='' port='':
     #!/bin/bash

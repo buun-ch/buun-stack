@@ -52,13 +52,46 @@ just lakekeeper::create-warehouse production warehouse
 This creates a warehouse with:
 
 - **STS enabled** for vended credentials (temporary S3 tokens)
-- **S3-compatible storage** (MinIO) with path-style access
-- **Automatic credential rotation** via MinIO STS
+- **S3-compatible storage** with path-style access
+- **Automatic credential rotation** via the object store's STS
 
 **Prerequisites**:
 
-- MinIO bucket must exist (create with `just minio::create-bucket <bucket-name>`)
+- The target bucket must already exist on the object store, otherwise warehouse
+  creation fails its validation write with `The specified bucket does not exist`.
+  Create it first:
+    - MinIO: `just minio::create-bucket <bucket-name>`
+    - RustFS: `just rustfs::create-bucket <bucket-name>`
 - API client credentials must be available in Vault
+
+#### Selecting the Storage Backend and Delegation Method
+
+`create-warehouse` selects the object store and the S3 access-delegation method via
+environment variables (defaults preserve the original MinIO + STS behavior):
+
+| Variable                   | Values                  | Default | Meaning                                                                              |
+| -------------------------- | ----------------------- | ------- | ------------------------------------------------------------------------------------ |
+| `LAKEKEEPER_S3_BACKEND`    | `minio`, `rustfs`       | `minio` | Which object store to target (endpoint + root credentials)                           |
+| `LAKEKEEPER_S3_DELEGATION` | `sts`, `remote-signing` | `sts`   | How clients access S3: STS vended credentials, or Lakekeeper remote signing (no STS) |
+
+```bash
+# MinIO + STS (default — same as before)
+just lakekeeper::create-warehouse default warehouse
+
+# RustFS + STS vended credentials
+LAKEKEEPER_S3_BACKEND=rustfs LAKEKEEPER_S3_DELEGATION=sts \
+    just lakekeeper::create-warehouse rustfs-sts warehouse
+
+# RustFS + remote signing (only needs SigV4, no STS on the object store)
+LAKEKEEPER_S3_BACKEND=rustfs LAKEKEEPER_S3_DELEGATION=remote-signing \
+    just lakekeeper::create-warehouse rustfs-rs warehouse
+```
+
+> **RustFS note (evaluation):** RustFS implements S3 STS `AssumeRole`, but the
+> warehouse validation only performs a small single-part write. PyIceberg/PyArrow
+> write tables via multipart upload, which exercises a different path — verify an
+> actual table write end-to-end before trusting the STS path. If STS gives
+> `ACCESS_DENIED` on writes, fall back to `LAKEKEEPER_S3_DELEGATION=remote-signing`.
 
 **Benefits of Vended Credentials**:
 
