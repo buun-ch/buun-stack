@@ -96,21 +96,6 @@ get-readonly-api-key:
         -o jsonpath="{.data.readonly_api_key}" | base64 -d
     @echo
 
-# Check if telepresence is connected
-[private]
-check-telepresence:
-    #!/bin/bash
-    set -euo pipefail
-    if ! command -v telepresence &>/dev/null; then
-        echo "Error: telepresence is not installed" >&2
-        exit 1
-    fi
-    if ! telepresence status &>/dev/null; then
-        echo "Error: telepresence is not connected" >&2
-        echo "Please run: telepresence connect" >&2
-        exit 1
-    fi
-
 # Get Qdrant service URL
 [private]
 get-service-url:
@@ -120,7 +105,7 @@ get-service-url:
 health-check:
     #!/bin/bash
     set -euo pipefail
-    just check-telepresence
+    just utils::check-telepresence
     API_KEY=$(just get-api-key)
     QDRANT_URL=$(just get-service-url)
     echo "Checking Qdrant health at ${QDRANT_URL}..."
@@ -131,7 +116,7 @@ health-check:
 test:
     #!/bin/bash
     set -euo pipefail
-    just check-telepresence
+    just utils::check-telepresence
     API_KEY=$(just get-api-key)
     QDRANT_URL=$(just get-service-url)
     COLLECTION_NAME="test_collection_$(date +%s)"
