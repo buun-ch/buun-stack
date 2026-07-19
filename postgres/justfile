@@ -10,7 +10,7 @@ export POSTGRES_MEMORY_REQUEST := env("POSTGRES_MEMORY_REQUEST", "2Gi")
 export POSTGRES_MEMORY_LIMIT := env("POSTGRES_MEMORY_LIMIT", "4Gi")
 export POSTGRES_CPU_REQUEST := env("POSTGRES_CPU_REQUEST", "200m")
 export POSTGRES_CPU_LIMIT := env("POSTGRES_CPU_LIMIT", "2")
-export POSTGRES_SECCOMP_PROFILE := env("POSTGRES_SECCOMP_PROFILE", "Unconfined")
+export POSTGRES_SECCOMP_PROFILE := env("POSTGRES_SECCOMP_PROFILE", "RuntimeDefault")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 
@@ -57,6 +57,21 @@ uninstall-cnpg:
     @helm uninstall cnpg -n ${CNPG_NAMESPACE} --wait
     @kubectl delete namespace ${CNPG_NAMESPACE} --ignore-not-found
 
+# Set seccompProfile on the Cluster (the cnpg/cluster chart cannot render it)
+[private]
+patch-seccomp:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Patching seccompProfile..."
+    IFS=':' read -r SECCOMP_TYPE SECCOMP_PROFILE <<< "${POSTGRES_SECCOMP_PROFILE}"
+    if [ -n "${SECCOMP_PROFILE}" ]; then
+        kubectl patch clusters.postgresql.cnpg.io postgres-cluster -n ${CNPG_NAMESPACE} \
+            --type merge -p "{\"spec\":{\"seccompProfile\":{\"type\":\"${SECCOMP_TYPE}\",\"localhostProfile\":\"${SECCOMP_PROFILE}\"}}}"
+    else
+        kubectl patch clusters.postgresql.cnpg.io postgres-cluster -n ${CNPG_NAMESPACE} \
+            --type merge -p "{\"spec\":{\"seccompProfile\":{\"type\":\"${SECCOMP_TYPE}\"}}}"
+    fi
+
 # Create Postgres cluster
 create-cluster:
     #!/bin/bash
@@ -89,17 +104,7 @@ create-cluster:
     helm upgrade --install postgres-cluster cnpg/cluster \
         --version ${CNPG_CLUSTER_CHART_VERSION} \
         -n ${CNPG_NAMESPACE} -f postgres-cluster-values.yaml
-
-    # Patch seccompProfile (not supported by Helm chart)
-    echo "Patching seccompProfile..."
-    IFS=':' read -r SECCOMP_TYPE SECCOMP_PROFILE <<< "${POSTGRES_SECCOMP_PROFILE}"
-    if [ -n "${SECCOMP_PROFILE}" ]; then
-        kubectl patch clusters.postgresql.cnpg.io postgres-cluster -n ${CNPG_NAMESPACE} \
-            --type merge -p "{\"spec\":{\"seccompProfile\":{\"type\":\"${SECCOMP_TYPE}\",\"localhostProfile\":\"${SECCOMP_PROFILE}\"}}}"
-    else
-        kubectl patch clusters.postgresql.cnpg.io postgres-cluster -n ${CNPG_NAMESPACE} \
-            --type merge -p "{\"spec\":{\"seccompProfile\":{\"type\":\"${SECCOMP_TYPE}\"}}}"
-    fi
+    just patch-seccomp
 
     echo "Waiting for PostgreSQL cluster to be ready..."
     kubectl wait --for=condition=Ready clusters.postgresql.cnpg.io/postgres-cluster \
@@ -113,17 +118,7 @@ upgrade:
     helm upgrade postgres-cluster cnpg/cluster \
         --version ${CNPG_CLUSTER_CHART_VERSION} \
         -n ${CNPG_NAMESPACE} -f postgres-cluster-values.yaml
-
-    # Patch seccompProfile (not supported by Helm chart)
-    echo "Patching seccompProfile..."
-    IFS=':' read -r SECCOMP_TYPE SECCOMP_PROFILE <<< "${POSTGRES_SECCOMP_PROFILE}"
-    if [ -n "${SECCOMP_PROFILE}" ]; then
-        kubectl patch clusters.postgresql.cnpg.io postgres-cluster -n ${CNPG_NAMESPACE} \
-            --type merge -p "{\"spec\":{\"seccompProfile\":{\"type\":\"${SECCOMP_TYPE}\",\"localhostProfile\":\"${SECCOMP_PROFILE}\"}}}"
-    else
-        kubectl patch clusters.postgresql.cnpg.io postgres-cluster -n ${CNPG_NAMESPACE} \
-            --type merge -p "{\"spec\":{\"seccompProfile\":{\"type\":\"${SECCOMP_TYPE}\"}}}"
-    fi
+    just patch-seccomp
 
     echo "Waiting for cluster to be ready..."
     kubectl wait --for=condition=Ready clusters.postgresql.cnpg.io/postgres-cluster \

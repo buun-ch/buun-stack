@@ -58,15 +58,17 @@ This will:
 | `POSTGRES_MEMORY_LIMIT`      | `4Gi`            | Memory limit                              |
 | `POSTGRES_CPU_REQUEST`       | `200m`           | CPU request                               |
 | `POSTGRES_CPU_LIMIT`         | `2`              | CPU limit                                 |
-| `POSTGRES_SECCOMP_PROFILE`   | `Unconfined`     | Seccomp profile (see below)               |
+| `POSTGRES_SECCOMP_PROFILE`   | `RuntimeDefault` | Seccomp profile (see below)               |
 
 ### Security Configuration
 
-PostgreSQL 18's `io_uring` async I/O requires relaxed security settings:
+The default install uses the `RuntimeDefault` seccomp profile and PostgreSQL 18's
+default `io_method` (`worker`). No relaxed security settings are required.
 
 #### Pod Security Standards
 
-The namespace is configured with `privileged` enforcement to allow `Unconfined` seccomp profile:
+The namespace is configured with `privileged` enforcement so that `Unconfined`
+seccomp remains available for the optional `io_uring` setup below:
 
 | Label                                      | Value        | Description                          |
 | ------------------------------------------ | ------------ | ------------------------------------ |
@@ -79,28 +81,40 @@ The `POSTGRES_SECCOMP_PROFILE` variable controls the seccomp security profile:
 
 | Value                     | Description                                     |
 | ------------------------- | ----------------------------------------------- |
-| `Unconfined`              | No restrictions, allows `io_uring` (default)    |
-| `RuntimeDefault`          | Secure profile, blocks `io_uring`               |
+| `RuntimeDefault`          | Secure profile, blocks `io_uring` (default)     |
+| `Unconfined`              | No restrictions, allows `io_uring`              |
 | `Localhost:filename.json` | Custom profile from `/var/lib/kubelet/seccomp/` |
 
-#### Why Relaxed Security?
+#### Enabling io_uring (Optional)
 
-PostgreSQL 18 introduces `io_uring` for async I/O, providing up to 3x read performance improvement. However, `io_uring` syscalls are blocked by:
+PostgreSQL 18 introduces `io_uring` for async I/O, providing up to 3x read
+performance improvement. Its syscalls are blocked by the `RuntimeDefault`
+seccomp profile and by `restricted` / `baseline` Pod Security Standards, so it
+needs `privileged` PSS and the `Unconfined` seccomp profile.
 
-- `RuntimeDefault` seccomp profile
-- `restricted` and `baseline` Pod Security Standards
-
-To use `io_uring`, the namespace requires `privileged` PSS and `Unconfined` seccomp profile.
-
-#### Disabling io_uring (Stricter Security)
-
-If you prefer stricter security over performance:
+Enable it **after** the cluster exists, as a two-step procedure:
 
 ```bash
-# In parameters.yaml
-io_method: worker  # Instead of io_uring
+just postgres::install
 
-# Set seccomp to RuntimeDefault
+# Then uncomment io_method in parameters.yaml
+io_method: io_uring
+
+POSTGRES_SECCOMP_PROFILE=Unconfined just postgres::upgrade
+```
+
+The order matters. `create-cluster` cannot apply `seccompProfile` before the
+operator generates the `initdb` Job, because the cnpg/cluster chart does not
+render that field and Job pod specs are immutable once created. A fresh install
+that already requests `io_uring` therefore fails with
+`could not setup io_uring queue: Operation not permitted`. Running `upgrade`
+against an existing cluster has no such problem: no `initdb` Job is involved, so
+patching the Cluster simply rolls the instance pods with the new profile.
+
+#### Reverting to RuntimeDefault
+
+```bash
+# Comment out io_method in parameters.yaml, then
 POSTGRES_SECCOMP_PROFILE=RuntimeDefault just postgres::upgrade
 ```
 
@@ -139,9 +153,10 @@ vim postgres/parameters.yaml
 
 ```yaml
 # PostgreSQL 18 Async I/O settings
-io_method: worker              # Use 'io_uring' if seccomp allows
+# io_method: io_uring          # Default is 'worker'; see Enabling io_uring
 effective_io_concurrency: "200"
 maintenance_io_concurrency: "50"
+io_max_combine_limit: 512kB    # Silently caps io_combine_limit
 io_combine_limit: 512kB
 
 # Memory settings
@@ -172,7 +187,10 @@ PostgreSQL 18 introduces asynchronous I/O for improved read performance:
 | `maintenance_io_concurrency` | Concurrent I/O for maintenance           | No               |
 | `io_combine_limit`           | Read-ahead combining (max 512kB)         | No               |
 
-To use `io_uring`, set `POSTGRES_SECCOMP_PROFILE=Unconfined`.
+To use `io_uring`, follow the two-step procedure in
+[Enabling io_uring](#enabling-io_uring-optional). Note that `io_combine_limit`
+is silently capped by `io_max_combine_limit` (both default to `128kB`), so raise
+the two together.
 
 ## Usage
 
