@@ -81,10 +81,12 @@ install:
             if gum confirm "Enable Prometheus monitoring?"; then
                 MONITORING_ENABLED="true"
             else
-                MONITORING_ENABLED="false"
+                MONITORING_ENABLED=""
             fi
         fi
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     gomplate -f meilisearch-values.gomplate.yaml -o meilisearch-values.yaml
     helm upgrade --install meilisearch meilisearch/meilisearch \

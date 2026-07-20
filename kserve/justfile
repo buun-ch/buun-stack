@@ -125,12 +125,12 @@ install:
             if gum confirm "Enable Prometheus monitoring (ServiceMonitor)?"; then
                 MONITORING_ENABLED="true"
             else
-                MONITORING_ENABLED="false"
+                MONITORING_ENABLED=""
             fi
         fi
-    else
-        MONITORING_ENABLED="false"
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     just install-crds
 
@@ -176,12 +176,12 @@ upgrade:
             if gum confirm "Enable Prometheus monitoring (ServiceMonitor)?"; then
                 MONITORING_ENABLED="true"
             else
-                MONITORING_ENABLED="false"
+                MONITORING_ENABLED=""
             fi
         fi
-    else
-        MONITORING_ENABLED="false"
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     echo "Upgrading KServe CRDs..."
     just install-crds

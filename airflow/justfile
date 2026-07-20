@@ -350,10 +350,12 @@ install:
             if gum confirm "Enable Prometheus monitoring?"; then
                 MONITORING_ENABLED="true"
             else
-                MONITORING_ENABLED="false"
+                MONITORING_ENABLED=""
             fi
         fi
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     # Enable monitoring label on namespace if monitoring is enabled
     if [ "${MONITORING_ENABLED}" = "true" ]; then

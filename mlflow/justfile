@@ -242,12 +242,12 @@ install:
             if gum confirm "Enable Prometheus monitoring (ServiceMonitor)?"; then
                 MONITORING_ENABLED="true"
             else
-                MONITORING_ENABLED="false"
+                MONITORING_ENABLED=""
             fi
         fi
-    else
-        MONITORING_ENABLED="false"
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     just setup-postgres-db
     just create-db-secret
@@ -374,12 +374,12 @@ upgrade:
             if gum confirm "Enable Prometheus monitoring (ServiceMonitor)?"; then
                 MONITORING_ENABLED="true"
             else
-                MONITORING_ENABLED="false"
+                MONITORING_ENABLED=""
             fi
         fi
-    else
-        MONITORING_ENABLED="false"
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     echo "Generating Helm values..."
     gomplate -f values.gomplate.yaml -o values.yaml

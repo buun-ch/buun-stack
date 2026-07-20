@@ -199,10 +199,12 @@ install:
             if gum confirm "Enable Prometheus monitoring?"; then
                 MONITORING_ENABLED="true"
             else
-                MONITORING_ENABLED="false"
+                MONITORING_ENABLED=""
             fi
         fi
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
     # ... helm install
 
     if [ "${MONITORING_ENABLED}" = "true" ]; then
@@ -234,6 +236,19 @@ spec:
 ```
 
 **Requirements:** (1) Namespace label `buun.channel/enable-monitoring=true`, (2) ServiceMonitor label `release=kube-prometheus-stack`, (3) Deploy after helm install.
+
+**MONITORING_ENABLED values:** Only `"true"` (enabled) or `""` (disabled). NEVER use
+`"false"` — templates that use the truthiness check `{{- if .Env.MONITORING_ENABLED }}`
+treat the non-empty string `"false"` as enabled. When a template needs a literal boolean,
+render it explicitly: `enabled: {{ if .Env.MONITORING_ENABLED }}true{{ else }}false{{ end }}`.
+
+**Fail fast:** Any recipe that renders a ServiceMonitor MUST call
+`just utils::check-monitoring "${MONITORING_ENABLED}"` right after the prompt block and
+before creating any resources. It errors with an actionable message when
+`MONITORING_ENABLED=true` but kube-prometheus-stack (and thus the
+`monitoring.coreos.com/v1` CRDs) is not installed — otherwise `helm install` fails late
+with an opaque "no matches for kind ServiceMonitor" error after users/databases/OIDC
+clients have already been created.
 
 ### Authentication Flow
 

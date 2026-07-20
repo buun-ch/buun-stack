@@ -71,7 +71,7 @@ install:
             if gum confirm "Enable Prometheus monitoring?"; then
                 MONITORING_ENABLED="true"
             else
-                MONITORING_ENABLED="false"
+                MONITORING_ENABLED=""
             fi
         fi
         if [ "${MONITORING_ENABLED}" = "true" ]; then
@@ -80,6 +80,8 @@ install:
             kubectl label namespace ${FALKORDB_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
         fi
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     gomplate -f falkordb-values.gomplate.yaml -o falkordb-values.yaml
     helm upgrade --install falkordb ../charts/falkordb \

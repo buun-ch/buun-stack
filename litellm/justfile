@@ -321,6 +321,8 @@ install:
         fi
     fi
 
+    just utils::check-monitoring "${MONITORING_ENABLED}"
+
     if [ -z "${LITELLM_LANGFUSE_INTEGRATION_ENABLED}" ]; then
         if gum confirm "Enable Langfuse integration?"; then
             LITELLM_LANGFUSE_INTEGRATION_ENABLED="true"
@@ -417,6 +419,8 @@ upgrade:
             fi
         fi
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     # Detect existing Langfuse configuration
     if [ -z "${LITELLM_LANGFUSE_INTEGRATION_ENABLED}" ]; then
@@ -730,6 +734,8 @@ setup-oidc:
         fi
     fi
 
+    just utils::check-monitoring "${MONITORING_ENABLED}"
+
     echo "Generating Helm values with OIDC configuration..."
     gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml
 
@@ -769,6 +775,8 @@ disable-oidc:
             fi
         fi
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     echo "Generating Helm values without OIDC..."
     gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml
@@ -887,6 +895,8 @@ setup-langfuse:
         fi
     fi
 
+    just utils::check-monitoring "${MONITORING_ENABLED}"
+
     LITELLM_LANGFUSE_INTEGRATION_ENABLED="true"
 
     echo "Generating Helm values with Langfuse integration..."
@@ -923,6 +933,8 @@ disable-langfuse:
             fi
         fi
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     echo "Generating Helm values without Langfuse..."
     gomplate -f litellm-values.gomplate.yaml -o litellm-values.yaml

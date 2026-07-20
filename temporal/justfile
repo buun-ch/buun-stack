@@ -270,6 +270,8 @@ install:
         fi
     fi
 
+    just utils::check-monitoring "${MONITORING_ENABLED}"
+
     echo "Installing Temporal..."
 
     just create-namespace
@@ -337,6 +339,8 @@ upgrade:
             fi
         fi
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     if [ "${MONITORING_ENABLED}" = "true" ]; then
         kubectl label namespace ${TEMPORAL_NAMESPACE} \

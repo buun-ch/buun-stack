@@ -1,5 +1,7 @@
 set dotenv-filename := ".env.local"
 
+export PROMETHEUS_NAMESPACE := env("PROMETHEUS_NAMESPACE", "monitoring")
+
 [private]
 default:
     @just --list --unsorted --list-submodules
@@ -23,6 +25,32 @@ check-telepresence:
         echo "Please run: telepresence connect" >&2
         exit 1
     fi
+
+# Check that Prometheus Operator is available when monitoring is requested
+check-monitoring enabled='':
+    #!/bin/bash
+    set -euo pipefail
+    ENABLED="{{ enabled }}"
+    if [ -z "${ENABLED}" ]; then
+        exit 0
+    fi
+    if [ "${ENABLED}" != "true" ]; then
+        echo "Error: MONITORING_ENABLED must be 'true' or empty (got '${ENABLED}')." >&2
+        echo "Any non-empty value enables monitoring in the Helm values templates." >&2
+        echo "Set MONITORING_ENABLED= (empty) in .env.local to disable monitoring." >&2
+        exit 1
+    fi
+    if helm status kube-prometheus-stack -n ${PROMETHEUS_NAMESPACE} &>/dev/null; then
+        exit 0
+    fi
+    echo "Error: MONITORING_ENABLED is 'true' but kube-prometheus-stack is not" >&2
+    echo "installed in the '${PROMETHEUS_NAMESPACE}' namespace." >&2
+    echo "The ServiceMonitor CRD (monitoring.coreos.com/v1) is required." >&2
+    echo "" >&2
+    echo "Either install it:" >&2
+    echo "  just prometheus::install" >&2
+    echo "or disable monitoring by setting MONITORING_ENABLED= (empty) in .env.local" >&2
+    exit 1
 
 # Check if connection to host and port is possible
 check-connection host='' port='':

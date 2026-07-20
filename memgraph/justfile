@@ -85,7 +85,7 @@ install:
             if gum confirm "Enable Prometheus monitoring?"; then
                 MONITORING_ENABLED="true"
             else
-                MONITORING_ENABLED="false"
+                MONITORING_ENABLED=""
             fi
         fi
         if [ "${MONITORING_ENABLED}" = "true" ]; then
@@ -94,6 +94,8 @@ install:
             kubectl label namespace ${MEMGRAPH_NAMESPACE} buun.channel/enable-monitoring=true --overwrite
         fi
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     export METRICS_ENABLED SERVICEMONITOR_ENABLED
     gomplate -f memgraph-values.gomplate.yaml -o memgraph-values.yaml

@@ -125,7 +125,7 @@ ingress:
 
 # ServiceMonitor for Prometheus
 serviceMonitor:
-  enabled: {{ .Env.MONITORING_ENABLED }}
+  enabled: {{ if .Env.MONITORING_ENABLED }}true{{ else }}false{{ end }}
   useServicePort: false
   namespace: "{{ .Env.PROMETHEUS_NAMESPACE }}"
   interval: 30s

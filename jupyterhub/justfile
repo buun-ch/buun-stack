@@ -160,12 +160,12 @@ install root_token='':
             if gum confirm "Enable Prometheus monitoring (ServiceMonitor)?"; then
                 MONITORING_ENABLED="true"
             else
-                MONITORING_ENABLED="false"
+                MONITORING_ENABLED=""
             fi
         fi
-    else
-        MONITORING_ENABLED="false"
     fi
+
+    just utils::check-monitoring "${MONITORING_ENABLED}"
 
     if helm status nvidia-device-plugin -n ${NVIDIA_DEVICE_PLUGIN_NAMESPACE:-nvidia-device-plugin} &>/dev/null; then
         if [ -z "${JUPYTERHUB_GPU_ENABLED}" ]; then
