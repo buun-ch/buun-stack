@@ -10,7 +10,7 @@ This module deploys Langfuse using the official Helm chart with:
 - **PostgreSQL backend** for application data
 - **ClickHouse database** for analytics and traces
 - **Redis (Valkey)** for caching and queues
-- **MinIO/S3 storage** for event uploads and batch exports
+- **S3-compatible object storage** (MinIO or RustFS) for event uploads and batch exports
 - **Traefik ingress** for HTTPS access
 - **External Secrets Operator integration** for secure credential management
 
@@ -20,7 +20,7 @@ This module deploys Langfuse using the official Helm chart with:
 - Keycloak installed and configured
 - PostgreSQL cluster (CloudNativePG)
 - ClickHouse cluster
-- MinIO object storage
+- Object storage: MinIO or RustFS
 - External Secrets Operator (optional, for Vault integration)
 
 ## Installation
@@ -42,7 +42,7 @@ You will be prompted for:
 - Redis (Valkey) for caching and queues
 - PostgreSQL database `langfuse` with dedicated user
 - ClickHouse database `langfuse` with dedicated user
-- MinIO bucket `langfuse` for storage
+- Object storage bucket `langfuse` (MinIO or RustFS)
 - Keycloak OAuth client (confidential client)
 - Keycloak user `langfuse` for system access
 - Vault secrets (if External Secrets Operator is available)
@@ -56,6 +56,39 @@ LANGFUSE_NAMESPACE=langfuse                # Kubernetes namespace
 LANGFUSE_CHART_VERSION=<version>           # Helm chart version
 LANGFUSE_HOST=langfuse.example.com         # External hostname
 LANGFUSE_OIDC_CLIENT_ID=langfuse           # Keycloak client ID
+LANGFUSE_OBJECT_STORAGE=minio              # Object storage backend: minio | rustfs
+LANGFUSE_BUCKET=langfuse                   # Bucket name for event uploads
+```
+
+### Object Storage Backend
+
+`LANGFUSE_OBJECT_STORAGE` selects the S3-compatible backend:
+
+- `minio` (default): creates a dedicated MinIO user `langfuse` with its own bucket.
+  Credentials come from Vault path `langfuse/minio`, endpoint is the MinIO ingress
+  host (falling back to `http://minio.<namespace>:9000`).
+- `rustfs`: creates the bucket via `just rustfs::create-bucket`, then prompts for an
+  access key pair. Credentials are stored in Vault path `langfuse/rustfs`, endpoint is
+  `http://rustfs.<namespace>:9000`.
+
+Either way the credentials land in the `s3-auth` Secret in the Langfuse namespace.
+
+#### RustFS Access Key
+
+RustFS has no CLI user management, so the key pair must be created manually in the
+RustFS Web Console (read/write on the `langfuse` bucket) before installing. The admin
+(root) credentials are deliberately not used. `just langfuse::install` prompts for the
+pair with `gum` and stores it in Vault; the prompt is skipped if `langfuse/rustfs`
+already exists. Non-interactive runs can preset the values:
+
+```bash
+LANGFUSE_RUSTFS_ACCESS_KEY=... LANGFUSE_RUSTFS_SECRET_KEY=... just langfuse::install
+```
+
+To rotate the key after installation:
+
+```bash
+just langfuse::update-rustfs-credentials   # re-prompt, resync s3-auth, restart pods
 ```
 
 ### Architecture Notes
@@ -114,7 +147,7 @@ Langfuse Web (HTTP inside cluster)
   ├─ PostgreSQL (metadata)
   ├─ ClickHouse (analytics)
   ├─ Redis/Valkey (cache & queues)
-  └─ MinIO (file storage)
+  └─ MinIO / RustFS (file storage)
       ↓
 Langfuse Worker (background jobs)
   ├─ Job queues (Redis)
@@ -129,7 +162,7 @@ Langfuse Worker (background jobs)
 - **Redis**: Session management, job queues, caching
 - **PostgreSQL**: Application data (projects, users, API keys)
 - **ClickHouse**: Analytics data (traces, observations, scores)
-- **MinIO**: S3-compatible storage for event uploads and batch exports
+- **MinIO / RustFS**: S3-compatible storage for event uploads and batch exports
 
 ## Authentication
 
@@ -181,7 +214,7 @@ This removes:
 
 - PostgreSQL user and database
 - ClickHouse user and database
-- MinIO user and bucket
+- Object storage user and bucket
 - Keycloak user
 
 ### Clean Up Specific Resources
@@ -193,8 +226,8 @@ just langfuse::delete-postgres-user-and-db
 # Delete ClickHouse user and database
 just langfuse::delete-clickhouse-user
 
-# Delete MinIO user and bucket
-just langfuse::delete-minio-user
+# Delete object storage resources of the selected backend
+just langfuse::delete-object-storage
 
 # Delete Keycloak user
 just langfuse::delete-keycloak-user
@@ -274,16 +307,17 @@ kubectl exec -n clickhouse clickhouse-clickhouse-0 -- \
 
 ### Storage Issues
 
-Check MinIO credentials:
+Check object storage credentials:
 
 ```bash
-kubectl get secret minio-auth -n langfuse -o yaml
+kubectl get secret s3-auth -n langfuse -o yaml
 ```
 
 Verify bucket exists:
 
 ```bash
-just minio::bucket-exists langfuse
+just minio::bucket-exists langfuse   # MinIO
+just rustfs::list-buckets            # RustFS
 ```
 
 ### Check Logs
@@ -321,7 +355,7 @@ Key configuration files:
 - `postgres-auth-external-secret.gomplate.yaml` - PostgreSQL credentials
 - `clickhouse-auth-external-secret.gomplate.yaml` - ClickHouse credentials
 - `redis-auth-external-secret.yaml` - Redis password
-- `minio-auth-external-secret.yaml` - MinIO credentials
+- `s3-auth-external-secret.gomplate.yaml` - Object storage credentials (MinIO or RustFS)
 
 ## Security Considerations
 

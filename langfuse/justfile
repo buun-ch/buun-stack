@@ -1,15 +1,23 @@
 set fallback := true
 
 export LANGFUSE_NAMESPACE := env("LANGFUSE_NAMESPACE", "langfuse")
-export LANGFUSE_CHART_VERSION := env("LANGFUSE_CHART_VERSION", "1.5.34")
+export LANGFUSE_CHART_VERSION := env("LANGFUSE_CHART_VERSION", "1.5.39")
 export LANGFUSE_HOST := env("LANGFUSE_HOST", "")
 export LANGFUSE_OIDC_CLIENT_ID := env("LANGFUSE_OIDC_CLIENT_ID", "langfuse")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+# Object storage backend: minio | rustfs
+export LANGFUSE_OBJECT_STORAGE := env("LANGFUSE_OBJECT_STORAGE", "minio")
+export LANGFUSE_BUCKET := env("LANGFUSE_BUCKET", "langfuse")
+export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export MINIO_HOST := env("MINIO_HOST", "")
 export MINIO_USER := "langfuse"
+export RUSTFS_NAMESPACE := env("RUSTFS_NAMESPACE", "rustfs")
+export RUSTFS_CONSOLE_HOST := env("RUSTFS_CONSOLE_HOST", "")
+export LANGFUSE_RUSTFS_ACCESS_KEY := env("LANGFUSE_RUSTFS_ACCESS_KEY", "")
+export LANGFUSE_RUSTFS_SECRET_KEY := env("LANGFUSE_RUSTFS_SECRET_KEY", "")
 
 [private]
 default:
@@ -72,17 +80,7 @@ install:
     just create-clickhouse-user
     just create-clickhouse-secret
 
-    # Check if MinIO is installed (required)
-    if ! helm list -n minio 2>/dev/null | grep -q minio; then
-        echo "Error: MinIO is not installed. Please install MinIO first:"
-        echo "  just minio::install"
-        exit 1
-    fi
-    if ! just minio::user-exists langfuse &>/dev/null; then
-        just minio::create-user langfuse langfuse
-    else
-        echo "MinIO user langfuse already exists, skipping creation"
-    fi
+    just setup-object-storage
     just create-salt
     just create-nextauth-secret
     just create-redis-password
@@ -91,9 +89,9 @@ install:
     just create-secrets
 
     just add-helm-repo
-    export MINIO_HOST=$(kubectl get ingress -n minio minio -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
     LANGFUSE_SALT=$(just salt) \
         NEXTAUTH_SECRET=$(just nextauth-secret) \
+        LANGFUSE_S3_ENDPOINT=$(just s3-endpoint) \
         gomplate -f langfuse-values.gomplate.yaml -o langfuse-values.yaml
     helm upgrade --install langfuse langfuse/langfuse \
         --version ${LANGFUSE_CHART_VERSION} -n ${LANGFUSE_NAMESPACE} --wait \
@@ -113,7 +111,7 @@ uninstall delete-data='false':
         echo "Deleting database and storage..."
         just delete-postgres-user-and-db || true
         just delete-clickhouse-user || true
-        just delete-minio-user || true
+        just delete-object-storage || true
         just delete-keycloak-user || true
         just delete-salt || true
         just delete-nextauth-secret || true
@@ -126,7 +124,7 @@ uninstall delete-data='false':
         echo "Note: The following resources were NOT deleted:"
         echo "  - PostgreSQL user and database (langfuse)"
         echo "  - ClickHouse user and database (langfuse)"
-        echo "  - MinIO user and bucket (langfuse)"
+        echo "  - Object storage bucket (${LANGFUSE_BUCKET}) and user"
         echo "  - Keycloak user (langfuse)"
         echo "  - Vault secrets (langfuse/*)"
         echo ""
@@ -182,7 +180,8 @@ create-secrets:
 
         # Redis password is already in Vault (created by create-redis-password)
 
-        # MinIO credentials are already in Vault (created by create-minio-service-account)
+        # Object storage credentials are already in Vault
+        # (minio: langfuse/minio, rustfs: rustfs/admin)
 
         # Delete existing secrets and ExternalSecrets
         kubectl delete secret postgres-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
@@ -196,9 +195,9 @@ create-secrets:
         gomplate -f postgres-auth-external-secret.gomplate.yaml | kubectl apply -f -
         kubectl apply -n ${LANGFUSE_NAMESPACE} -f keycloak-auth-external-secret.yaml
         kubectl apply -n ${LANGFUSE_NAMESPACE} -f redis-auth-external-secret.yaml
-        kubectl delete secret minio-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
-        kubectl delete externalsecret minio-auth-external-secret -n ${LANGFUSE_NAMESPACE} --ignore-not-found
-        kubectl apply -n ${LANGFUSE_NAMESPACE} -f minio-auth-external-secret.yaml
+        kubectl delete secret s3-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret s3-auth-external-secret -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        gomplate -f s3-auth-external-secret.gomplate.yaml | kubectl apply -f -
 
         echo "Waiting for ExternalSecrets to sync..."
         kubectl wait --for=condition=Ready externalsecret/postgres-auth-external-secret \
@@ -207,7 +206,7 @@ create-secrets:
             -n ${LANGFUSE_NAMESPACE} --timeout=60s
         kubectl wait --for=condition=Ready externalsecret/redis-auth-external-secret \
             -n ${LANGFUSE_NAMESPACE} --timeout=60s
-        kubectl wait --for=condition=Ready externalsecret/minio-auth-external-secret \
+        kubectl wait --for=condition=Ready externalsecret/s3-auth-external-secret \
             -n ${LANGFUSE_NAMESPACE} --timeout=60s
 
         echo "ExternalSecrets created successfully"
@@ -232,13 +231,25 @@ create-secrets:
         kubectl create secret generic redis-auth -n ${LANGFUSE_NAMESPACE} \
             --from-literal=secret="${redis_password}"
 
-        # Create MinIO Secret
-        minio_access_key=$(just vault::get langfuse/minio access_key)
-        minio_secret_key=$(just vault::get langfuse/minio secret_key)
-        kubectl delete secret minio-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
-        kubectl create secret generic minio-auth -n ${LANGFUSE_NAMESPACE} \
-            --from-literal=access_key="${minio_access_key}" \
-            --from-literal=secret_key="${minio_secret_key}"
+        # Create object storage Secret
+        case "${LANGFUSE_OBJECT_STORAGE}" in
+            minio)
+                s3_access_key=$(just vault::get langfuse/minio access_key)
+                s3_secret_key=$(just vault::get langfuse/minio secret_key)
+                ;;
+            rustfs)
+                s3_access_key=$(just vault::get langfuse/rustfs access_key)
+                s3_secret_key=$(just vault::get langfuse/rustfs secret_key)
+                ;;
+            *)
+                echo "Error: unknown LANGFUSE_OBJECT_STORAGE '${LANGFUSE_OBJECT_STORAGE}' (expected: minio | rustfs)" >&2
+                exit 1
+                ;;
+        esac
+        kubectl delete secret s3-auth -n ${LANGFUSE_NAMESPACE} --ignore-not-found
+        kubectl create secret generic s3-auth -n ${LANGFUSE_NAMESPACE} \
+            --from-literal=access_key="${s3_access_key}" \
+            --from-literal=secret_key="${s3_secret_key}"
 
         # Store credentials in Vault if available (backup for admin credentials)
         if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
@@ -355,6 +366,121 @@ check-clickhouse-privilege:
     kubectl exec -it clickhouse-pod -n clickhouse -- \
         clickhouse-client --user=langfuse --password=$(just clickhouse-password) \
         --query "SHOW GRANTS FOR langfuse"
+
+# Prepare the selected object storage backend (bucket and credentials)
+setup-object-storage:
+    #!/bin/bash
+    set -euo pipefail
+    case "${LANGFUSE_OBJECT_STORAGE}" in
+        minio)
+            if ! helm status minio -n ${MINIO_NAMESPACE} &>/dev/null; then
+                echo "Error: MinIO is not installed. Please install MinIO first:"
+                echo "  just minio::install"
+                exit 1
+            fi
+            if ! just minio::user-exists langfuse &>/dev/null; then
+                just minio::create-user langfuse ${LANGFUSE_BUCKET}
+            else
+                echo "MinIO user langfuse already exists, skipping creation"
+            fi
+            ;;
+        rustfs)
+            if ! helm status rustfs -n ${RUSTFS_NAMESPACE} &>/dev/null; then
+                echo "Error: RustFS is not installed. Please install RustFS first:"
+                echo "  just rustfs::install"
+                exit 1
+            fi
+            just rustfs::create-bucket ${LANGFUSE_BUCKET}
+            just create-rustfs-credentials
+            ;;
+        *)
+            echo "Error: unknown LANGFUSE_OBJECT_STORAGE '${LANGFUSE_OBJECT_STORAGE}' (expected: minio | rustfs)" >&2
+            exit 1
+            ;;
+    esac
+
+# Register RustFS access credentials for Langfuse (create them in the RustFS console first)
+create-rustfs-credentials:
+    #!/bin/bash
+    set -euo pipefail
+    if just vault::exist langfuse/rustfs &>/dev/null; then
+        echo "RustFS credentials for Langfuse already exist, skipping creation"
+        exit
+    fi
+    echo "Enter the RustFS access key pair for Langfuse."
+    echo "Create a dedicated key in the RustFS Web Console (https://${RUSTFS_CONSOLE_HOST:-<rustfs-console-host>})"
+    echo "with read/write access to the '${LANGFUSE_BUCKET}' bucket."
+    ACCESS_KEY="${LANGFUSE_RUSTFS_ACCESS_KEY}"
+    while [ -z "${ACCESS_KEY}" ]; do
+        ACCESS_KEY=$(gum input --prompt="RustFS access key: " --width=100 --placeholder="e.g., langfuse")
+    done
+    SECRET_KEY="${LANGFUSE_RUSTFS_SECRET_KEY}"
+    while [ -z "${SECRET_KEY}" ]; do
+        SECRET_KEY=$(gum input --prompt="RustFS secret key: " --password --width=100)
+    done
+    just vault::put langfuse/rustfs access_key="${ACCESS_KEY}" secret_key="${SECRET_KEY}"
+    echo "RustFS credentials stored in Vault at: langfuse/rustfs"
+
+# Delete RustFS access credentials for Langfuse
+delete-rustfs-credentials:
+    #!/bin/bash
+    set -euo pipefail
+    if ! just vault::exist langfuse/rustfs &>/dev/null; then
+        echo "RustFS credentials for Langfuse do not exist, skipping deletion"
+        exit
+    fi
+    just vault::delete langfuse/rustfs
+
+# Update RustFS access credentials for Langfuse (re-prompts and restarts Langfuse)
+update-rustfs-credentials:
+    #!/bin/bash
+    set -euo pipefail
+    just delete-rustfs-credentials
+    just create-rustfs-credentials
+    just create-secrets
+    kubectl rollout restart deployment -n ${LANGFUSE_NAMESPACE} -l app.kubernetes.io/name=langfuse
+
+# Print the S3 endpoint of the selected object storage backend
+s3-endpoint:
+    #!/bin/bash
+    set -euo pipefail
+    case "${LANGFUSE_OBJECT_STORAGE}" in
+        minio)
+            host=${MINIO_HOST:-$(kubectl get ingress -n ${MINIO_NAMESPACE} minio \
+                -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")}
+            if [ -n "${host}" ]; then
+                echo "https://${host}"
+            else
+                echo "http://minio.${MINIO_NAMESPACE}:9000"
+            fi
+            ;;
+        rustfs)
+            echo "http://rustfs.${RUSTFS_NAMESPACE}:9000"
+            ;;
+        *)
+            echo "Error: unknown LANGFUSE_OBJECT_STORAGE '${LANGFUSE_OBJECT_STORAGE}' (expected: minio | rustfs)" >&2
+            exit 1
+            ;;
+    esac
+
+# Delete object storage resources of the selected backend
+delete-object-storage:
+    #!/bin/bash
+    set -euo pipefail
+    case "${LANGFUSE_OBJECT_STORAGE}" in
+        minio)
+            just delete-minio-user
+            ;;
+        rustfs)
+            just delete-rustfs-credentials
+            echo "RustFS bucket '${LANGFUSE_BUCKET}' and access key were not deleted"
+            echo "(delete them in the RustFS Web Console if needed)"
+            ;;
+        *)
+            echo "Error: unknown LANGFUSE_OBJECT_STORAGE '${LANGFUSE_OBJECT_STORAGE}' (expected: minio | rustfs)" >&2
+            exit 1
+            ;;
+    esac
 
 # Delete MinIO user and bucket
 delete-minio-user:

@@ -72,17 +72,19 @@ langfuse:
 
   # Resource recommendations from Goldilocks VPA
   # web target: cpu=15m, memory=717Mi
+  # The memory limit also caps the V8 old-space heap (~50% of the limit).
+  # A 1.5Gi limit crashed init with "JavaScript heap out of memory" at ~780MB.
   web:
     resources:
       requests:
         cpu: 25m
-        memory: 768Mi
+        memory: 1Gi
       limits:
         cpu: 500m
-        memory: 1.5Gi
+        memory: 3Gi
     # Probe configuration adjusted for slow startup and response time
     livenessProbe:
-      initialDelaySeconds: 60
+      initialDelaySeconds: 180
       timeoutSeconds: 30
       failureThreshold: 5
     readinessProbe:
@@ -101,8 +103,9 @@ langfuse:
         cpu: 100m
         memory: 1Gi
     # Probe configuration adjusted for slow startup
+    # Init (model/dashboard upserts) takes ~110s, so 60s was too tight.
     livenessProbe:
-      initialDelaySeconds: 60
+      initialDelaySeconds: 180
       timeoutSeconds: 30
       failureThreshold: 5
 
@@ -153,15 +156,15 @@ clickhouse:
 
 s3:
   deploy: false
-  bucket: langfuse
+  bucket: {{ .Env.LANGFUSE_BUCKET }}
   region: "auto"
-  endpoint: https://{{ .Env.MINIO_HOST }}
+  endpoint: {{ .Env.LANGFUSE_S3_ENDPOINT }}
   forcePathStyle: true
   accessKeyId:
     secretKeyRef:
-      name: minio-auth
+      name: s3-auth
       key: access_key
   secretAccessKey:
     secretKeyRef:
-      name: minio-auth
+      name: s3-auth
       key: secret_key
