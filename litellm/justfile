@@ -377,7 +377,7 @@ install:
 
     echo "Installing LiteLLM Helm chart..."
     helm upgrade --install litellm oci://ghcr.io/berriai/litellm-helm \
-        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait \
+        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait=legacy \
         -f litellm-values.yaml
 
     echo ""
@@ -467,7 +467,7 @@ upgrade:
 
     echo "Upgrading LiteLLM Helm chart..."
     helm upgrade litellm oci://ghcr.io/berriai/litellm-helm \
-        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait \
+        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait=legacy \
         -f litellm-values.yaml
 
     echo ""
@@ -744,7 +744,7 @@ setup-oidc:
 
     echo "Upgrading LiteLLM with OIDC configuration..."
     helm upgrade litellm oci://ghcr.io/berriai/litellm-helm \
-        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait \
+        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait=legacy \
         -f litellm-values.yaml
 
     echo ""
@@ -786,7 +786,7 @@ disable-oidc:
 
     echo "Upgrading LiteLLM without OIDC..."
     helm upgrade litellm oci://ghcr.io/berriai/litellm-helm \
-        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait \
+        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait=legacy \
         -f litellm-values.yaml
 
     echo ""
@@ -906,7 +906,7 @@ setup-langfuse:
 
     echo "Upgrading LiteLLM with Langfuse integration..."
     helm upgrade litellm oci://ghcr.io/berriai/litellm-helm \
-        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait \
+        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait=legacy \
         -f litellm-values.yaml
 
     echo ""
@@ -943,7 +943,7 @@ disable-langfuse:
 
     echo "Upgrading LiteLLM without Langfuse..."
     helm upgrade litellm oci://ghcr.io/berriai/litellm-helm \
-        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait \
+        --version ${LITELLM_CHART_VERSION} -n ${LITELLM_NAMESPACE} --wait=legacy \
         -f litellm-values.yaml
 
     echo ""

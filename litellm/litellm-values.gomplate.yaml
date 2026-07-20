@@ -22,6 +22,9 @@ resources:
     memory: 2Gi
 
 migrationJob:
+  # The chart default (120s) deletes the Job while helm is still waiting on it,
+  # which fails the release with "Job/litellm-migrations not ready: NotFound".
+  ttlSecondsAfterFinished: 900
   # After prisma migrate, the job boots the full litellm proxy
   # (run_server --skip_server_startup + prisma generate); measured peak
   # ~2.16Gi, so 1Gi/2Gi OOMKill (exit 137). 3Gi gives headroom.
