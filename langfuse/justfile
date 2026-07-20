@@ -94,7 +94,7 @@ install:
         LANGFUSE_S3_ENDPOINT=$(just s3-endpoint) \
         gomplate -f langfuse-values.gomplate.yaml -o langfuse-values.yaml
     helm upgrade --install langfuse langfuse/langfuse \
-        --version ${LANGFUSE_CHART_VERSION} -n ${LANGFUSE_NAMESPACE} --wait \
+        --version ${LANGFUSE_CHART_VERSION} -n ${LANGFUSE_NAMESPACE} --wait=legacy \
         -f langfuse-values.yaml
 
 # Uninstall Langfuse (delete-data: true to delete database and storage)
