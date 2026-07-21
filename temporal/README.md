@@ -343,7 +343,7 @@ Test frontend connectivity from admin tools:
 
 ```bash
 kubectl exec -n temporal deployment/temporal-admintools -- \
-  tctl cluster health
+  temporal operator cluster health
 ```
 
 ### Web UI Login Issues

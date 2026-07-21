@@ -419,7 +419,7 @@ create-temporal-namespace name='' retention='3d':
         -l app.kubernetes.io/name=temporal,app.kubernetes.io/component=admintools \
         -o jsonpath='{.items[0].metadata.name}')
     kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- \
-        tctl --namespace "${name}" namespace register --retention "${retention}"
+        temporal operator namespace create --retention "${retention}" "${name}"
     echo "Namespace '${name}' created with retention ${retention}."
 
 # List Temporal namespaces
@@ -429,7 +429,7 @@ list-temporal-namespaces:
     POD_NAME=$(kubectl get pods -n ${TEMPORAL_NAMESPACE} \
         -l app.kubernetes.io/name=temporal,app.kubernetes.io/component=admintools \
         -o jsonpath='{.items[0].metadata.name}')
-    kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- tctl namespace list
+    kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- temporal operator namespace list
 
 # Get Temporal cluster info
 cluster-info:
@@ -438,4 +438,4 @@ cluster-info:
     POD_NAME=$(kubectl get pods -n ${TEMPORAL_NAMESPACE} \
         -l app.kubernetes.io/name=temporal,app.kubernetes.io/component=admintools \
         -o jsonpath='{.items[0].metadata.name}')
-    kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- tctl cluster health
+    kubectl exec -n ${TEMPORAL_NAMESPACE} ${POD_NAME} -- temporal operator cluster health
