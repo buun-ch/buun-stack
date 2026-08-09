@@ -12,6 +12,7 @@ mod ch-ui
 mod clickhouse
 mod dagster
 mod datahub
+mod ducklake
 mod env
 mod external-secrets
 mod falkordb

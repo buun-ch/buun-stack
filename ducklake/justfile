@@ -1,0 +1,223 @@
+set fallback := true
+
+export DUCKLAKE_CATALOG_DB := env("DUCKLAKE_CATALOG_DB", "ducklake_catalog")
+export DUCKLAKE_CATALOG_USER := env("DUCKLAKE_CATALOG_USER", "ducklake")
+
+# Object storage backend for DuckLake data files: minio | rustfs
+export DUCKLAKE_S3_BACKEND := env("DUCKLAKE_S3_BACKEND", "minio")
+export DUCKLAKE_BUCKET := env("DUCKLAKE_BUCKET", "ducklake")
+
+# Data path prefix inside the bucket (default: s3://<bucket>/main)
+export DUCKLAKE_DATA_PATH := env("DUCKLAKE_DATA_PATH", "")
+export DUCKLAKE_ATTACH_ALIAS := env("DUCKLAKE_ATTACH_ALIAS", "lake")
+export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
+export RUSTFS_NAMESPACE := env("RUSTFS_NAMESPACE", "rustfs")
+export CNPG_NAMESPACE := env("CNPG_NAMESPACE", "postgres")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Resolve S3 endpoint and root credentials for the selected backend.
+# Sets S3_ENDPOINT, S3_ACCESS_KEY and S3_SECRET_KEY.
+[private]
+_resolve_s3_backend := '''
+    case "${DUCKLAKE_S3_BACKEND}" in
+        minio)
+            S3_ENDPOINT="http://minio.${MINIO_NAMESPACE}:9000"
+            S3_ACCESS_KEY=$(kubectl get secret -n ${MINIO_NAMESPACE} minio -o jsonpath='{.data.rootUser}' | base64 -d)
+            S3_SECRET_KEY=$(kubectl get secret -n ${MINIO_NAMESPACE} minio -o jsonpath='{.data.rootPassword}' | base64 -d)
+            ;;
+        rustfs)
+            S3_ENDPOINT="http://rustfs.${RUSTFS_NAMESPACE}:9000"
+            S3_ACCESS_KEY=$(kubectl get secret -n ${RUSTFS_NAMESPACE} rustfs -o jsonpath='{.data.access-key}' | base64 -d)
+            S3_SECRET_KEY=$(kubectl get secret -n ${RUSTFS_NAMESPACE} rustfs -o jsonpath='{.data.secret-key}' | base64 -d)
+            ;;
+        *)
+            echo "Error: unknown DUCKLAKE_S3_BACKEND '${DUCKLAKE_S3_BACKEND}' (expected: minio | rustfs)" >&2
+            exit 1
+            ;;
+    esac
+'''
+
+# Provision the DuckLake catalog database and object storage bucket
+install:
+    #!/bin/bash
+    set -euo pipefail
+    just ducklake::setup-catalog-db
+    just ducklake::setup-storage
+    echo ""
+    echo "✅ DuckLake is ready."
+    echo ""
+    echo "Next steps:"
+    echo "  just ducklake::test             # Run a smoke test (requires duckdb CLI + telepresence)"
+    echo "  just ducklake::duckdb           # Open a DuckDB shell attached to the lake"
+    echo "  just ducklake::print-init-sql   # Print the SQL needed to attach from any DuckDB client"
+
+# Create the catalog database and user in Postgres
+setup-catalog-db:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up DuckLake catalog database..."
+
+    if just postgres::db-exists ${DUCKLAKE_CATALOG_DB} &>/dev/null; then
+        echo "Database '${DUCKLAKE_CATALOG_DB}' already exists."
+    else
+        just postgres::create-db ${DUCKLAKE_CATALOG_DB}
+    fi
+
+    VAULT_AVAILABLE=""
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+        VAULT_AVAILABLE="true"
+    fi
+
+    if just postgres::user-exists ${DUCKLAKE_CATALOG_USER} &>/dev/null; then
+        echo "User '${DUCKLAKE_CATALOG_USER}' already exists."
+        if [ -n "${VAULT_AVAILABLE}" ] && DB_PASSWORD=$(just vault::get ducklake/catalog password 2>/dev/null); then
+            echo "Using existing password from Vault."
+        else
+            echo "Generating new password for existing user..."
+            DB_PASSWORD=$(just utils::random-password)
+            just postgres::change-password ${DUCKLAKE_CATALOG_USER} "${DB_PASSWORD}"
+        fi
+    else
+        DB_PASSWORD=$(just utils::random-password)
+        just postgres::create-user ${DUCKLAKE_CATALOG_USER} "${DB_PASSWORD}"
+    fi
+
+    just postgres::grant ${DUCKLAKE_CATALOG_DB} ${DUCKLAKE_CATALOG_USER}
+
+    if [ -n "${VAULT_AVAILABLE}" ]; then
+        just vault::put ducklake/catalog \
+            host=postgres-cluster-rw.${CNPG_NAMESPACE} \
+            port=5432 \
+            database=${DUCKLAKE_CATALOG_DB} \
+            username=${DUCKLAKE_CATALOG_USER} \
+            password="${DB_PASSWORD}"
+        echo "Catalog credentials stored in Vault at ducklake/catalog."
+    else
+        echo "Vault not available. Record the catalog credentials now (they are not stored anywhere):"
+        echo "  host=postgres-cluster-rw.${CNPG_NAMESPACE} port=5432 database=${DUCKLAKE_CATALOG_DB}"
+        echo "  username=${DUCKLAKE_CATALOG_USER} password=${DB_PASSWORD}"
+    fi
+    echo "Catalog database setup completed."
+
+# Create the bucket and store storage settings in Vault
+setup-storage:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Setting up DuckLake object storage (backend=${DUCKLAKE_S3_BACKEND})..."
+    {{ _resolve_s3_backend }}
+
+    just {{ DUCKLAKE_S3_BACKEND }}::create-bucket ${DUCKLAKE_BUCKET}
+
+    DATA_PATH=${DUCKLAKE_DATA_PATH:-"s3://${DUCKLAKE_BUCKET}/main"}
+    if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+        just vault::put ducklake/storage \
+            backend=${DUCKLAKE_S3_BACKEND} \
+            endpoint="${S3_ENDPOINT}" \
+            access_key="${S3_ACCESS_KEY}" \
+            secret_key="${S3_SECRET_KEY}" \
+            bucket=${DUCKLAKE_BUCKET} \
+            data_path="${DATA_PATH}" \
+            region=us-east-1
+        echo "Storage settings stored in Vault at ducklake/storage."
+    else
+        echo "Vault not available. Storage settings (root credentials are read from the ${DUCKLAKE_S3_BACKEND} secret):"
+        echo "  endpoint=${S3_ENDPOINT} bucket=${DUCKLAKE_BUCKET} data_path=${DATA_PATH}"
+    fi
+    echo "Object storage setup completed."
+
+# Print the SQL to attach the lake from any DuckDB client
+print-init-sql:
+    #!/bin/bash
+    set -euo pipefail
+    {{ _resolve_s3_backend }}
+
+    if ! DB_PASSWORD=$(just vault::get ducklake/catalog password 2>/dev/null); then
+        echo "Error: could not read ducklake/catalog from Vault." >&2
+        echo "Run 'just ducklake::install' first (or pass credentials manually)." >&2
+        exit 1
+    fi
+    DATA_PATH=${DUCKLAKE_DATA_PATH:-"s3://${DUCKLAKE_BUCKET}/main"}
+    ENDPOINT_HOST=${S3_ENDPOINT#http://}
+
+    cat <<EOF
+    INSTALL ducklake;
+    INSTALL postgres;
+    INSTALL httpfs;
+    CREATE OR REPLACE SECRET ducklake_storage (
+        TYPE s3,
+        KEY_ID '${S3_ACCESS_KEY}',
+        SECRET '${S3_SECRET_KEY}',
+        ENDPOINT '${ENDPOINT_HOST}',
+        URL_STYLE 'path',
+        USE_SSL false,
+        REGION 'us-east-1'
+    );
+    ATTACH IF NOT EXISTS 'ducklake:postgres:host=postgres-cluster-rw.${CNPG_NAMESPACE} port=5432 dbname=${DUCKLAKE_CATALOG_DB} user=${DUCKLAKE_CATALOG_USER} password=${DB_PASSWORD}' AS ${DUCKLAKE_ATTACH_ALIAS} (DATA_PATH '${DATA_PATH}/');
+    USE ${DUCKLAKE_ATTACH_ALIAS};
+    EOF
+
+# Open a DuckDB shell attached to the lake (requires duckdb CLI + telepresence)
+duckdb *args='':
+    #!/bin/bash
+    set -euo pipefail
+    just utils::check-telepresence
+    if ! command -v duckdb &>/dev/null; then
+        echo "Error: duckdb CLI not found. Run 'mise install' (or install DuckDB >= 1.4)." >&2
+        exit 1
+    fi
+    INIT_FILE=$(mktemp)
+    trap 'rm -f "${INIT_FILE}"' EXIT
+    just ducklake::print-init-sql > "${INIT_FILE}"
+    duckdb -init "${INIT_FILE}" {{ args }}
+
+# Smoke test: attach, create a table, insert, read back and drop
+test:
+    #!/bin/bash
+    set -euo pipefail
+    just utils::check-telepresence
+    if ! command -v duckdb &>/dev/null; then
+        echo "Error: duckdb CLI not found. Run 'mise install' (or install DuckDB >= 1.4)." >&2
+        exit 1
+    fi
+    INIT_FILE=$(mktemp)
+    trap 'rm -f "${INIT_FILE}"' EXIT
+    just ducklake::print-init-sql > "${INIT_FILE}"
+    duckdb -init "${INIT_FILE}" -c "
+        CREATE OR REPLACE TABLE ${DUCKLAKE_ATTACH_ALIAS}.smoke_test (id INTEGER, note VARCHAR);
+        INSERT INTO ${DUCKLAKE_ATTACH_ALIAS}.smoke_test VALUES (1, 'hello ducklake');
+        SELECT * FROM ${DUCKLAKE_ATTACH_ALIAS}.smoke_test;
+        DROP TABLE ${DUCKLAKE_ATTACH_ALIAS}.smoke_test;
+    "
+    echo "✅ DuckLake smoke test passed."
+
+# Show current DuckLake configuration
+show-config:
+    #!/bin/bash
+    set -euo pipefail
+    DATA_PATH=${DUCKLAKE_DATA_PATH:-"s3://${DUCKLAKE_BUCKET}/main"}
+    echo "DuckLake configuration:"
+    echo "  Catalog:  postgres-cluster-rw.${CNPG_NAMESPACE}:5432 db=${DUCKLAKE_CATALOG_DB} user=${DUCKLAKE_CATALOG_USER}"
+    echo "  Storage:  backend=${DUCKLAKE_S3_BACKEND} bucket=${DUCKLAKE_BUCKET} data_path=${DATA_PATH}"
+    echo "  Vault:    ducklake/catalog, ducklake/storage"
+    echo ""
+    echo "Attach SQL: just ducklake::print-init-sql"
+
+# Remove the catalog database, user and Vault secrets (bucket data is kept)
+uninstall:
+    #!/bin/bash
+    set -euo pipefail
+    echo "This will delete the DuckLake catalog database '${DUCKLAKE_CATALOG_DB}',"
+    echo "the user '${DUCKLAKE_CATALOG_USER}' and the Vault secrets under ducklake/."
+    echo "Data files in s3://${DUCKLAKE_BUCKET} are NOT deleted."
+    if gum confirm "Are you sure you want to proceed?"; then
+        just postgres::delete-user-and-db ${DUCKLAKE_CATALOG_USER} ${DUCKLAKE_CATALOG_DB} || true
+        just vault::delete ducklake/catalog || true
+        just vault::delete ducklake/storage || true
+        echo "Uninstall completed. To remove data files, delete the bucket in ${DUCKLAKE_S3_BACKEND}."
+    else
+        echo "Uninstall cancelled"
+    fi
