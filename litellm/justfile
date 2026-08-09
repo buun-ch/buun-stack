@@ -1011,6 +1011,101 @@ delete-team team_id='':
         --data-raw "{\"team_ids\": [\"${team_id}\"]}" | jq .
     echo "Team deleted."
 
+# Add a user to a team
+add-team-member team_id='' user_id='' role='':
+    #!/bin/bash
+    set -euo pipefail
+    team_id="{{ team_id }}"
+    user_id="{{ user_id }}"
+    role="{{ role }}"
+    master_key=$(just master-key)
+    if [ -z "${team_id}" ]; then
+        teams=$(curl -s "https://${LITELLM_HOST}/team/list" \
+            --header "Authorization: Bearer ${master_key}")
+        team_aliases=$(echo "${teams}" | jq -r '.[] | "\(.team_id) (\(.team_alias // "no alias"))"')
+        if [ -z "${team_aliases}" ]; then
+            echo "No teams found. Create a team first:"
+            echo "  just litellm::create-team"
+            exit 1
+        fi
+        selected=$(echo "${team_aliases}" | gum choose --header="Select team:")
+        team_id=$(echo "${selected}" | cut -d' ' -f1)
+    fi
+    if [ -z "${user_id}" ]; then
+        users=$(curl -s "https://${LITELLM_HOST}/user/list" \
+            --header "Authorization: Bearer ${master_key}" \
+            | jq -r '.users[] | "\(.user_id) (\(.user_email // "no email"), \(.user_role // "no role"))"')
+        if [ -z "${users}" ]; then
+            echo "No users found."
+            exit 1
+        fi
+        selected=$(echo "${users}" | gum choose --header="Select user:")
+        user_id=$(echo "${selected}" | cut -d' ' -f1)
+    fi
+    if [ -z "${role}" ]; then
+        role=$(gum choose --header="Select role in team (admin requires LiteLLM Enterprise):" "user" "admin")
+    fi
+    response=$(curl -s "https://${LITELLM_HOST}/team/member_add" \
+        --header "Authorization: Bearer ${master_key}" \
+        --header "Content-Type: application/json" \
+        --data-raw "{\"team_id\": \"${team_id}\", \"member\": {\"user_id\": \"${user_id}\", \"role\": \"${role}\"}}")
+    echo "${response}" | jq .
+    error=$(echo "${response}" | jq -r '.detail.error // .error // empty')
+    if [ -n "${error}" ]; then
+        echo ""
+        echo "Error: failed to add ${user_id} to team ${team_id}"
+        exit 1
+    fi
+    echo ""
+    echo "Added ${user_id} to team ${team_id} as ${role}"
+
+# Remove a user from a team
+remove-team-member team_id='' user_id='':
+    #!/bin/bash
+    set -euo pipefail
+    team_id="{{ team_id }}"
+    user_id="{{ user_id }}"
+    master_key=$(just master-key)
+    if [ -z "${team_id}" ]; then
+        teams=$(curl -s "https://${LITELLM_HOST}/team/list" \
+            --header "Authorization: Bearer ${master_key}")
+        team_aliases=$(echo "${teams}" | jq -r '.[] | "\(.team_id) (\(.team_alias // "no alias"))"')
+        if [ -z "${team_aliases}" ]; then
+            echo "No teams found."
+            exit 1
+        fi
+        selected=$(echo "${team_aliases}" | gum choose --header="Select team:")
+        team_id=$(echo "${selected}" | cut -d' ' -f1)
+    fi
+    if [ -z "${user_id}" ]; then
+        members=$(curl -s "https://${LITELLM_HOST}/team/info?team_id=${team_id}" \
+            --header "Authorization: Bearer ${master_key}" \
+            | jq -r '.team_info.members_with_roles[] | "\(.user_id) (\(.role))"')
+        if [ -z "${members}" ]; then
+            echo "No members in team ${team_id}."
+            exit 1
+        fi
+        selected=$(echo "${members}" | gum choose --header="Select member to remove:")
+        user_id=$(echo "${selected}" | cut -d' ' -f1)
+    fi
+    if ! gum confirm "Remove ${user_id} from team ${team_id}?"; then
+        echo "Cancelled."
+        exit 0
+    fi
+    response=$(curl -s "https://${LITELLM_HOST}/team/member_delete" \
+        --header "Authorization: Bearer ${master_key}" \
+        --header "Content-Type: application/json" \
+        --data-raw "{\"team_id\": \"${team_id}\", \"user_id\": \"${user_id}\"}")
+    echo "${response}" | jq .
+    error=$(echo "${response}" | jq -r '.detail.error // .error // empty')
+    if [ -n "${error}" ]; then
+        echo ""
+        echo "Error: failed to remove ${user_id} from team ${team_id}"
+        exit 1
+    fi
+    echo ""
+    echo "Removed ${user_id} from team ${team_id}"
+
 # Set Langfuse project for a team
 set-team-langfuse-project team_id='' public_key='' secret_key='':
     #!/bin/bash
