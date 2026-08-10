@@ -1,0 +1,21 @@
+fullnameOverride: ducklake-quack
+
+auth:
+  existingSecret: ducklake-quack
+
+{{- if .Env.DUCKLAKE_QUACK_HOST }}
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: {{ .Env.DUCKLAKE_QUACK_HOST }}
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - {{ .Env.DUCKLAKE_QUACK_HOST }}
+{{- end }}

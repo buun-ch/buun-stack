@@ -10,6 +10,13 @@ export DUCKLAKE_BUCKET := env("DUCKLAKE_BUCKET", "ducklake")
 # Data path prefix inside the bucket (default: s3://<bucket>/main)
 export DUCKLAKE_DATA_PATH := env("DUCKLAKE_DATA_PATH", "")
 export DUCKLAKE_ATTACH_ALIAS := env("DUCKLAKE_ATTACH_ALIAS", "lake")
+export DUCKLAKE_NAMESPACE := env("DUCKLAKE_NAMESPACE", "ducklake")
+
+# Public FQDN for the Quack server (empty = no Ingress, cluster-only)
+export DUCKLAKE_QUACK_HOST := env("DUCKLAKE_QUACK_HOST", "")
+export DUCKLAKE_QUACK_CHART := env("DUCKLAKE_QUACK_CHART", "oci://ghcr.io/buun-ch/charts/simple-quack-server")
+export DUCKLAKE_QUACK_CHART_VERSION := env("DUCKLAKE_QUACK_CHART_VERSION", "0.1.0")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export RUSTFS_NAMESPACE := env("RUSTFS_NAMESPACE", "rustfs")
 export CNPG_NAMESPACE := env("CNPG_NAMESPACE", "postgres")
@@ -41,17 +48,19 @@ _resolve_s3_backend := '''
     esac
 '''
 
-# Provision the DuckLake catalog database and object storage bucket
+# Provision the DuckLake catalog, storage bucket and Quack server
 install:
     #!/bin/bash
     set -euo pipefail
     just ducklake::setup-catalog-db
     just ducklake::setup-storage
+    just ducklake::quack-deploy
     echo ""
     echo "✅ DuckLake is ready."
     echo ""
     echo "Next steps:"
-    echo "  just ducklake::test             # Run a smoke test (requires duckdb CLI + telepresence)"
+    echo "  just ducklake::test             # Smoke test via direct attach (requires duckdb CLI + telepresence)"
+    echo "  just ducklake::quack-test       # Smoke test via the Quack server (requires duckdb CLI)"
     echo "  just ducklake::duckdb           # Open a DuckDB shell attached to the lake"
     echo "  just ducklake::print-init-sql   # Print the SQL needed to attach from any DuckDB client"
 
@@ -206,17 +215,122 @@ show-config:
     echo ""
     echo "Attach SQL: just ducklake::print-init-sql"
 
-# Remove the catalog database, user and Vault secrets (bucket data is kept)
+# Deploy the Quack server (simple-quack-server Helm chart) to Kubernetes
+quack-deploy:
+    #!/bin/bash
+    set -euo pipefail
+    if ! helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+        echo "Error: Vault is required (credentials are read from ducklake/catalog and ducklake/storage)." >&2
+        exit 1
+    fi
+
+    kubectl get namespace ${DUCKLAKE_NAMESPACE} &>/dev/null || \
+        kubectl create namespace ${DUCKLAKE_NAMESPACE}
+
+    if TOKEN=$(just vault::get ducklake/quack token 2>/dev/null); then
+        echo "Reusing Quack token from Vault (ducklake/quack)."
+    else
+        TOKEN=$(just utils::random-password)
+        just vault::put ducklake/quack token="${TOKEN}"
+        echo "Generated new Quack token and stored it in Vault (ducklake/quack)."
+    fi
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets available. Creating ExternalSecret for ducklake-quack..."
+        gomplate -f ducklake-quack-external-secret.gomplate.yaml | kubectl apply -f -
+        kubectl wait --for=condition=Ready externalsecret/ducklake-quack-external-secret \
+            -n ${DUCKLAKE_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets not available. Creating Kubernetes Secret directly..."
+        kubectl delete secret ducklake-quack -n ${DUCKLAKE_NAMESPACE} --ignore-not-found
+        kubectl create secret generic ducklake-quack -n ${DUCKLAKE_NAMESPACE} \
+            --from-literal=CATALOG_HOST="$(just vault::get ducklake/catalog host)" \
+            --from-literal=CATALOG_PORT="$(just vault::get ducklake/catalog port)" \
+            --from-literal=CATALOG_DB="$(just vault::get ducklake/catalog database)" \
+            --from-literal=CATALOG_USER="$(just vault::get ducklake/catalog username)" \
+            --from-literal=CATALOG_PASSWORD="$(just vault::get ducklake/catalog password)" \
+            --from-literal=S3_ENDPOINT="$(just vault::get ducklake/storage endpoint)" \
+            --from-literal=S3_ACCESS_KEY="$(just vault::get ducklake/storage access_key)" \
+            --from-literal=S3_SECRET_KEY="$(just vault::get ducklake/storage secret_key)" \
+            --from-literal=DATA_PATH="$(just vault::get ducklake/storage data_path)" \
+            --from-literal=QUACK_TOKEN="${TOKEN}"
+    fi
+
+    VALUES_FILE=$(mktemp)
+    trap 'rm -f "${VALUES_FILE}"' EXIT
+    gomplate -f ducklake-quack-values.gomplate.yaml > "${VALUES_FILE}"
+    helm upgrade --install ducklake-quack ${DUCKLAKE_QUACK_CHART} \
+        --version ${DUCKLAKE_QUACK_CHART_VERSION} \
+        -n ${DUCKLAKE_NAMESPACE} -f "${VALUES_FILE}"
+    echo "Waiting for the Quack server to become ready..."
+    kubectl rollout status deployment/ducklake-quack -n ${DUCKLAKE_NAMESPACE} --timeout=300s
+
+    echo ""
+    echo "✅ Quack server deployed."
+    echo ""
+    echo "Client usage (via telepresence or in-cluster):"
+    echo "  LOAD quack;"
+    echo "  CREATE SECRET (TYPE quack, TOKEN '<just ducklake::quack-token>');"
+    echo "  ATTACH 'quack:ducklake-quack.${DUCKLAKE_NAMESPACE}' AS remote (DISABLE_SSL true);  -- plain HTTP in-cluster"
+    echo "  SELECT * FROM remote.<table>;                                  -- reads (mirror views)"
+    echo "  SELECT * FROM remote.query('INSERT INTO lake.<table> ...');    -- writes/DDL"
+    if [ -n "${DUCKLAKE_QUACK_HOST}" ]; then
+        echo ""
+        echo "Remote usage (via Cloudflare Tunnel, TLS terminated — no DISABLE_SSL):"
+        echo "  ATTACH 'quack:${DUCKLAKE_QUACK_HOST}:443' AS remote (TOKEN '<token>');  -- :443 required (Cloudflare)"
+    fi
+
+# Remove the Quack server from Kubernetes (Vault token is kept)
+quack-undeploy:
+    helm uninstall ducklake-quack -n ${DUCKLAKE_NAMESPACE} || true
+    kubectl delete externalsecret ducklake-quack-external-secret -n ${DUCKLAKE_NAMESPACE} --ignore-not-found
+    kubectl delete secret ducklake-quack -n ${DUCKLAKE_NAMESPACE} --ignore-not-found
+
+# Print the Quack server token
+quack-token:
+    @just vault::get ducklake/quack token
+
+# Smoke test the Quack server (requires duckdb CLI; uses kubectl port-forward)
+# Note: telepresence direct routing does not work with the duckdb quack client
+# (curl works, duckdb does not) — hence the port-forward.
+quack-test:
+    #!/bin/bash
+    set -euo pipefail
+    if ! command -v duckdb &>/dev/null; then
+        echo "Error: duckdb CLI not found. Run 'mise install'." >&2
+        exit 1
+    fi
+    TOKEN=$(just ducklake::quack-token)
+    echo "Starting port-forward to svc/ducklake-quack on localhost:19494 ..."
+    kubectl -n ${DUCKLAKE_NAMESPACE} port-forward svc/ducklake-quack 19494:9494 >/dev/null 2>&1 &
+    PF_PID=$!
+    trap 'kill ${PF_PID} 2>/dev/null || true' EXIT
+    sleep 2
+    duckdb :memory: -c "
+        LOAD quack;
+        ATTACH 'quack:localhost:19494' AS remote (TOKEN '${TOKEN}');
+        SELECT * FROM remote.query('CREATE OR REPLACE TABLE lake.quack_smoke(id INT, note VARCHAR)');
+        SELECT * FROM remote.query('INSERT INTO lake.quack_smoke VALUES (1, ''hello quack'')');
+        SELECT * FROM remote.query('SELECT * FROM lake.quack_smoke');
+        SELECT * FROM remote.query('DROP TABLE lake.quack_smoke');
+    "
+    echo "✅ Quack server smoke test passed."
+
+# Remove the Quack server, catalog database, user and Vault secrets (bucket data is kept)
 uninstall:
     #!/bin/bash
     set -euo pipefail
-    echo "This will delete the DuckLake catalog database '${DUCKLAKE_CATALOG_DB}',"
-    echo "the user '${DUCKLAKE_CATALOG_USER}' and the Vault secrets under ducklake/."
+    echo "This will remove the Quack server (namespace '${DUCKLAKE_NAMESPACE}'), delete the"
+    echo "DuckLake catalog database '${DUCKLAKE_CATALOG_DB}', the user '${DUCKLAKE_CATALOG_USER}'"
+    echo "and the Vault secrets under ducklake/."
     echo "Data files in s3://${DUCKLAKE_BUCKET} are NOT deleted."
     if gum confirm "Are you sure you want to proceed?"; then
+        just ducklake::quack-undeploy || true
+        kubectl delete namespace ${DUCKLAKE_NAMESPACE} --ignore-not-found
         just postgres::delete-user-and-db ${DUCKLAKE_CATALOG_USER} ${DUCKLAKE_CATALOG_DB} || true
         just vault::delete ducklake/catalog || true
         just vault::delete ducklake/storage || true
+        just vault::delete ducklake/quack || true
         echo "Uninstall completed. To remove data files, delete the bucket in ${DUCKLAKE_S3_BACKEND}."
     else
         echo "Uninstall cancelled"
