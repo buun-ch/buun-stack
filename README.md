@@ -60,6 +60,7 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - **[Meilisearch](https://www.meilisearch.com/)**: Lightning-fast, typo-tolerant search engine
 - **[Redis Operator](https://github.com/OT-CONTAINER-KIT/redis-operator)**: Kubernetes operator for Redis standalone, cluster, and replication
 - **[Lakekeeper](https://lakekeeper.io/)**: Apache Iceberg REST Catalog for data lake management
+- **[DuckLake](https://ducklake.select/)**: Lakehouse format with a PostgreSQL catalog and Parquet files on S3, queried with DuckDB
 - **[Apache Superset](https://superset.apache.org/)**: BI platform with rich chart types and high customizability
 - **[Metabase](https://www.metabase.com/)**: Lightweight BI with simple configuration and clean, modern interface
 - **[DataHub](https://datahubproject.io/)**: Data catalog and metadata management
@@ -82,6 +83,10 @@ A remotely accessible Kubernetes home lab with OIDC authentication. Build a mode
 - **[Dagster](https://dagster.io/)**: Modern data orchestration platform
 - **[Apache Airflow](https://airflow.apache.org/)**: Workflow orchestration and task scheduling
 - **[Temporal](https://temporal.io/)**: Durable workflow execution for distributed applications
+
+### Development Environment (Optional)
+
+- **[Coder](https://coder.com/)**: Self-hosted development workspaces running as pods in the cluster
 
 ### Security & Compliance (Optional)
 
@@ -340,6 +345,17 @@ Apache Iceberg REST Catalog:
 
 [📖 See Lakekeeper Documentation](./lakekeeper/README.md)
 
+### DuckLake
+
+Lakehouse format that keeps its catalog in PostgreSQL and its data files on S3:
+
+- **No Catalog Server**: Installing it means provisioning a database, a bucket and credentials — any DuckDB client attaches the lake directly
+- **Snapshots and Time Travel**: Every write creates a snapshot, queryable with `AT (VERSION => n)`
+- **Remote Access**: An optional Quack server exposes the lake over HTTP with token auth, keeping PostgreSQL and S3 private
+- **Transformations**: dbt works against a direct attach; run it from a [Coder](#coder) workspace rather than over Quack
+
+[📖 See DuckLake Documentation](./ducklake/README.md)
+
 ### Apache Superset
 
 Modern business intelligence platform:
@@ -476,6 +492,17 @@ Durable workflow execution platform:
 - **Keycloak Authentication**: OAuth2 for Web UI access
 
 [📖 See Temporal Documentation](./temporal/README.md)
+
+### Coder
+
+Self-hosted development workspaces defined as Terraform templates:
+
+- **In-Cluster Workspaces**: Workspace pods run next to the data, so a laptop only runs a terminal
+- **Keycloak Authentication**: OIDC SSO, included in the free Community edition
+- **SSH and IDE Access**: `coder ssh` from anywhere, plus VS Code Remote-SSH, a browser terminal and code-server
+- **Data Stack Image**: Ships `duckdb` and `dbt-duckdb` alongside clients for the stack's components, with DuckLake credentials injected from Vault
+
+[📖 See Coder Documentation](./coder/README.md)
 
 ### Fairwinds Polaris
 
