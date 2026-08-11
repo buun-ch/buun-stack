@@ -1,6 +1,6 @@
 set dotenv-filename := ".env.local"
 
-export PATH := "./node_modules/.bin:" + env_var('PATH')
+export PATH := justfile_directory() / "node_modules/.bin" + ":" + env_var('PATH')
 
 [private]
 default:
@@ -10,6 +10,7 @@ mod airflow
 mod cert-manager
 mod ch-ui
 mod clickhouse
+mod coder
 mod dagster
 mod datahub
 mod ducklake
