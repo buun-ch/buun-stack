@@ -15,7 +15,7 @@ export DUCKLAKE_NAMESPACE := env("DUCKLAKE_NAMESPACE", "ducklake")
 # Public FQDN for the Quack server (empty = no Ingress, cluster-only)
 export DUCKLAKE_QUACK_HOST := env("DUCKLAKE_QUACK_HOST", "")
 export DUCKLAKE_QUACK_CHART := env("DUCKLAKE_QUACK_CHART", "oci://ghcr.io/buun-ch/charts/simple-quack-server")
-export DUCKLAKE_QUACK_CHART_VERSION := env("DUCKLAKE_QUACK_CHART_VERSION", "0.1.0")
+export DUCKLAKE_QUACK_CHART_VERSION := env("DUCKLAKE_QUACK_CHART_VERSION", "0.2.0")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
 export MINIO_NAMESPACE := env("MINIO_NAMESPACE", "minio")
 export RUSTFS_NAMESPACE := env("RUSTFS_NAMESPACE", "rustfs")
@@ -61,6 +61,7 @@ install:
     echo "Next steps:"
     echo "  just ducklake::test             # Smoke test via direct attach (requires duckdb CLI + telepresence)"
     echo "  just ducklake::quack-test       # Smoke test via the Quack server (requires duckdb CLI)"
+    echo "  just ducklake::quack-helm-test  # Smoke test from inside the cluster (read-only)"
     echo "  just ducklake::duckdb           # Open a DuckDB shell attached to the lake"
     echo "  just ducklake::print-init-sql   # Print the SQL needed to attach from any DuckDB client"
 
@@ -272,8 +273,9 @@ quack-deploy:
     echo "  LOAD quack;"
     echo "  CREATE SECRET (TYPE quack, TOKEN '<just ducklake::quack-token>');"
     echo "  ATTACH 'quack:ducklake-quack.${DUCKLAKE_NAMESPACE}' AS remote (DISABLE_SSL true);  -- plain HTTP in-cluster"
-    echo "  SELECT * FROM remote.<table>;                                  -- reads (mirror views)"
-    echo "  SELECT * FROM remote.query('INSERT INTO lake.<table> ...');    -- writes/DDL"
+    echo "  FROM remote.query('USE ${DUCKLAKE_ATTACH_ALIAS}');             -- once per session"
+    echo "  SELECT * FROM remote.<table>;                                  -- reads, INSERT, CREATE/DROP TABLE"
+    echo "  SELECT * FROM remote.query('MERGE INTO ...');                  -- UPDATE/DELETE/ALTER/MERGE/time travel"
     if [ -n "${DUCKLAKE_QUACK_HOST}" ]; then
         echo ""
         echo "Remote usage (via Cloudflare Tunnel, TLS terminated — no DISABLE_SSL):"
@@ -290,12 +292,12 @@ quack-undeploy:
 quack-token:
     @just vault::get ducklake/quack token
 
-# Smoke test the Quack server (requires duckdb CLI; uses kubectl port-forward)
-# Note: telepresence direct routing does not work with the duckdb quack client
-# (curl works, duckdb does not) — hence the port-forward.
+# Smoke test the Quack server from this machine (requires duckdb CLI; port-forward)
 quack-test:
     #!/bin/bash
     set -euo pipefail
+    # telepresence direct routing does not work with the duckdb quack client
+    # (curl reaches the service, duckdb does not) — hence the port-forward.
     if ! command -v duckdb &>/dev/null; then
         echo "Error: duckdb CLI not found. Run 'mise install'." >&2
         exit 1
@@ -306,15 +308,22 @@ quack-test:
     PF_PID=$!
     trap 'kill ${PF_PID} 2>/dev/null || true' EXIT
     sleep 2
+    # Remote sessions start in the server's default database, so switch to the
+    # lake once; after that plain SQL against remote.<table> reaches it.
     duckdb :memory: -c "
         LOAD quack;
         ATTACH 'quack:localhost:19494' AS remote (TOKEN '${TOKEN}');
-        SELECT * FROM remote.query('CREATE OR REPLACE TABLE lake.quack_smoke(id INT, note VARCHAR)');
-        SELECT * FROM remote.query('INSERT INTO lake.quack_smoke VALUES (1, ''hello quack'')');
-        SELECT * FROM remote.query('SELECT * FROM lake.quack_smoke');
-        SELECT * FROM remote.query('DROP TABLE lake.quack_smoke');
+        FROM remote.query('USE ${DUCKLAKE_ATTACH_ALIAS}');
+        CREATE OR REPLACE TABLE remote.quack_smoke(id INT, note VARCHAR);
+        INSERT INTO remote.quack_smoke VALUES (1, 'hello quack');
+        SELECT * FROM remote.quack_smoke;
+        DROP TABLE remote.quack_smoke;
     "
     echo "✅ Quack server smoke test passed."
+
+# Run the chart's own test hook (in-cluster client, read-only; no port-forward)
+quack-helm-test:
+    helm test ducklake-quack -n ${DUCKLAKE_NAMESPACE} --logs
 
 # Remove the Quack server, catalog database, user and Vault secrets (bucket data is kept)
 uninstall:

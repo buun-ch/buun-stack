@@ -55,6 +55,7 @@ This module provisions the surrounding pieces: the `ducklake-quack` Secret
 ```bash
 just ducklake::quack-deploy     # Deploy server (token stored at Vault ducklake/quack)
 just ducklake::quack-test       # Smoke test via kubectl port-forward
+just ducklake::quack-helm-test  # Smoke test from inside the cluster (helm test, read-only)
 just ducklake::quack-token      # Print client token
 just ducklake::quack-undeploy   # Remove server (token kept)
 ```
@@ -67,21 +68,55 @@ ATTACH 'quack:ducklake-quack.ducklake' AS remote (TOKEN '<token>', DISABLE_SSL t
 -- or remotely via Cloudflare Tunnel (TLS terminated; :443 is required because
 -- the quack default port 9494 is not proxied by Cloudflare):
 -- ATTACH 'quack:ducklake.example.com:443' AS remote (TOKEN '<token>');
-SELECT * FROM remote.<table>;                                 -- reads (mirror views)
-SELECT * FROM remote.query('INSERT INTO lake.<table> ...');   -- writes / DDL
+FROM remote.query('USE lake');                    -- once per session, see below
+SELECT * FROM remote.<table>;                     -- reads, INSERT, CREATE/DROP TABLE
+SELECT * FROM remote.query('MERGE INTO ...');     -- UPDATE/DELETE/ALTER/MERGE/time travel
 ```
 
 Notes:
 
-- Remote sessions do not inherit the server's default database; the server mirrors lake
-  tables as views (refreshed every 60s) so `remote.<table>` works for reads. Writes and DDL
-  go through `remote.query('... lake.<table> ...')`
+- Remote sessions start in the server's own (empty) default database, and the quack client
+  sends SQL without the catalog qualifier — so each session has to switch to the lake once
+  with `FROM remote.query('USE lake')`. After that, reads, `INSERT` and `CREATE`/`DROP TABLE`
+  work directly against `remote.<table>`. Schemas other than `main` need `USE lake.<schema>`
+- `UPDATE`, `DELETE`, `ALTER TABLE`, `MERGE INTO`, time travel and the DuckLake table
+  functions are not implemented in the quack client yet; wrap those in `remote.query('...')`
+- Requires chart 0.2.0 or later. Earlier versions mirrored lake tables as views in the
+  default database, which made `remote.<table>` read-only
 - Quack clients assume HTTPS for non-localhost hosts — use `DISABLE_SSL true` inside the
   cluster; behind a TLS-terminating tunnel, omit it
 - telepresence direct routing does not work with the duckdb quack client (curl reaches the
   service, duckdb does not); use `kubectl port-forward` from a local machine
 - Single replica = single writer, which matches the write-path design
   (see the lakehouse-app project's PLAN)
+
+### Tooling over Quack: use a workspace instead
+
+The Quack server is the door for a human at an interactive prompt. It is not yet a substrate for
+tools that drive the catalog programmatically — **dbt does not work through it**, and the reason is
+the quack client's implementation, not DuckLake:
+
+- **No `ALTER TABLE`.** dbt's `table` materialization builds `<model>__dbt_tmp` and renames it into
+  place. The create succeeds and the swap fails.
+- **The catalog cannot be enumerated.** dbt lists existing relations before every run;
+  `information_schema.tables`, `duckdb_tables()` and `SHOW TABLES` all come back empty over quack —
+  even for tables the same session just created.
+- **No `MERGE`/`DELETE`**, so `incremental` and `snapshot` materializations are out as well.
+
+Wrapping statements in `remote.query('...')` gets around each of these individually, but dbt emits
+its own SQL and cannot be made to do that.
+
+**Run dbt (and other catalog-driven tooling) inside the cluster against a direct attach.** With the
+Postgres catalog and S3 attached directly, the local DuckDB has the full catalog and every one of
+the above works — verified end to end, including `incremental`. The [`coder`](../coder/README.md)
+module provides a workspace for exactly this: a persistent in-cluster development environment,
+reachable over `coder ssh` from anywhere, with `duckdb`, `dbt-duckdb` and the DuckLake credentials
+already wired up. See [its README](../coder/README.md) for the working dbt profile, including the
+two fields that fail silently when omitted.
+
+This split is also the right one on performance grounds. dbt-duckdb computes wherever the dbt
+process runs, so a laptop-side dbt would pull the lake's Parquet across the WAN and write it back.
+Keep the compute next to the data and send only control from outside.
 
 ## Client access
 
