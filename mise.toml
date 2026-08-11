@@ -1,4 +1,5 @@
 [tools]
+# coder = "2.35.4"
 # duckdb = "1.5.2"
 gomplate = "5.2.0"
 gum = "0.17.0"

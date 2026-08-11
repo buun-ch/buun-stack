@@ -1,0 +1,367 @@
+set fallback := true
+
+export CODER_NAMESPACE := env("CODER_NAMESPACE", "coder")
+export CODER_WORKSPACE_NAMESPACE := env("CODER_WORKSPACE_NAMESPACE", "coder-workspaces")
+export CODER_WORKSPACE_PSS := env("CODER_WORKSPACE_PSS", "restricted")
+export CODER_WORKSPACE_IMAGE := env("CODER_WORKSPACE_IMAGE", "localhost:30500/coder-datastack")
+export CODER_WORKSPACE_IMAGE_TAG := env("CODER_WORKSPACE_IMAGE_TAG", "buun-stack")
+export LOCAL_K8S_HOST := env("LOCAL_K8S_HOST", "")
+export CODER_HOST := env("CODER_HOST", "")
+export CODER_CHART_VERSION := env("CODER_CHART_VERSION", "2.35.4")
+export CODER_DB_NAME := env("CODER_DB_NAME", "coder")
+export CODER_DB_USER := env("CODER_DB_USER", "coder")
+export CODER_CPU_REQUEST := env("CODER_CPU_REQUEST", "100m")
+export CODER_CPU_LIMIT := env("CODER_CPU_LIMIT", "2")
+export CODER_MEMORY_REQUEST := env("CODER_MEMORY_REQUEST", "512Mi")
+export CODER_MEMORY_LIMIT := env("CODER_MEMORY_LIMIT", "2Gi")
+export CODER_OIDC_ENABLED := env("CODER_OIDC_ENABLED", "")
+export CNPG_NAMESPACE := env("CNPG_NAMESPACE", "postgres")
+export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
+export K8S_VAULT_NAMESPACE := env("K8S_VAULT_NAMESPACE", "vault")
+export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
+export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
+
+[private]
+default:
+    @just --list --unsorted --list-submodules
+
+# Create Coder namespaces (control plane and workspaces)
+create-namespace:
+    #!/bin/bash
+    set -euo pipefail
+    if ! kubectl get namespace ${CODER_NAMESPACE} &>/dev/null; then
+        kubectl create namespace ${CODER_NAMESPACE}
+    fi
+    kubectl label namespace ${CODER_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=restricted \
+        pod-security.kubernetes.io/enforce-version=latest \
+        pod-security.kubernetes.io/warn=restricted \
+        pod-security.kubernetes.io/warn-version=latest \
+        --overwrite
+
+    # Workspaces live in their own namespace so that a relaxed Pod Security
+    # Standard can be applied there without weakening the control plane.
+    # Set CODER_WORKSPACE_PSS=baseline if workspace images need sudo or
+    # package installation at runtime.
+    if ! kubectl get namespace ${CODER_WORKSPACE_NAMESPACE} &>/dev/null; then
+        kubectl create namespace ${CODER_WORKSPACE_NAMESPACE}
+    fi
+    kubectl label namespace ${CODER_WORKSPACE_NAMESPACE} \
+        pod-security.kubernetes.io/enforce=${CODER_WORKSPACE_PSS} \
+        pod-security.kubernetes.io/enforce-version=latest \
+        pod-security.kubernetes.io/warn=${CODER_WORKSPACE_PSS} \
+        pod-security.kubernetes.io/warn-version=latest \
+        --overwrite
+
+# Delete Coder namespaces
+delete-namespace:
+    #!/bin/bash
+    set -euo pipefail
+    kubectl delete namespace ${CODER_NAMESPACE} --ignore-not-found
+    kubectl delete namespace ${CODER_WORKSPACE_NAMESPACE} --ignore-not-found
+
+# Create the Coder database and its PostgreSQL user
+create-database:
+    #!/bin/bash
+    set -euo pipefail
+    if just postgres::db-exists ${CODER_DB_NAME} &>/dev/null; then
+        echo "Database ${CODER_DB_NAME} already exists, skipping creation."
+        exit 0
+    fi
+    password=$(just utils::random-password)
+    just postgres::create-user-and-db ${CODER_DB_USER} ${CODER_DB_NAME} "${password}"
+    just vault::put coder/database \
+        username="${CODER_DB_USER}" \
+        password="${password}" \
+        database="${CODER_DB_NAME}"
+
+# Delete the Coder database and its PostgreSQL user
+delete-database:
+    @just postgres::delete-user-and-db ${CODER_DB_USER} ${CODER_DB_NAME}
+
+# Create the database URL secret consumed by coderd
+create-db-secret:
+    #!/bin/bash
+    set -euo pipefail
+    if ! password=$(just vault::get coder/database password 2>/dev/null); then
+        echo "Error: could not read coder/database from Vault." >&2
+        echo "Run 'just coder::create-database' first." >&2
+        exit 1
+    fi
+    db_url="postgres://${CODER_DB_USER}:${password}@postgres-cluster-rw.${CNPG_NAMESPACE}:5432/${CODER_DB_NAME}?sslmode=disable"
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        echo "External Secrets Operator detected. Storing database URL in Vault..."
+        just vault::put coder/database url="${db_url}"
+
+        kubectl delete secret coder-db-url -n ${CODER_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret coder-db-url -n ${CODER_NAMESPACE} --ignore-not-found
+
+        gomplate -f coder-db-external-secret.gomplate.yaml -o coder-db-external-secret.yaml
+        kubectl apply -f coder-db-external-secret.yaml
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/coder-db-url \
+            -n ${CODER_NAMESPACE} --timeout=60s
+    else
+        echo "External Secrets Operator not found. Creating secret directly..."
+        kubectl delete secret coder-db-url -n ${CODER_NAMESPACE} --ignore-not-found
+        kubectl create secret generic coder-db-url -n ${CODER_NAMESPACE} \
+            --from-literal=url="${db_url}"
+    fi
+
+# Delete the database URL secret
+delete-db-secret:
+    #!/bin/bash
+    set -euo pipefail
+    kubectl delete externalsecret coder-db-url -n ${CODER_NAMESPACE} --ignore-not-found
+    kubectl delete secret coder-db-url -n ${CODER_NAMESPACE} --ignore-not-found
+
+# Create the Keycloak client and OIDC secret (requires CODER_OIDC_ENABLED)
+create-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${CODER_HOST}" ]; do
+        CODER_HOST=$(
+            gum input --prompt="Coder host (FQDN): " --width=100 \
+            --placeholder="e.g., coder.example.com"
+        )
+    done
+
+    just keycloak::delete-client ${KEYCLOAK_REALM} coder || true
+
+    client_secret=$(just utils::random-password)
+    just keycloak::create-client \
+        realm=${KEYCLOAK_REALM} \
+        client_id=coder \
+        redirect_url="https://${CODER_HOST}/api/v2/users/oidc/callback" \
+        client_secret="${client_secret}"
+
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        just vault::put coder/oidc client_id=coder client_secret="${client_secret}"
+
+        kubectl delete secret coder-oidc -n ${CODER_NAMESPACE} --ignore-not-found
+        kubectl delete externalsecret coder-oidc -n ${CODER_NAMESPACE} --ignore-not-found
+
+        gomplate -f coder-oidc-external-secret.gomplate.yaml -o coder-oidc-external-secret.yaml
+        kubectl apply -f coder-oidc-external-secret.yaml
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/coder-oidc \
+            -n ${CODER_NAMESPACE} --timeout=60s
+    else
+        kubectl delete secret coder-oidc -n ${CODER_NAMESPACE} --ignore-not-found
+        kubectl create secret generic coder-oidc -n ${CODER_NAMESPACE} \
+            --from-literal=client_id=coder \
+            --from-literal=client_secret="${client_secret}"
+
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::put coder/oidc client_id=coder client_secret="${client_secret}"
+        fi
+    fi
+
+    echo "Keycloak client created: coder"
+    echo "Redirect URI: https://${CODER_HOST}/api/v2/users/oidc/callback"
+
+# Delete the Keycloak client and OIDC secret
+delete-keycloak-client:
+    #!/bin/bash
+    set -euo pipefail
+    just keycloak::delete-client ${KEYCLOAK_REALM} coder || true
+    kubectl delete externalsecret coder-oidc -n ${CODER_NAMESPACE} --ignore-not-found
+    kubectl delete secret coder-oidc -n ${CODER_NAMESPACE} --ignore-not-found
+
+# Install Coder
+install:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${CODER_HOST}" ]; do
+        CODER_HOST=$(
+            gum input --prompt="Coder host (FQDN): " --width=100 \
+            --placeholder="e.g., coder.example.com"
+        )
+    done
+    export CODER_HOST
+
+    if [ -n "${CODER_OIDC_ENABLED}" ]; then
+        while [ -z "${KEYCLOAK_HOST}" ]; do
+            KEYCLOAK_HOST=$(
+                gum input --prompt="Keycloak host (FQDN): " --width=100 \
+                --placeholder="e.g., auth.example.com"
+            )
+        done
+        export KEYCLOAK_HOST
+    fi
+
+    just create-namespace
+    just create-database
+    just create-db-secret
+
+    if [ -n "${CODER_OIDC_ENABLED}" ]; then
+        just create-keycloak-client
+    fi
+
+    gomplate -f coder-values.gomplate.yaml -o coder-values.yaml
+    helm upgrade --cleanup-on-fail --install coder oci://ghcr.io/coder/chart/coder \
+        -n ${CODER_NAMESPACE} --version ${CODER_CHART_VERSION} --wait \
+        -f coder-values.yaml
+
+    kubectl wait --for=condition=Available deployment/coder \
+        -n ${CODER_NAMESPACE} --timeout=300s
+
+    echo ""
+    echo "Coder installed successfully!"
+    echo "Access URL: https://${CODER_HOST}"
+    if [ -z "${CODER_OIDC_ENABLED}" ]; then
+        echo ""
+        echo "OIDC is disabled. Open the URL above and create the first user"
+        echo "(owner) with email and password before enabling OIDC."
+    fi
+
+# Upgrade Coder
+upgrade:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${CODER_HOST}" ]; do
+        CODER_HOST=$(
+            gum input --prompt="Coder host (FQDN): " --width=100 \
+            --placeholder="e.g., coder.example.com"
+        )
+    done
+    export CODER_HOST
+
+    if [ -n "${CODER_OIDC_ENABLED}" ]; then
+        while [ -z "${KEYCLOAK_HOST}" ]; do
+            KEYCLOAK_HOST=$(
+                gum input --prompt="Keycloak host (FQDN): " --width=100 \
+                --placeholder="e.g., auth.example.com"
+            )
+        done
+        export KEYCLOAK_HOST
+    fi
+
+    gomplate -f coder-values.gomplate.yaml -o coder-values.yaml
+    helm upgrade coder oci://ghcr.io/coder/chart/coder \
+        -n ${CODER_NAMESPACE} --version ${CODER_CHART_VERSION} --wait \
+        -f coder-values.yaml
+    echo "Coder upgraded successfully"
+
+# Uninstall Coder (workspaces are deleted with the workspace namespace)
+uninstall delete-db='true':
+    #!/bin/bash
+    set -euo pipefail
+    helm uninstall coder -n ${CODER_NAMESPACE} --ignore-not-found --wait
+    just delete-db-secret
+    just delete-keycloak-client
+    just delete-namespace
+    if [ "{{ delete-db }}" = "true" ]; then
+        just delete-database
+        if helm status vault -n ${K8S_VAULT_NAMESPACE} &>/dev/null; then
+            just vault::delete coder/database || true
+            just vault::delete coder/oidc || true
+        fi
+    fi
+
+# Build and push the workspace image to the in-cluster registry
+build-image:
+    #!/bin/bash
+    set -euo pipefail
+    while [ -z "${LOCAL_K8S_HOST}" ]; do
+        LOCAL_K8S_HOST=$(
+            gum input --prompt="Kubernetes host (for remote Docker): " --width=100 \
+            --placeholder="e.g., myhost"
+        )
+    done
+    export DOCKER_HOST="ssh://${LOCAL_K8S_HOST}"
+    image="${CODER_WORKSPACE_IMAGE}:${CODER_WORKSPACE_IMAGE_TAG}"
+
+    echo "Building ${image} on ${DOCKER_HOST}..."
+    docker build -t "${image}" images/coder-datastack
+    docker push "${image}"
+    echo "Pushed ${image}"
+    echo "Run 'just coder::push-template' to point the template at it."
+
+# Create the DuckLake credential secret in the workspace namespace
+create-ducklake-secret:
+    #!/bin/bash
+    set -euo pipefail
+    if helm status external-secrets -n ${EXTERNAL_SECRETS_NAMESPACE} &>/dev/null; then
+        kubectl delete externalsecret ducklake-credentials \
+            -n ${CODER_WORKSPACE_NAMESPACE} --ignore-not-found
+        kubectl delete secret ducklake-credentials \
+            -n ${CODER_WORKSPACE_NAMESPACE} --ignore-not-found
+
+        gomplate -f coder-ducklake-external-secret.gomplate.yaml \
+            -o coder-ducklake-external-secret.yaml
+        kubectl apply -f coder-ducklake-external-secret.yaml
+
+        echo "Waiting for ExternalSecret to sync..."
+        kubectl wait --for=condition=Ready externalsecret/ducklake-credentials \
+            -n ${CODER_WORKSPACE_NAMESPACE} --timeout=60s
+    else
+        echo "Error: External Secrets Operator is required for this recipe." >&2
+        exit 1
+    fi
+
+# Delete the DuckLake credential secret
+delete-ducklake-secret:
+    #!/bin/bash
+    set -euo pipefail
+    kubectl delete externalsecret ducklake-credentials \
+        -n ${CODER_WORKSPACE_NAMESPACE} --ignore-not-found
+    kubectl delete secret ducklake-credentials \
+        -n ${CODER_WORKSPACE_NAMESPACE} --ignore-not-found
+
+# Push a workspace template to Coder (requires an authenticated coder CLI)
+push-template template='kubernetes':
+    #!/bin/bash
+    set -euo pipefail
+    just check-cli
+    if ! coder whoami &>/dev/null; then
+        echo "Error: not logged in. Run 'just coder::login' first." >&2
+        exit 1
+    fi
+    coder templates push {{ template }} \
+        --directory templates/{{ template }} \
+        --variable namespace=${CODER_WORKSPACE_NAMESPACE} \
+        --variable image=${CODER_WORKSPACE_IMAGE}:${CODER_WORKSPACE_IMAGE_TAG} \
+        --yes
+
+# Verify the coder CLI is available (installed on demand, not via mise.toml)
+[private]
+check-cli:
+    #!/bin/bash
+    set -euo pipefail
+    if command -v coder &>/dev/null; then
+        exit 0
+    fi
+    echo "Error: coder CLI not found." >&2
+    echo "It is not part of mise.toml because only this module needs it." >&2
+    echo "Install a version matching the server:" >&2
+    echo "  mise use -g coder@${CODER_CHART_VERSION}" >&2
+    exit 1
+
+# Log in to Coder with the CLI
+login:
+    #!/bin/bash
+    set -euo pipefail
+    just check-cli
+    while [ -z "${CODER_HOST}" ]; do
+        CODER_HOST=$(
+            gum input --prompt="Coder host (FQDN): " --width=100 \
+            --placeholder="e.g., coder.example.com"
+        )
+    done
+    coder login "https://${CODER_HOST}"
+
+# Show current Coder configuration
+show-config:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Coder configuration:"
+    echo "  Namespace:           ${CODER_NAMESPACE}"
+    echo "  Workspace namespace: ${CODER_WORKSPACE_NAMESPACE} (PSS: ${CODER_WORKSPACE_PSS})"
+    echo "  Host:                ${CODER_HOST:-<unset>}"
+    echo "  Chart version:       ${CODER_CHART_VERSION}"
+    echo "  Database:            postgres-cluster-rw.${CNPG_NAMESPACE}:5432/${CODER_DB_NAME}"
+    echo "  OIDC:                ${CODER_OIDC_ENABLED:-disabled}"

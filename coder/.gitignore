@@ -1,0 +1,12 @@
+# Generated Helm values
+coder-values.yaml
+
+# Generated Kubernetes manifests
+coder-db-external-secret.yaml
+coder-ducklake-external-secret.yaml
+coder-oidc-external-secret.yaml
+
+# Local Terraform state, if a template is ever inspected outside coderd
+templates/**/.terraform/
+templates/**/.terraform.lock.hcl
+templates/**/terraform.tfstate*

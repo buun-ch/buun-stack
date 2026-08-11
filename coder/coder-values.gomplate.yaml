@@ -1,0 +1,68 @@
+coder:
+  env:
+    - name: CODER_ACCESS_URL
+      value: "https://{{ .Env.CODER_HOST }}"
+    - name: CODER_PG_CONNECTION_URL
+      valueFrom:
+        secretKeyRef:
+          name: coder-db-url
+          key: url
+    - name: CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE
+      value: "false"
+    - name: CODER_TELEMETRY_ENABLE
+      value: "false"
+{{- if .Env.CODER_OIDC_ENABLED }}
+    - name: CODER_OIDC_ISSUER_URL
+      value: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}"
+    - name: CODER_OIDC_CLIENT_ID
+      valueFrom:
+        secretKeyRef:
+          name: coder-oidc
+          key: client_id
+    - name: CODER_OIDC_CLIENT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: coder-oidc
+          key: client_secret
+    - name: CODER_OIDC_SCOPES
+      value: "openid,profile,email,offline_access"
+    - name: CODER_OIDC_SIGN_IN_TEXT
+      value: "Sign in with Keycloak"
+{{- end }}
+
+  serviceAccount:
+    workspacePerms: true
+    enableDeployments: true
+    workspaceNamespaces:
+      - name: {{ .Env.CODER_WORKSPACE_NAMESPACE }}
+
+  # The chart already runs coderd as non-root with allowPrivilegeEscalation
+  # disabled and a RuntimeDefault seccomp profile, but it does not drop
+  # capabilities, which the "restricted" Pod Security Standard requires.
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+
+  # The chart defaults to LoadBalancer, which would make k3s ServiceLB claim
+  # ports 80/443. Traffic reaches Coder through the Ingress below instead.
+  service:
+    type: ClusterIP
+
+  ingress:
+    enable: true
+    className: traefik
+    host: {{ .Env.CODER_HOST }}
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    tls:
+      enable: true
+
+  # Starting values; revisit once Goldilocks has VPA recommendations.
+  resources:
+    requests:
+      cpu: {{ .Env.CODER_CPU_REQUEST }}
+      memory: {{ .Env.CODER_MEMORY_REQUEST }}
+    limits:
+      cpu: {{ .Env.CODER_CPU_LIMIT }}
+      memory: {{ .Env.CODER_MEMORY_LIMIT }}
