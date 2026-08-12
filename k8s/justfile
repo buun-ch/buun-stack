@@ -92,6 +92,10 @@ uninstall:
         ssh "${LOCAL_K8S_HOST}" "sudo umount -l /var/lib/kubelet/plugins/kubernetes.io/csi/*/globalmount 2>/dev/null || true"
 
         ssh "${LOCAL_K8S_HOST}" "/usr/local/bin/k3s-uninstall.sh"
+
+        echo "Cleaning up stale netfilter rules..."
+        just clean-stale-netfilter
+
         echo "Cleaning up kubeconfig entries..."
         cluster_name=$(kubectl config view -o json | jq -r ".contexts[] | select(.name == \"${LOCAL_K8S_HOST}\") | .context.cluster // empty")
         user_name=$(kubectl config view -o json | jq -r ".contexts[] | select(.name == \"${LOCAL_K8S_HOST}\") | .context.user // empty")
@@ -112,6 +116,13 @@ uninstall:
         echo "Uninstallation cancelled." >&2
         exit 1
     fi
+
+# Remove k3s netfilter rules stranded in an inactive iptables backend
+clean-stale-netfilter:
+    #!/bin/bash
+    set -euo pipefail
+    just env::check
+    ssh "${LOCAL_K8S_HOST}" "sudo bash -s" < ./scripts/clean-stale-netfilter.sh
 
 # Stop k3s cluster gracefully (with volume detachment and CSI cleanup)
 stop:
