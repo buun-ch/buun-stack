@@ -1,4 +1,7 @@
 langfuse:
+  image:
+    tag: "{{ .Env.LANGFUSE_IMAGE_TAG }}"
+
   # Pod Security Context (restricted PSS compliant)
   podSecurityContext:
     runAsNonRoot: true
@@ -55,6 +58,25 @@ langfuse:
           key: client_secret
     - name: AUTH_KEYCLOAK_ISSUER
       value: "https://{{ .Env.KEYCLOAK_HOST }}/realms/{{ .Env.KEYCLOAK_REALM }}"
+    # Data retention enforcement. Only the UI toggle that sets
+    # projects.retention_days is EE-gated; the worker jobs acting on it are OSS,
+    # so the retention window is written directly by `just langfuse::set-retention`.
+    #
+    # The daily sweep is the complete one: it deletes ClickHouse rows, expired
+    # media, and the raw ingestion-event blobs from object storage together with
+    # their blob_storage_file_log references. Enabled by default upstream, set
+    # explicitly here because it is the only job that covers the event blobs.
+    - name: QUEUE_CONSUMER_DATA_RETENTION_QUEUE_IS_ENABLED
+      value: "true"
+    # Hourly incremental ClickHouse cleanup, so expired rows do not sit around
+    # until 03:15. Also starts MediaRetentionCleaner, whose blob-storage pass only
+    # runs for projects that have expired media, hence the daily sweep above.
+    - name: LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED
+      value: "true"
+    # ClickHouse deletes above are lightweight deletes (mask only). This cleaner
+    # applies the masks so the disk space is actually reclaimed.
+    - name: LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED
+      value: "true"
 
   ingress:
     enabled: true
@@ -119,15 +141,19 @@ redis:
     username: "default"
     existingSecret: redis-auth
     existingSecretPasswordKey: secret
+  # The subchart is Valkey aliased as `redis`, so the key is `primary`, not
+  # `master` — under `master` the block is silently ignored and the "nano"
+  # resourcesPreset (150m CPU / 192Mi) applies, which starves BullMQ during
+  # startup and surfaces as "Socket timeout" on every queue in the worker.
   # Memory limit must accommodate dataset + AOF rewrite fork (copy-on-write).
   # Observed RDB ~172MB → limit 256Mi caused OOMKill during AOF auto-rewrite.
-  master:
+  primary:
     resources:
       requests:
-        cpu: 25m
+        cpu: 100m
         memory: 256Mi
       limits:
-        cpu: 100m
+        cpu: 500m
         memory: 768Mi
 
 clickhouse:
@@ -168,3 +194,12 @@ s3:
     secretKeyRef:
       name: s3-auth
       key: secret_key
+  # Separate prefixes so the three payload types stay distinguishable in the
+  # bucket. Raw ingestion events are the ones that grow with trace volume:
+  # events/<projectId>/<entityType>/<entityId>/<eventId>.json
+  eventUpload:
+    prefix: events/
+  mediaUpload:
+    prefix: media/
+  batchExport:
+    prefix: exports/

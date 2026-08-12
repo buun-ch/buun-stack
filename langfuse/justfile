@@ -1,7 +1,17 @@
 set fallback := true
 
 export LANGFUSE_NAMESPACE := env("LANGFUSE_NAMESPACE", "langfuse")
-export LANGFUSE_CHART_VERSION := env("LANGFUSE_CHART_VERSION", "1.5.39")
+export LANGFUSE_CHART_VERSION := env("LANGFUSE_CHART_VERSION", "1.5.41")
+
+# The chart still defaults to Langfuse v3, so v4 must be pinned explicitly.
+# v4 requires an external ClickHouse >= 25.12 (the bundled one is not compatible).
+
+export LANGFUSE_IMAGE_TAG := env("LANGFUSE_IMAGE_TAG", "4.9.0")
+
+# Trace data retention in days, applied to projects.retention_days in PostgreSQL
+# by `just langfuse::set-retention`. Langfuse enforces a minimum of 3 days.
+
+export LANGFUSE_RETENTION_DAYS := env("LANGFUSE_RETENTION_DAYS", "30")
 export LANGFUSE_HOST := env("LANGFUSE_HOST", "")
 export LANGFUSE_OIDC_CLIENT_ID := env("LANGFUSE_OIDC_CLIENT_ID", "langfuse")
 export EXTERNAL_SECRETS_NAMESPACE := env("EXTERNAL_SECRETS_NAMESPACE", "external-secrets")
@@ -77,6 +87,7 @@ install:
         echo "  just clickhouse::install"
         exit 1
     fi
+    just check-clickhouse-version
     just create-clickhouse-user
     just create-clickhouse-secret
 
@@ -96,6 +107,27 @@ install:
     helm upgrade --install langfuse langfuse/langfuse \
         --version ${LANGFUSE_CHART_VERSION} -n ${LANGFUSE_NAMESPACE} --wait=legacy \
         -f langfuse-values.yaml
+
+    just set-retention || \
+        echo "Warning: retention not applied. Run 'just langfuse::set-retention' once Langfuse is up."
+
+# Fail unless ClickHouse is new enough for Langfuse v4 (>= 25.12)
+check-clickhouse-version:
+    #!/bin/bash
+    set -euo pipefail
+    VERSION=$(just clickhouse::exec-sql-admin "SELECT version()" 2>/dev/null | tr -d '\r' | head -1)
+    if [ -z "${VERSION}" ]; then
+        echo "Error: could not determine the ClickHouse server version" >&2
+        exit 1
+    fi
+    MAJOR=${VERSION%%.*}
+    MINOR=$(echo "${VERSION}" | cut -d. -f2)
+    if [ "${MAJOR}" -lt 25 ] || { [ "${MAJOR}" -eq 25 ] && [ "${MINOR}" -lt 12 ]; }; then
+        echo "Error: Langfuse ${LANGFUSE_IMAGE_TAG} requires ClickHouse >= 25.12, found ${VERSION}" >&2
+        echo "Upgrade ClickHouse first (CLICKHOUSE_IMAGE in clickhouse/justfile)." >&2
+        exit 1
+    fi
+    echo "ClickHouse ${VERSION} is compatible with Langfuse v4"
 
 # Uninstall Langfuse (delete-data: true to delete database and storage)
 uninstall delete-data='false':
@@ -268,6 +300,40 @@ create-secrets:
     # Clean up temporary OAuth secret
     kubectl delete secret langfuse-oauth-temp -n ${LANGFUSE_NAMESPACE} --ignore-not-found
 
+# Set trace data retention (in days) for every Langfuse project
+set-retention days='':
+    #!/bin/bash
+    set -euo pipefail
+    DAYS="{{ days }}"
+    DAYS="${DAYS:-${LANGFUSE_RETENTION_DAYS}}"
+    if ! [[ "${DAYS}" =~ ^[0-9]+$ ]] || [ "${DAYS}" -lt 3 ]; then
+        echo "Error: retention days must be an integer >= 3 (Langfuse minimum)" >&2
+        exit 1
+    fi
+    echo "UPDATE projects SET retention_days = ${DAYS} WHERE deleted_at IS NULL;" \
+        | just postgres::psql -d langfuse
+    COUNT=$(echo "SELECT count(*) FROM projects WHERE deleted_at IS NULL;" \
+        | just postgres::psql -d langfuse -tA 2>/dev/null | tr -d '[:space:]')
+    if [ "${COUNT}" = "0" ]; then
+        echo "No Langfuse project exists yet, so nothing was updated."
+        echo "Re-run 'just langfuse::set-retention' after creating a project in the UI."
+        exit 0
+    fi
+    just show-retention
+
+# Print the retention setting of every Langfuse project
+show-retention:
+    @echo "SELECT id, name, retention_days FROM projects WHERE deleted_at IS NULL ORDER BY name;" \
+        | just postgres::psql -d langfuse
+
+# Clear the retention setting (keep trace data indefinitely)
+clear-retention:
+    #!/bin/bash
+    set -euo pipefail
+    echo "UPDATE projects SET retention_days = NULL WHERE deleted_at IS NULL;" \
+        | just postgres::psql -d langfuse
+    just show-retention
+
 # Print Postgres password (from Kubernetes Secret)
 postgres-password:
     @kubectl get secret postgres-auth -n ${LANGFUSE_NAMESPACE} \
@@ -309,6 +375,7 @@ create-clickhouse-user:
         echo "ClickHouse user langfuse already exists"
         # Ensure privileges are granted even if user already exists
         just clickhouse::grant langfuse langfuse
+        just clickhouse::grant-system-tables langfuse
         exit
     fi
 
@@ -318,6 +385,9 @@ create-clickhouse-user:
     # Create user and grant privileges
     just clickhouse::create-user langfuse "${PASSWORD}"
     just clickhouse::grant langfuse langfuse
+    # v4 reads system.parts/system.mutations from the event propagation job and
+    # the deleted-mask cleaner; without these the worker errors in a loop.
+    just clickhouse::grant-system-tables langfuse
 
 # Delete ClickHouse user and database (for external ClickHouse)
 delete-clickhouse-user:

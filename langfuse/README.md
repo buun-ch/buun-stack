@@ -18,10 +18,19 @@ This module deploys Langfuse using the official Helm chart with:
 
 - Kubernetes cluster (k3s)
 - Keycloak installed and configured
-- PostgreSQL cluster (CloudNativePG)
-- ClickHouse cluster
+- PostgreSQL cluster (CloudNativePG), version 16 or later
+- ClickHouse cluster, **version 25.12 or later** (26.4 recommended)
 - Object storage: MinIO or RustFS
 - External Secrets Operator (optional, for Vault integration)
+
+### Langfuse v4
+
+The Helm chart still ships Langfuse v3 as its `appVersion`, so this module pins v4
+explicitly through `LANGFUSE_IMAGE_TAG`. v4 only works with an **external** ClickHouse
+of version 25.12 or later — the ClickHouse bundled with the chart is not compatible,
+which is why `clickhouse.deploy` is `false` and the cluster from `just clickhouse::install`
+is used instead. `just langfuse::install` verifies the server version before touching
+anything and aborts with an actionable message if it is too old.
 
 ## Installation
 
@@ -54,10 +63,70 @@ Environment variables (set in `.env.local` or override):
 ```bash
 LANGFUSE_NAMESPACE=langfuse                # Kubernetes namespace
 LANGFUSE_CHART_VERSION=<version>           # Helm chart version
+LANGFUSE_IMAGE_TAG=4.9.0                   # Langfuse application version (v4)
+LANGFUSE_RETENTION_DAYS=30                 # Trace data retention in days (minimum 3)
 LANGFUSE_HOST=langfuse.example.com         # External hostname
 LANGFUSE_OIDC_CLIENT_ID=langfuse           # Keycloak client ID
 LANGFUSE_OBJECT_STORAGE=minio              # Object storage backend: minio | rustfs
 LANGFUSE_BUCKET=langfuse                   # Bucket name for event uploads
+```
+
+### Data Retention
+
+Langfuse keeps trace data forever by default, in three places that all grow with
+ingest volume:
+
+- ClickHouse `events_full` / `events_core`: traces and observations, including inputs
+  and outputs
+- ClickHouse `scores`: scores
+- Object storage `events/`: one JSON blob per ingested event — the raw ingestion log,
+  indexed by the ClickHouse table `blob_storage_file_log`
+- Object storage `media/`: media assets attached to traces
+
+The object-storage ingestion log is usually the part that grows fastest, since every
+event is written there in addition to its ClickHouse row.
+
+Retention is enforced per project through the `retention_days` column of the `projects`
+table in the `langfuse` PostgreSQL database. The worker jobs that act on it are part of
+the OSS build; only the *UI toggle* for the setting requires an Enterprise license, so
+the value is written directly instead:
+
+```bash
+just langfuse::set-retention          # apply LANGFUSE_RETENTION_DAYS (default 30)
+just langfuse::set-retention 90       # or an explicit number of days
+just langfuse::show-retention         # show the current setting per project
+just langfuse::clear-retention        # keep data indefinitely again
+```
+
+`just langfuse::install` applies the setting at the end of the run. Because it acts on
+the projects that exist at that moment, **re-run `just langfuse::set-retention` after
+creating a new project** in the UI.
+
+#### Which job deletes what
+
+Two independent workers are enabled, and the difference matters for the
+object-storage side:
+
+- **Daily sweep, 03:15** (`QUEUE_CONSUMER_DATA_RETENTION_QUEUE_IS_ENABLED`) — walks every
+  project with a retention setting and deletes ClickHouse rows, expired media, **and the
+  raw ingestion-event blobs** in `events/` together with their `blob_storage_file_log`
+  references. This is the only job that reliably removes the event blobs.
+- **Hourly cleanup** (`LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED`) — trims ClickHouse
+  rows incrementally so they do not accumulate until 03:15. It also starts
+  `MediaRetentionCleaner`, whose object-storage pass is reached only for projects that
+  have expired *media*, so it cannot be relied on for the event blobs on its own.
+
+Cleanup is therefore not instant, and disk space is reclaimed one step later still:
+ClickHouse deletes are lightweight deletes, so the space comes back only once the
+deleted-mask cleaner applies the masks (hourly, via
+`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED`).
+
+To confirm that the event blobs are actually shrinking:
+
+```bash
+just rustfs::list-buckets                       # or: just minio::...
+just langfuse::show-retention                   # retention must be set per project
+kubectl logs -n langfuse deployment/langfuse-worker | grep "Data Retention"
 ```
 
 ### Object Storage Backend
@@ -72,6 +141,13 @@ LANGFUSE_BUCKET=langfuse                   # Bucket name for event uploads
   `http://rustfs.<namespace>:9000`.
 
 Either way the credentials land in the `s3-auth` Secret in the Langfuse namespace.
+
+The bucket is laid out with one prefix per payload type, so the three can be told apart
+and monitored separately:
+
+- `events/<projectId>/<entityType>/<entityId>/<eventId>.json` — raw ingestion events
+- `media/` — media assets attached to traces
+- `exports/` — batch exports
 
 #### RustFS Access Key
 
@@ -192,11 +268,14 @@ Langfuse Worker (background jobs)
 
 ### Upgrade Langfuse
 
-To upgrade Langfuse to a new version:
+Set the target version and re-run the installer, which is idempotent:
 
 ```bash
-just langfuse::upgrade
+LANGFUSE_IMAGE_TAG=4.10.0 just langfuse::install
 ```
+
+Schema migrations are applied automatically on startup. To move the Helm chart itself,
+set `LANGFUSE_CHART_VERSION` the same way.
 
 ### Uninstall
 
@@ -276,6 +355,47 @@ kubectl rollout restart deployment/langfuse-web -n langfuse
 ```bash
 helm get values langfuse -n langfuse | grep signUpDisabled
 # Should show: signUpDisabled: false
+```
+
+### ClickHouse "Not enough privileges" in the Worker
+
+**Symptoms**: the worker logs, in a loop:
+
+```plain
+Error executing EventPropagationJob langfuse: Not enough privileges.
+To execute this query, it's necessary to have the grant SELECT ON system.parts.
+```
+
+**Cause**: Langfuse v4 reads ClickHouse system tables — `system.parts` from the event
+propagation job (every 10 s) and `system.mutations` from the deleted-mask cleaner.
+`just clickhouse::grant` only covers the `langfuse` database.
+
+**Solution**:
+
+```bash
+just clickhouse::grant-system-tables langfuse
+```
+
+`just langfuse::install` does this automatically; the recipe exists separately for
+clusters provisioned before it was added.
+
+### Redis "Socket timeout" on Every Queue
+
+**Symptoms**: many queues fail at once with
+`Socket timeout. Expecting data, but didn't receive any in 30000ms` from `ioredis`.
+
+**Cause**: the Redis subchart is Valkey aliased as `redis`, so its resources live under
+`redis.primary`, not `redis.master`. A block written under `master` is silently ignored
+and Valkey falls back to the `nano` resourcesPreset (150 m CPU / 192 Mi), which cannot
+keep up with the worker's queues during startup.
+
+**Solution**: keep the resources under `redis.primary` in
+`langfuse-values.gomplate.yaml`, then re-run `just langfuse::install`. Verify what
+actually landed:
+
+```bash
+kubectl get sts -n langfuse langfuse-redis-primary \
+  -o jsonpath='{.spec.template.spec.containers[0].resources}'
 ```
 
 ### Redis Connection Errors (Startup Only)
