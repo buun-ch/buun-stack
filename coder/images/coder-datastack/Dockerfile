@@ -34,10 +34,11 @@ RUN curl -fsSL 'https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key'
     apt-get install --yes --no-install-recommends clickhouse-client && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Only the data and config dirs are pinned. State and cache are deliberately
+# left at their defaults so they land under $HOME (the workspace PVC) and stay
+# writable — pointing them at root-owned paths made every mise invocation warn.
 ENV MISE_DATA_DIR=/opt/mise \
     MISE_CONFIG_DIR=/opt/mise/config \
-    MISE_STATE_DIR=/opt/mise/state \
-    MISE_CACHE_DIR=/tmp/mise-cache \
     MISE_YES=1
 ENV PATH="/opt/venv/bin:/opt/mise/shims:${PATH}"
 
@@ -52,7 +53,7 @@ ARG JUST_VERSION=1.56.0
 ARG UV_VERSION=0.11.21
 ARG VAULT_VERSION=2.0.2
 
-RUN mise use -g -y \
+RUN MISE_CACHE_DIR=/tmp/mise-cache mise use -g -y \
     "duckdb@${DUCKDB_VERSION}" \
     "gomplate@${GOMPLATE_VERSION}" \
     "helm@${HELM_VERSION}" \
@@ -104,6 +105,10 @@ RUN uv python install 3.12 && \
 # PVC. Pre-populating them here would be masked by the mount, so the agent's
 # startup script installs them on first boot instead.
 
-RUN chmod -R a+rX /opt/mise /opt/uv /opt/venv
+# /opt/mise belongs to the workspace user: a project with its own mise.toml
+# pins its own tool versions, and mise has to be able to install them. Those
+# installs do not survive a workspace rebuild, which only costs a reinstall.
+RUN chmod -R a+rX /opt/uv /opt/venv && \
+    chown -R 1000:1000 /opt/mise
 
 USER coder
