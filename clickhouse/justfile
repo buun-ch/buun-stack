@@ -52,6 +52,10 @@ export CLICKHOUSE_TRACE_LOG_ENABLED := env("CLICKHOUSE_TRACE_LOG_ENABLED", "fals
 
 export CLICKHOUSE_LOG_LEVEL := env("CLICKHOUSE_LOG_LEVEL", "information")
 
+# System tables granted by `just clickhouse::grant-system-tables`
+
+export CLICKHOUSE_SYSTEM_TABLE_GRANTS := env("CLICKHOUSE_SYSTEM_TABLE_GRANTS", "parts mutations tables replicas processes query_log")
+
 [private]
 default:
     @just --list --unsorted --list-submodules
@@ -412,6 +416,26 @@ grant db_name='' username='':
     # Also grant INFORMATION_SCHEMA access for tools like DLT
     just exec-sql-admin "GRANT SELECT ON INFORMATION_SCHEMA.* TO '${USERNAME}';"
     echo "Privileges granted."
+
+# Grant SELECT on the system tables applications need for maintenance queries
+grant-system-tables username='' tables='':
+    #!/bin/bash
+    set -euo pipefail
+    USERNAME=${USERNAME:-"{{ username }}"}
+    TABLES="{{ tables }}"
+    TABLES="${TABLES:-${CLICKHOUSE_SYSTEM_TABLE_GRANTS}}"
+    while [ -z "${USERNAME}" ]; do
+        USERNAME=$(gum input --prompt="Username: " --width=100)
+    done
+    if ! just user-exists ${USERNAME}; then
+        echo "User ${USERNAME} does not exist." >&2
+        exit 1
+    fi
+    echo "Granting SELECT on system tables to ClickHouse user '${USERNAME}'..."
+    for TABLE in ${TABLES}; do
+        just exec-sql-admin "GRANT SELECT ON system.${TABLE} TO '${USERNAME}';"
+    done
+    echo "System table privileges granted."
 
 # Revoke all privileges on database from user
 revoke db_name='' username='':

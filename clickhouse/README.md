@@ -19,6 +19,36 @@ just clickhouse::install
 
 Access ClickHouse at `https://clickhouse.yourdomain.com` using the admin credentials stored in Vault.
 
+## User and Privilege Management
+
+Each application gets its own database and user:
+
+```bash
+just clickhouse::create-user-and-db <username> <db_name> <password>
+just clickhouse::grant <db_name> <username>       # ALL on <db_name>.* + INFORMATION_SCHEMA
+just clickhouse::user-privilege <username>        # show current grants
+```
+
+### System Table Access
+
+`grant` is scoped to a single database, so applications that run maintenance queries
+against ClickHouse system tables need an extra grant:
+
+```bash
+just clickhouse::grant-system-tables <username>
+```
+
+This grants `SELECT` on the tables listed in `CLICKHOUSE_SYSTEM_TABLE_GRANTS`
+(`parts mutations tables replicas processes query_log`). Pass a second argument to
+override the list for one call, e.g.
+`just clickhouse::grant-system-tables myapp "parts mutations"`.
+
+Langfuse v4 requires it: its event propagation job reads `system.parts` every 10 seconds
+and the deleted-mask cleaner reads `system.mutations`. Without the grant the worker logs
+`Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON
+system.parts` in a loop. `just langfuse::install` applies it automatically; run the recipe
+by hand on clusters provisioned before it existed.
+
 ## CH-UI Web Interface
 
 An optional web-based query interface for ClickHouse is available:
