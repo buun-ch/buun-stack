@@ -6,6 +6,8 @@ export KEYCLOAK_HOST := env("KEYCLOAK_HOST", "")
 export KEYCLOAK_REALM := env("KEYCLOAK_REALM", "buunstack")
 export K8S_OIDC_CLIENT_ID := env('K8S_OIDC_CLIENT_ID', "k8s")
 export K3S_ENABLE_REGISTRY := env("K3S_ENABLE_REGISTRY", "true")
+export K3S_REGISTRY_STORAGE_SIZE := env("K3S_REGISTRY_STORAGE_SIZE", "50Gi")
+export K3S_REGISTRY_STORAGE_CLASS := env("K3S_REGISTRY_STORAGE_CLASS", "")
 export K8S_MAX_PODS := env("K8S_MAX_PODS", "250")
 export K8S_FEATURE_GATES := env("K8S_FEATURE_GATES", "false")
 
@@ -54,6 +56,7 @@ install:
         echo "Setting up local Docker registry..."
 
         # Deploy Docker registry to cluster
+        gomplate -f ./registry/registry.gomplate.yaml -o ./registry/registry.yaml
         kubectl apply -f ./registry/registry.yaml
 
         # Set Pod Security Standard for registry namespace
@@ -431,6 +434,7 @@ deploy-registry:
     set -euo pipefail
     echo "Deploying local Docker registry..."
 
+    gomplate -f ./registry/registry.gomplate.yaml -o ./registry/registry.yaml
     kubectl apply -f ./registry/registry.yaml
 
     # Set Pod Security Standard for registry namespace

@@ -8,10 +8,10 @@ buun-stack includes a local container registry running inside the Kubernetes clu
 
 ## Local Container Registry
 
-The k3s built-in registry runs inside the cluster and is accessible at:
+buun-stack deploys a `registry:2` Deployment into the `registry` namespace. It is accessible at:
 
 - **From the remote server**: `localhost:30500` (host network)
-- **From within cluster**: `registry.kube-system.svc.cluster.local:5000`
+- **From within cluster**: `registry.registry.svc.cluster.local:5000`
 
 Enable the registry during k3s installation by setting `K3S_ENABLE_REGISTRY=true`.
 
@@ -22,6 +22,25 @@ When you build and push images on the remote server using `localhost:30500`:
 1. **No registry credentials needed**: Images pushed to `localhost:30500` are automatically available inside the cluster
 2. **Unified image reference**: The same tag `localhost:30500/myapp:latest` works both outside and inside the cluster
 3. **Fast deployment**: Images are local to the cluster, no external registry pull required
+
+### Storage
+
+Registry data is stored on a `PersistentVolumeClaim` named `registry-data` in the
+`registry` namespace, so pushed images survive pod restarts and cluster reboots.
+
+Configure the volume before running `just k8s::install` (or `just k8s::deploy-registry`):
+
+| Variable                     | Default | Description                                       |
+| ---------------------------- | ------- | ------------------------------------------------- |
+| `K3S_REGISTRY_STORAGE_SIZE`  | `50Gi`  | PVC size                                          |
+| `K3S_REGISTRY_STORAGE_CLASS` | (empty) | StorageClass name; empty uses the cluster default |
+
+The registry is a single replica, so `ReadWriteOnce` is sufficient. The Deployment uses
+the `Recreate` strategy to avoid two pods contending for the volume during a rollout.
+
+**Note**: Images are only cached on the node by containerd. If the registry loses its
+data, workloads with `imagePullPolicy: Always` fail with `ImagePullBackOff` even though
+the image is still in the node cache. Rebuild and push the affected images in that case.
 
 ## Building and Pushing Images
 
@@ -191,7 +210,7 @@ curl http://localhost:30500/v2/_catalog
 
 # From within cluster
 kubectl run -it --rm debug --image=curlimages/curl --restart=Never -- \
-  curl http://registry.kube-system.svc.cluster.local:5000/v2/_catalog
+  curl http://registry.registry.svc.cluster.local:5000/v2/_catalog
 ```
 
 ### Verify Podman Socket

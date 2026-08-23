@@ -3,6 +3,23 @@ kind: Namespace
 metadata:
   name: registry
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: registry-data
+  namespace: registry
+  labels:
+    app: registry
+spec:
+  accessModes:
+  - ReadWriteOnce
+{{- if .Env.K3S_REGISTRY_STORAGE_CLASS }}
+  storageClassName: {{ .Env.K3S_REGISTRY_STORAGE_CLASS }}
+{{- end }}
+  resources:
+    requests:
+      storage: {{ .Env.K3S_REGISTRY_STORAGE_SIZE }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -12,6 +29,8 @@ metadata:
     app: registry
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: registry
@@ -71,7 +90,8 @@ spec:
           periodSeconds: 5
       volumes:
       - name: registry-data
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: registry-data
       - name: tmp
         emptyDir: {}
 ---
