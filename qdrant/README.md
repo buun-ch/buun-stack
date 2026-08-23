@@ -39,6 +39,14 @@ just qdrant::get-api-key
 just qdrant::get-readonly-api-key
 ```
 
+### Rotate API Keys
+
+```bash
+just qdrant::rotate-api-keys
+```
+
+Generates new keys, stores them in Vault, and restarts Qdrant so the new keys take effect.
+
 ## Testing & Health Check
 
 Qdrant includes built-in testing recipes that use telepresence to access the service from your local machine.
@@ -74,7 +82,7 @@ Runs a complete test suite that:
 
 Example output:
 
-```
+```text
 Testing Qdrant at http://qdrant.qdrant.svc.cluster.local:6333
 Using collection: test_collection_1760245249
 

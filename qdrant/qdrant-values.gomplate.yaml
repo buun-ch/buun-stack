@@ -1,14 +1,14 @@
-apiKey:
-  valueFrom:
-    secretKeyRef:
-      name: qdrant-api-keys
-      key: api_key
-
-readOnlyApiKey:
-  valueFrom:
-    secretKeyRef:
-      name: qdrant-api-keys
-      key: readonly_api_key
+env:
+  - name: QDRANT__SERVICE__API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: qdrant-api-keys
+        key: api_key
+  - name: QDRANT__SERVICE__READ_ONLY_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: qdrant-api-keys
+        key: readonly_api_key
 
 ingress:
   enabled: true

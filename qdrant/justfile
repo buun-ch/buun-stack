@@ -27,11 +27,36 @@ create-namespace:
 delete-namespace:
     @kubectl delete namespace ${QDRANT_NAMESPACE} --ignore-not-found
 
-# Create Qdrant API keys secret
+# Create Qdrant API keys secret (skips if it already exists)
 create-api-keys:
     #!/bin/bash
     set -euo pipefail
-    echo "Setting up Qdrant API keys..."
+    if kubectl get secret qdrant-api-keys -n ${QDRANT_NAMESPACE} &>/dev/null; then
+        echo "Qdrant API keys secret already exists. Use 'just qdrant::rotate-api-keys' to regenerate."
+        exit 0
+    fi
+    just generate-api-keys
+
+# Regenerate Qdrant API keys and restart Qdrant to apply them
+rotate-api-keys:
+    #!/bin/bash
+    set -euo pipefail
+    if gum confirm "Regenerate Qdrant API keys? Existing clients will need the new keys."; then
+        just generate-api-keys
+        if kubectl get statefulset qdrant -n ${QDRANT_NAMESPACE} &>/dev/null; then
+            echo "Restarting Qdrant to apply new API keys..."
+            kubectl rollout restart statefulset/qdrant -n ${QDRANT_NAMESPACE}
+            kubectl rollout status statefulset/qdrant -n ${QDRANT_NAMESPACE} --timeout=300s
+        fi
+    else
+        echo "Rotation cancelled"
+    fi
+
+[private]
+generate-api-keys:
+    #!/bin/bash
+    set -euo pipefail
+    echo "Generating Qdrant API keys..."
 
     # Generate API keys
     API_KEY=$(just utils::random-password)
