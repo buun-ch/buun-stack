@@ -143,3 +143,4 @@ dist
 /.playwright-mcp/
 vllm/models.yaml
 .claude/settings.local.json
+PLAN*.md

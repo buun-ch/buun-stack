@@ -11,7 +11,7 @@ alternative to MinIO:
 > **Status: beta.** RustFS has not reached 1.0.0 GA yet (the maintainers target
 > ~2026-07). This module exists to evaluate RustFS alongside MinIO; it is **not**
 > recommended for production-critical workloads (e.g. the Lakekeeper/Iceberg
-> backend) until RustFS is stable. See [PLAN-storage.md](../PLAN-storage.md).
+> backend) until RustFS is stable.
 
 ## Prerequisites
 

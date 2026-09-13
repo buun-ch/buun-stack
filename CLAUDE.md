@@ -436,6 +436,19 @@ receiving
   (Avoid trivial comment for each code block)
 - Write output messages and code comments in English
 
+### Gitignored Files
+
+Files ignored by `.gitignore` (e.g., `PLAN*.md` working notes) are local-only and
+do not exist for other users of the repository. Never reference them in anything
+that gets committed:
+
+- Code comments, justfile recipes, templates, and scripts
+- Documentation (`README.md`, `docs/`, module READMEs)
+- Commit messages and pull request descriptions
+
+If information from such a file is needed, write the relevant content directly
+into the committed file instead of linking or pointing to the ignored file.
+
 ### Markdown Style
 
 When writing Markdown documentation:
