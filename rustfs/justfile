@@ -110,6 +110,7 @@ _rustfs_port_forward := '''
     kubectl -n ${RUSTFS_NAMESPACE} port-forward svc/rustfs "${RUSTFS_LOCAL_PORT}:9000" \
         >/dev/null 2>&1 &
     PF_PID=$!
+    disown "${PF_PID}"
     for _ in $(seq 1 30); do
         if curl -sf "http://localhost:${RUSTFS_LOCAL_PORT}/" >/dev/null 2>&1; then
             break
@@ -157,6 +158,71 @@ list-buckets:
 
     mc alias set rustfs-local "${ENDPOINT}" "${ACCESS_KEY}" "${SECRET_KEY}" >/dev/null
     mc ls rustfs-local/
+
+# Enable public download (anonymous read) access for a bucket or prefix
+set-public-download path='':
+    #!/bin/bash
+    set -euo pipefail
+    PATH_ARG="{{ path }}"
+    while [ -z "${PATH_ARG}" ]; do
+        PATH_ARG=$(
+            gum input --prompt="Bucket/prefix path: " --width=100 \
+            --placeholder="e.g., my-bucket/public"
+        )
+    done
+
+    ACCESS_KEY=$(just root-access-key)
+    SECRET_KEY=$(just root-secret-key)
+
+    {{ _rustfs_port_forward }}
+    trap 'kill ${PF_PID} 2>/dev/null || true; mc alias remove rustfs-local >/dev/null 2>&1 || true' EXIT
+
+    mc alias set rustfs-local "${ENDPOINT}" "${ACCESS_KEY}" "${SECRET_KEY}" >/dev/null
+    mc anonymous set download "rustfs-local/${PATH_ARG}"
+    echo "✅ Public download access enabled for ${PATH_ARG}"
+
+# Remove public access from a bucket or prefix
+remove-public-access path='':
+    #!/bin/bash
+    set -euo pipefail
+    PATH_ARG="{{ path }}"
+    while [ -z "${PATH_ARG}" ]; do
+        PATH_ARG=$(
+            gum input --prompt="Bucket/prefix path: " --width=100 \
+            --placeholder="e.g., my-bucket/public"
+        )
+    done
+
+    ACCESS_KEY=$(just root-access-key)
+    SECRET_KEY=$(just root-secret-key)
+
+    {{ _rustfs_port_forward }}
+    trap 'kill ${PF_PID} 2>/dev/null || true; mc alias remove rustfs-local >/dev/null 2>&1 || true' EXIT
+
+    mc alias set rustfs-local "${ENDPOINT}" "${ACCESS_KEY}" "${SECRET_KEY}" >/dev/null
+    mc anonymous set none "rustfs-local/${PATH_ARG}"
+    echo "✅ Public access removed from ${PATH_ARG}"
+
+# Show anonymous access policy for a bucket or prefix
+show-public-access path='':
+    #!/bin/bash
+    set -euo pipefail
+    PATH_ARG="{{ path }}"
+    while [ -z "${PATH_ARG}" ]; do
+        PATH_ARG=$(
+            gum input --prompt="Bucket/prefix path: " --width=100 \
+            --placeholder="e.g., my-bucket"
+        )
+    done
+
+    ACCESS_KEY=$(just root-access-key)
+    SECRET_KEY=$(just root-secret-key)
+
+    {{ _rustfs_port_forward }}
+    trap 'kill ${PF_PID} 2>/dev/null || true; mc alias remove rustfs-local >/dev/null 2>&1 || true' EXIT
+
+    mc alias set rustfs-local "${ENDPOINT}" "${ACCESS_KEY}" "${SECRET_KEY}" >/dev/null
+    mc anonymous get "rustfs-local/${PATH_ARG}"
 
 # Back up all buckets to a local directory
 backup dir='':
